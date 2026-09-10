@@ -1,0 +1,16 @@
+# MCP server framework
+fastmcp>=3.0
+
+# Core dependencies for odibi_anchor
+pandas>=1.5,<3
+numpy>=1.21
+libcst>=1.0
+
+# Web framework (uvicorn is the ASGI server, already provided by Databricks Apps)
+starlette>=0.27
+
+# PySpark is already available in Databricks environment
+# pyspark>=3.4  # commented out - provided by Databricks runtime
+
+# Install the odibi_anchor package itself (non-editable for Apps)
+.

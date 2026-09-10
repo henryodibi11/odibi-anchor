@@ -1,0 +1,60 @@
+name: Publish release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_DATE_EPOCH: "1767225600"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify release tag matches package version
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v$VERSION" = "${{ github.event.release.tag_name }}"
+      - name: Build and inspect twice
+        run: |
+          python -m pip install "build>=1.2,<2" "hatchling>=1.32,<2"
+          python -m build --outdir dist-a
+          python -m build --outdir dist-b
+          diff <(sha256sum dist-a/* | sed 's#dist-a/##') <(sha256sum dist-b/* | sed 's#dist-b/##')
+          mv dist-a dist
+          python .github/scripts/check_dist.py dist
+      - name: Test installed wheel
+        run: |
+          python -m venv /tmp/anchor-wheel
+          /tmp/anchor-wheel/bin/python -m pip install --no-deps dist/*.whl
+          /tmp/anchor-wheel/bin/python -c "import odibi_anchor; from odibi_anchor.cli import main"
+          /tmp/anchor-wheel/bin/anchor --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/odibi-anchor/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,100 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+      # Installed-path qualification must run, never silently skip. The pinned
+      # build backend comes from the quality dependency group below, so the wheel
+      # builds with --no-build-isolation and consults no package index.
+      ANCHOR_REQUIRE_INSTALLED_QUALIFICATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install development and quality tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+          python -m pip install ".[mcp]"
+          python -m pip install --group quality
+      - name: Run maintained full verification
+        run: >-
+          python scripts/full_verification.py
+          --mode advisory
+          --base-ref "$QUALITY_BASE_REF"
+          --json-out quality-report.json
+      - name: Collect non-blocking ratchet telemetry
+        if: always()
+        continue-on-error: true
+        run: >-
+          python scripts/quality_ratchet.py check
+          --mode ratchet
+          --base-ref "$QUALITY_BASE_REF"
+          --format json
+          > quality-ratchet-telemetry.json
+      - name: Upload failed verification evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evidence-py${{ matrix.python-version }}
+          path: |
+            quality-report.json
+            quality-ratchet-telemetry.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  distribution:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_DATE_EPOCH: "1767225600"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install build tooling
+        run: python -m pip install "build>=1.2,<2" "hatchling>=1.32,<2"
+      - name: Build distributions twice
+        run: |
+          python -m build --outdir dist-a
+          python -m build --outdir dist-b
+          diff <(sha256sum dist-a/* | sed 's#dist-a/##') <(sha256sum dist-b/* | sed 's#dist-b/##')
+          mv dist-a dist
+      - name: Inspect distribution contents
+        run: python .github/scripts/check_dist.py dist
+      - name: Test installed wheel
+        run: |
+          python -m venv /tmp/anchor-wheel
+          /tmp/anchor-wheel/bin/python -m pip install --no-deps dist/*.whl
+          /tmp/anchor-wheel/bin/python -c "import odibi_anchor; from odibi_anchor.cli import main"
+          /tmp/anchor-wheel/bin/anchor --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error

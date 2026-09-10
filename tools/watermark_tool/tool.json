@@ -1,0 +1,37 @@
+{
+    "name": "watermark",
+    "version": "1.0.0",
+    "description": "Diagnose incremental load staleness between source and target tables by comparing watermark columns. Reports lag, pending rows, NULL watermarks, timeline gaps, and load cadence.",
+    "category": "diagnostics",
+    "entry_point": "watermark_impl:watermark_debug_context",
+    "renderer": "watermark_impl:render_watermark_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "source",
+            "target"
+        ],
+        "optional": [
+            "watermark_col",
+            "source_watermark_col",
+            "target_watermark_col",
+            "lookback_days",
+            "subject",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "watermark"
+    },
+    "dependencies": [],
+    "tags": [
+        "incremental",
+        "watermark",
+        "staleness",
+        "debugging"
+    ]
+}

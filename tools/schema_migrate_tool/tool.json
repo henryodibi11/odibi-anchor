@@ -1,0 +1,38 @@
+{
+  "name": "schema_migrate",
+  "version": "1.0.0",
+  "description": "Generate executable migration code (DDL + PySpark) from schema_diff output. Produces ALTER TABLE ADD/DROP/RENAME COLUMN statements and type cast expressions.",
+  "category": "data",
+  "entry_point": "schema_migrate_impl:schema_migrate_context",
+  "renderer": "schema_migrate_impl:render_schema_migrate_report",
+  "requires_planning": false,
+  "accepts_output_format": true,
+    "allowed_effects": ["read"],
+  "pre_task_access": "task_required",
+  "inputs": {
+    "required": [
+      "schema_diff_ctx",
+      "target_table"
+    ],
+    "optional": [
+      "drop_columns",
+      "dry_run",
+      "rename_threshold",
+      "output_format"
+    ]
+  },
+  "outputs": {
+    "contract": "StandardContract",
+    "kind": "schema_migrate"
+  },
+  "dependencies": [
+    "schema_diff_context"
+  ],
+  "tags": [
+    "data",
+    "schema",
+    "migration",
+    "ddl",
+    "drift"
+  ]
+}

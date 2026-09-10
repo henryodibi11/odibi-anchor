@@ -1,0 +1,40 @@
+{
+    "name": "coerce_fix",
+    "version": "1.0.0",
+    "description": "Apply coercion fixes from coerce_check classification. Automates TRIM/UPPER/strip for whitespace, case, unicode, numeric, and date format mismatches.",
+    "category": "data",
+    "entry_point": "coerce_fix_impl:coerce_fix_context",
+    "renderer": "coerce_fix_impl:render_coerce_fix_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["data_write"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "df",
+            "coerce_ctx"
+        ],
+        "optional": [
+            "columns",
+            "case_target",
+            "date_target",
+            "dry_run"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "coerce_fix"
+    },
+    "dependencies": [
+        "coercion_classifier"
+    ],
+    "tags": [
+        "data",
+        "coercion",
+        "fix",
+        "transform",
+        "whitespace",
+        "case",
+        "unicode"
+    ]
+}

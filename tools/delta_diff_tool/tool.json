@@ -1,0 +1,42 @@
+{
+    "name": "delta_diff",
+    "version": "1.0.0",
+    "description": "Compare two versions of a Delta table at business-key level. Shows added, removed, and changed rows with NULL-aware breakdown and Delta history metadata.",
+    "category": "data",
+    "entry_point": "delta_diff_impl:delta_diff_context",
+    "renderer": "delta_diff_impl:render_delta_diff_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "table",
+            "keys"
+        ],
+        "optional": [
+            "old_version",
+            "new_version",
+            "versions_ago",
+            "compare_columns",
+            "include_coerce_check",
+            "subject",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "delta_diff"
+    },
+    "dependencies": [
+        "diff_ops",
+        "coercion_classifier"
+    ],
+    "tags": [
+        "data",
+        "delta",
+        "versioning",
+        "diff",
+        "time-travel"
+    ]
+}

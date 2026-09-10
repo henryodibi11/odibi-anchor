@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "library_version": "2026.08.3",
+  "research_date": "2026-08-20",
+  "entries": [
+    {
+      "id": "development.house",
+      "title": "Anchor House Engineering Standard",
+      "path": "development/code-standards.md",
+      "profile_version": "anchor-house-engineering/v1",
+      "summary": "Language-neutral engineering principles applied to source changes after higher authorities.",
+      "topics": ["development", "engineering", "source-change"],
+      "keywords": ["house-standard", "code-quality", "maintainability"],
+      "applicability": {
+        "execution_modes": ["source_change"],
+        "domains": [],
+        "traits": ["source-change"],
+        "path_suffixes": ["source", "config", "test"],
+        "path_names": [],
+        "repository_signals": []
+      },
+      "versions": [{"name": "anchor-house-engineering", "range": "v1", "baseline": "v1"}],
+      "verification": ["documented"],
+      "offline_sources": ["development/code-standards.md"],
+      "sources": [{"title": "Odibi Anchor repository", "url": "https://github.com/henryodibi11/odibi-anchor"}],
+      "refresh_triggers": ["The house engineering profile or authority contract changes."]
+    },
+    {
+      "id": "development.python",
+      "title": "Anchor House Engineering Standard — Python Profile",
+      "path": "development/code-standards-python.md",
+      "profile_version": "anchor-house-engineering/v1",
+      "summary": "Portable Python guidance selected only by canonical language, repository, or changed-path evidence.",
+      "topics": ["development", "python", "source-change"],
+      "keywords": ["python-profile", "typing", "exceptions"],
+      "applicability": {
+        "execution_modes": ["source_change"],
+        "domains": ["python"],
+        "traits": ["python"],
+        "path_suffixes": [".py", ".pyi"],
+        "path_names": ["pyproject.toml"],
+        "repository_signals": ["python"]
+      },
+      "versions": [{"name": "anchor-house-engineering-python", "range": "v1", "baseline": "v1"}],
+      "verification": ["documented"],
+      "offline_sources": ["development/code-standards-python.md"],
+      "sources": [{"title": "Odibi Anchor repository", "url": "https://github.com/henryodibi11/odibi-anchor"}],
+      "refresh_triggers": ["The Python profile or supported repository policy contract changes."]
+    },
+    {
+      "id": "development.data-platform",
+      "title": "Anchor House Engineering Standard — Data and Platform Profile",
+      "path": "development/code-standards-data-platform.md",
+      "profile_version": "anchor-house-engineering/v1",
+      "summary": "Data, SQL, Spark, notebook, Unity Catalog, and Databricks guidance activated by explicit applicability signals.",
+      "topics": ["development", "data", "spark", "sql", "databricks"],
+      "keywords": ["data-platform-profile", "pipeline", "unity-catalog"],
+      "applicability": {
+        "execution_modes": ["data_change"],
+        "domains": ["data"],
+        "traits": ["data-change", "data-write"],
+        "path_suffixes": [".sql", ".ipynb"],
+        "path_names": ["databricks.yml"],
+        "repository_signals": ["data-platform", "spark", "sql", "databricks", "spark-notebook", "unity-catalog"]
+      },
+      "versions": [{"name": "anchor-house-engineering-data-platform", "range": "v1", "baseline": "v1"}],
+      "verification": ["documented"],
+      "offline_sources": ["development/code-standards-data-platform.md"],
+      "sources": [{"title": "Odibi Anchor repository", "url": "https://github.com/henryodibi11/odibi-anchor"}],
+      "refresh_triggers": ["The data/platform profile or an applicability boundary changes."]
+    },
+    {
+      "id": "visualization.stack",
+      "title": "Declarative Visualization Stack",
+      "path": "technologies/visualization/stack-guide.md",
+      "summary": "Architecture and decision guide across Python, Vega-Lite, Vega, rendering, and Power BI hosts.",
+      "topics": ["visualization", "architecture", "interoperability", "power-bi"],
+      "keywords": ["specification", "compiler", "renderer", "portability", "interaction"],
+      "versions": [{"name": "stack-guide", "range": "2026.08", "baseline": "2026.08.1"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vega-6.3.1", "snapshots/vega-lite-6.4.3", "snapshots/altair-6.2.2", "snapshots/deneb-1.9.1"],
+      "sources": [
+        {"title": "Vega project", "url": "https://vega.github.io/"},
+        {"title": "Altair documentation", "url": "https://altair-viz.github.io/"},
+        {"title": "Deneb documentation", "url": "https://deneb.guide/"}
+      ],
+      "refresh_triggers": ["Any stack component changes its major version or host contract."]
+    },
+    {
+      "id": "visualization.api-crosswalk",
+      "title": "Declarative Visualization API Crosswalk",
+      "path": "technologies/visualization/api-crosswalk.md",
+      "summary": "Layer ownership, Altair-to-Vega-Lite mapping, transforms, Vega runtime APIs, artifacts, export, and compatibility decisions.",
+      "topics": ["visualization", "architecture", "api", "interoperability", "export"],
+      "keywords": ["crosswalk", "mark", "encoding", "transform", "view", "vl-convert", "compatibility"],
+      "versions": [
+        {"name": "vega", "range": "6.3.x", "baseline": "6.3.1"},
+        {"name": "vega-lite", "range": "6.4.x", "baseline": "6.4.3"},
+        {"name": "altair", "range": "6.2.x", "baseline": "6.2.2"},
+        {"name": "vl-convert-python", "range": "1.9.x", "baseline": "1.9.0"}
+      ],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vega-6.3.1", "snapshots/vega-lite-6.4.3", "snapshots/altair-6.2.2", "snapshots/vl-convert-1.9.0"],
+      "sources": [
+        {"title": "Vega documentation", "url": "https://vega.github.io/vega/docs/"},
+        {"title": "Vega-Lite documentation", "url": "https://vega.github.io/vega-lite/docs/"},
+        {"title": "Altair documentation", "url": "https://altair-viz.github.io/"},
+        {"title": "vl-convert repository", "url": "https://github.com/vega/vl-convert"}
+      ],
+      "refresh_triggers": ["Any mapped API or adopted runtime changes minor or major version."]
+    },
+    {
+      "id": "visualization.interactions",
+      "title": "Declarative Interaction Cookbook",
+      "path": "technologies/visualization/interaction-cookbook.md",
+      "summary": "Point and interval selections, conditions, filters, scale bindings, linked views, Vega signals, state, and host boundaries.",
+      "topics": ["visualization", "interaction", "altair", "vega-lite", "vega"],
+      "keywords": ["selection", "parameter", "brush", "hover", "click", "signal", "event-stream", "linked-view"],
+      "versions": [
+        {"name": "vega", "range": "6.3.x", "baseline": "6.3.1"},
+        {"name": "vega-lite", "range": "6.4.x", "baseline": "6.4.3"},
+        {"name": "altair", "range": "6.2.x", "baseline": "6.2.2"}
+      ],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vega-6.3.1/docs/docs/api/view.md", "snapshots/vega-lite-6.4.3/site/docs/parameter", "snapshots/altair-6.2.2/doc/user_guide/interactions"],
+      "sources": [
+        {"title": "Vega View API", "url": "https://vega.github.io/vega/docs/api/view/"},
+        {"title": "Vega-Lite selections", "url": "https://vega.github.io/vega-lite/docs/selection.html"},
+        {"title": "Altair parameters", "url": "https://altair-viz.github.io/user_guide/interactions/parameters.html"}
+      ],
+      "refresh_triggers": ["Selection, parameter, event-stream, or View APIs change.", "Host interaction evidence changes."]
+    },
+    {
+      "id": "visualization.vega",
+      "title": "Vega",
+      "path": "technologies/visualization/vega.md",
+      "summary": "Reactive visualization grammar, dataflow, signals, events, expressions, runtime, and export.",
+      "topics": ["visualization", "vega", "reactive-dataflow", "interaction"],
+      "keywords": ["signal", "event-stream", "expression", "transform", "scenegraph"],
+      "versions": [{"name": "vega", "range": "6.3.x", "baseline": "6.3.1"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vega-6.3.1/docs/docs", "snapshots/vega-6.3.1/docs/vega-schema.json"],
+      "sources": [
+        {"title": "Vega documentation", "url": "https://vega.github.io/vega/docs/"},
+        {"title": "Vega GitHub repository", "url": "https://github.com/vega/vega"}
+      ],
+      "refresh_triggers": ["A new Vega minor or major release is adopted.", "Expression or event-stream behavior changes."]
+    },
+    {
+      "id": "visualization.vega-lite",
+      "title": "Vega-Lite",
+      "path": "technologies/visualization/vega-lite.md",
+      "summary": "Declarative grammar, encoding channels, transforms, composition, parameters, validation, and accessibility.",
+      "topics": ["visualization", "vega-lite", "json-schema", "interaction"],
+      "keywords": ["mark", "encoding", "selection", "parameter", "facet", "layer"],
+      "versions": [{"name": "vega-lite", "range": "6.4.x", "baseline": "6.4.3"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vega-lite-6.4.3/site/docs", "snapshots/vega-lite-6.4.3/build/vega-lite-schema.json"],
+      "sources": [
+        {"title": "Vega-Lite documentation", "url": "https://vega.github.io/vega-lite/docs/"},
+        {"title": "Vega-Lite schema", "url": "https://vega.github.io/schema/vega-lite/v6.json"}
+      ],
+      "refresh_triggers": ["A new Vega-Lite minor or major release is adopted.", "The JSON schema or selection model changes."]
+    },
+    {
+      "id": "visualization.altair",
+      "title": "Altair",
+      "path": "technologies/visualization/altair.md",
+      "summary": "Python API, data transformers, composition, parameters, serialization, renderers, and Vega-Lite crosswalk.",
+      "topics": ["visualization", "python", "altair", "vega-lite"],
+      "keywords": ["chart", "encode", "transform", "selection", "renderer", "to-dict"],
+      "versions": [
+        {"name": "altair", "range": "6.2.x", "baseline": "6.2.2"},
+        {"name": "bundled-vega-lite-schema", "range": "6.4.x", "baseline": "6.4.3"}
+      ],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/altair-6.2.2/doc/user_guide", "snapshots/altair-6.2.2/altair/vegalite/api.py.txt", "snapshots/altair-6.2.2/altair/vegalite/v6/schema"],
+      "sources": [
+        {"title": "Altair user guide", "url": "https://altair-viz.github.io/user_guide/"},
+        {"title": "Altair API", "url": "https://altair-viz.github.io/user_guide/api.html"}
+      ],
+      "refresh_triggers": ["Altair or its bundled Vega-Lite schema changes minor or major version."]
+    },
+    {
+      "id": "visualization.deneb-powerbi",
+      "title": "Deneb and Power BI",
+      "path": "technologies/visualization/deneb-powerbi.md",
+      "summary": "Power BI dataset binding, Deneb templates, formatting, interactions, security boundaries, and host qualification.",
+      "topics": ["visualization", "deneb", "power-bi", "host-integration"],
+      "keywords": ["dataset", "cross-filter", "highlight", "tooltip", "template", "certified-visual"],
+      "versions": [
+        {"name": "deneb", "range": "1.9.x", "baseline": "1.9.1"},
+        {"name": "power-bi-visuals-api", "range": "5.11.x", "baseline": "5.11.0"},
+        {"name": "embedded-vega-lite", "range": "6.4.x", "baseline": "6.4.1"}
+      ],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/deneb-1.9.1/README.md", "snapshots/deneb-1.9.1/CHANGELOG.md", "snapshots/deneb-1.9.1/capabilities.json", "snapshots/deneb-1.9.1/packages/vega-runtime/src/lib/embed/index.ts"],
+      "sources": [
+        {"title": "Deneb documentation", "url": "https://deneb.guide/"},
+        {"title": "Power BI custom visuals", "url": "https://learn.microsoft.com/en-us/power-bi/developer/visuals/"}
+      ],
+      "refresh_triggers": ["Deneb or Power BI Visuals API changes version.", "A behavior is qualified in the Power BI host."]
+    },
+    {
+      "id": "visualization.powerbi-portability",
+      "title": "Deneb and Power BI Portability",
+      "path": "technologies/visualization/powerbi-portability.md",
+      "summary": "Source-confirmed Deneb host contract, dataset substitution, field mappings, compatibility reports, interactions, and qualification.",
+      "topics": ["visualization", "deneb", "power-bi", "portability", "host-integration"],
+      "keywords": ["dataset", "field-mapping", "data-reduction", "cross-selection", "tooltip", "compatibility-report"],
+      "versions": [
+        {"name": "deneb", "range": "1.9.x", "baseline": "1.9.1"},
+        {"name": "power-bi-visuals-api", "range": "5.11.x", "baseline": "5.11.0"}
+      ],
+      "verification": ["source-inspected"],
+      "offline_sources": ["snapshots/deneb-1.9.1/capabilities.json", "snapshots/deneb-1.9.1/pbiviz.json", "snapshots/deneb-1.9.1/packages/vega-runtime/src/lib/embed/index.ts"],
+      "sources": [
+        {"title": "Deneb documentation", "url": "https://deneb.guide/"},
+        {"title": "Deneb source", "url": "https://github.com/deneb-viz/deneb"},
+        {"title": "Power BI custom visuals", "url": "https://learn.microsoft.com/en-us/power-bi/developer/visuals/"}
+      ],
+      "refresh_triggers": ["Deneb or Visuals API version changes.", "Retained Power BI host evidence changes an unverified conclusion."]
+    },
+    {
+      "id": "visualization.vl-convert",
+      "title": "vl-convert",
+      "path": "technologies/visualization/vl-convert.md",
+      "summary": "Offline Vega-Lite compilation and SVG, PNG, PDF, HTML, or scenegraph conversion from Python.",
+      "topics": ["visualization", "vl-convert", "rendering", "export"],
+      "keywords": ["svg", "png", "pdf", "html", "compile", "fonts", "javascript-runtime"],
+      "versions": [{"name": "vl-convert-python", "range": "1.9.x", "baseline": "1.9.0"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/vl-convert-1.9.0/vl-convert-python/README.md", "snapshots/vl-convert-1.9.0/vl-convert-python/vl_convert.pyi", "snapshots/vl-convert-1.9.0/thirdparty_javascript.md"],
+      "sources": [
+        {"title": "vl-convert repository", "url": "https://github.com/vega/vl-convert"},
+        {"title": "vl-convert Python package", "url": "https://pypi.org/project/vl-convert-python/"}
+      ],
+      "refresh_triggers": ["vl-convert changes bundled JavaScript versions or conversion signatures."]
+    },
+    {
+      "id": "python.pydantic-v2",
+      "title": "Pydantic v2",
+      "path": "technologies/python/pydantic.md",
+      "summary": "Strict typed contracts, validators, serializers, unions, TypeAdapter, JSON Schema, errors, migration, and performance.",
+      "topics": ["python", "pydantic", "validation", "json-schema"],
+      "keywords": ["base-model", "field-validator", "model-validator", "serializer", "type-adapter", "discriminated-union"],
+      "versions": [{"name": "pydantic", "range": "2.13.x", "baseline": "2.13.4"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/pydantic-2.13.4/docs/api", "snapshots/pydantic-2.13.4/docs/concepts", "snapshots/pydantic-2.13.4/docs/migration.md"],
+      "sources": [
+        {"title": "Pydantic documentation", "url": "https://docs.pydantic.dev/latest/"},
+        {"title": "Pydantic migration guide", "url": "https://docs.pydantic.dev/latest/migration/"}
+      ],
+      "refresh_triggers": ["A new Pydantic minor or major release is adopted.", "Generated JSON Schema behavior changes."]
+    },
+    {
+      "id": "python.pydantic-contracts",
+      "title": "Pydantic v2 Contract Cookbook",
+      "path": "technologies/python/pydantic-contract-cookbook.md",
+      "summary": "Model selection, strict immutable contracts, unions, validators, aliases, serialization, JSON Schema, errors, versioning, and tests.",
+      "topics": ["python", "pydantic", "contracts", "validation", "json-schema"],
+      "keywords": ["base-model", "root-model", "type-adapter", "discriminated-union", "strict", "serializer", "migration"],
+      "versions": [{"name": "pydantic", "range": "2.13.x", "baseline": "2.13.4"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["snapshots/pydantic-2.13.4/docs/api", "snapshots/pydantic-2.13.4/docs/concepts", "snapshots/pydantic-2.13.4/docs/errors", "snapshots/pydantic-2.13.4/docs/migration.md"],
+      "sources": [
+        {"title": "Pydantic documentation", "url": "https://docs.pydantic.dev/latest/"},
+        {"title": "Pydantic migration guide", "url": "https://docs.pydantic.dev/latest/migration/"}
+      ],
+      "refresh_triggers": ["Pydantic or pydantic-core changes adopted behavior.", "Schema or validation behavior changes."]
+    },
+    {
+      "id": "odibi-anchor.assurance-kernel",
+      "title": "Odibi Anchor Assurance Kernel",
+      "path": "development/assurance-kernel.md",
+      "summary": "Normative shadow assurance tiers, quality attributes, controls, evidence semantics, frozen contracts, and additive task/gate integration.",
+      "topics": ["odibi-anchor", "assurance", "evidence", "governance", "shadow-mode"],
+      "keywords": ["assurance-plan", "assurance-assessment", "control-result", "evidence-state", "task-profile", "advisory"],
+      "versions": [{"name": "anchor-assurance-core", "range": "1.1", "baseline": "anchor-assurance-core/1.1"}],
+      "verification": ["documented", "source-inspected"],
+      "offline_sources": ["development/assurance-kernel.md"],
+      "sources": [
+        {"title": "Odibi Anchor source", "url": "https://github.com/henryodibi11/odibi_anchor"}
+      ],
+      "refresh_triggers": ["The assurance schema, catalog version, digest, tier matrix, control semantics, or authority boundary changes."]
+    },
+    {
+      "id": "assurance.standards-overlays",
+      "title": "Assurance Standards Overlays",
+      "path": "assurance/standards-overlays.md",
+      "summary": "Eight structured advisory overlays with original Anchor controls, explicit evidence states, and versioned source provenance.",
+      "topics": ["assurance", "standards", "evidence", "provenance", "shadow-mode"],
+      "keywords": ["security", "data-quality", "ai-risk", "accessibility", "architecture", "reliability", "supply-chain", "change-safety"],
+      "versions": [
+        {"name": "authored-reference", "range": "1.0.x", "baseline": "1.0.0"},
+        {"name": "overlay-catalog", "range": "1.0.x", "baseline": "1.0.0"}
+      ],
+      "verification": ["documented"],
+      "offline_sources": ["assurance/standards-overlays.md"],
+      "sources": [
+        {"title": "NIST SP 800-218 SSDF v1.1", "url": "https://csrc.nist.gov/pubs/sp/800/218/final", "license": "US Government work; cite NIST; concepts only."},
+        {"title": "OWASP ASVS 5.0.0", "url": "https://owasp.org/www-project-application-security-verification-standard/", "license": "CC BY-SA 4.0 upstream; preserve attribution."},
+        {"title": "ISO/IEC 25012:2008", "url": "https://www.iso.org/standard/35736.html", "license": "Copyright ISO; metadata and public concepts only."},
+        {"title": "UK Government Data Quality Framework", "url": "https://www.gov.uk/government/publications/the-government-data-quality-framework", "license": "Open Government Licence v3.0."},
+        {"title": "NIST AI RMF 1.0 and Generative AI Profile", "url": "https://www.nist.gov/itl/ai-risk-management-framework", "license": "US Government works; cite NIST."},
+        {"title": "OWASP Top 10 for LLM Applications 2025", "url": "https://genai.owasp.org/llm-top-10/", "license": "CC BY-SA 4.0 upstream; preserve attribution."},
+        {"title": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/", "license": "W3C Document License; link and paraphrase."},
+        {"title": "C4 model website baseline 2026-08-20", "url": "https://c4model.com/", "license": "Copyright Simon Brown; site content CC BY 4.0."},
+        {"title": "arc42 template v8.2", "url": "https://arc42.org/", "license": "CC BY-SA 4.0; do not import wholesale."},
+        {"title": "Michael Nygard, Documenting Architecture Decisions", "url": "https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions", "license": "Copyright source article; concept only."},
+        {"title": "Google SRE Books baseline 2026-08-20", "url": "https://sre.google/books/", "license": "CC BY-NC-ND 4.0 for book text; do not adapt text."},
+        {"title": "SLSA specification v1.1", "url": "https://slsa.dev/spec/v1.1/", "license": "Community Specification License 1.0."},
+        {"title": "IEC 60812:2018", "url": "https://webstore.iec.ch/en/publication/26359", "license": "Copyright IEC; metadata and concepts only."},
+        {"title": "IEC 61882:2016", "url": "https://webstore.iec.ch/en/publication/24321", "license": "Copyright IEC; metadata and concepts only."},
+        {"title": "OSHA 29 CFR 1910.119(l)", "url": "https://www.osha.gov/laws-regs/regulations/standardnumber/1910/1910.119", "license": "US Government regulation; separately review any quotation."}
+      ],
+      "refresh_triggers": ["Any adopted source revision, errata, scope, or license changes.", "A catalog predicate, control, evidence contract, or source baseline changes."]
+    }
+  ]
+}

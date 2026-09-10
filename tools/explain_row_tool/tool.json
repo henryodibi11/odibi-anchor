@@ -1,0 +1,36 @@
+{
+    "name": "explain_row",
+    "version": "1.0.0",
+    "description": "Trace how a specific row in an output DataFrame was constructed from upstream DataFrames. Reports column origin, match type (exact/transformed/coerced/null_filled), join path, and suggested next actions.",
+    "category": "diagnostics",
+    "entry_point": "explain_row_impl:explain_row_context",
+    "renderer": "explain_row_impl:render_explain_row_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "output_df",
+            "keys",
+            "values",
+            "upstream"
+        ],
+        "optional": [
+            "output_format",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "explain_row"
+    },
+    "dependencies": [],
+    "tags": [
+        "lineage",
+        "provenance",
+        "debugging",
+        "row-tracing",
+        "forensics"
+    ]
+}

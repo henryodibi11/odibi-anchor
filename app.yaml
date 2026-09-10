@@ -1,0 +1,23 @@
+# Databricks App configuration for odibi_anchor MCP server
+#
+# Deploy with:
+#   databricks apps deploy <app-name> --source-code-path .
+#
+# The MCP server will be available at:
+#   https://<workspace-url>/ml/apps/<app-name>/mcp
+
+command:
+  - uvicorn
+  - odibi_anchor.mcp_app:http_app
+  - --host
+  - "0.0.0.0"
+  - --port
+  - "8000"
+
+env:
+  - name: ANCHOR_PROJECT_ROOT
+    value: "/tmp/anchor"
+  - name: PYTHONIOENCODING
+    value: "utf-8"
+  - name: PYTHONPATH
+    value: "/workspace/src:$PYTHONPATH"

@@ -1,0 +1,3 @@
+.assistant/** text eol=lf
+.assistant_instructions.md text eol=lf
+src/odibi_anchor/assurance/resources/*.json text eol=lf

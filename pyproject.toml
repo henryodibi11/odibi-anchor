@@ -1,0 +1,165 @@
+[build-system]
+requires = ["hatchling>=1.32,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odibi-anchor"
+version = "0.1.0"
+description = "Provider-neutral reliability, context, and evidence tooling for engineering agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Henry Odibi" },
+]
+keywords = ["ai-agents", "context", "evidence", "mcp", "reliability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# Base install: zero external deps (only planning/ usable)
+dependencies = []
+
+[project.scripts]
+anchor = "odibi_anchor.cli:main"
+anchor-governance-sidecar = "odibi_anchor._governance_sidecar.__main__:main"
+
+[project.optional-dependencies]
+governance = ["cryptography>=44,<50", "rfc8785==0.1.4"]
+pandas = ["pandas>=1.5,<3", "numpy>=1.21"]
+spark = ["pyspark>=3.4"]
+semantic = ["libcst>=1.0"]
+mcp = ["fastmcp>=3.0"]
+all = ["pandas>=1.5,<3", "numpy>=1.21", "pyspark>=3.4", "libcst>=1.0", "cryptography>=44,<50", "rfc8785==0.1.4", "fastmcp>=3.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.2",
+    "ruff>=0.4",
+    "pandas>=1.5,<3",
+    "numpy>=1.21",
+    "libcst>=1.0",
+    "cryptography>=44,<50",
+    "rfc8785==0.1.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/henryodibi11/odibi-anchor"
+Documentation = "https://github.com/henryodibi11/odibi-anchor#readme"
+Changelog = "https://github.com/henryodibi11/odibi-anchor/blob/main/CHANGELOG.md"
+Issues = "https://github.com/henryodibi11/odibi-anchor/issues"
+Source = "https://github.com/henryodibi11/odibi-anchor"
+
+[dependency-groups]
+quality = [
+    "build>=1.5,<2",
+    "cyclonedx-bom>=7.3.1,<8",
+    "hatchling>=1.32,<2",
+    # Analyzer and analyzed-library versions are bound to the checked-in quality baselines.
+    "numpy==2.4.6",
+    "pandas==2.3.3",
+    "pip-audit>=2.10.1,<3",
+    "pyright==1.1.411",
+    "ruff==0.16.4",
+    "setuptools>=68,<81",
+]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src/odibi_anchor", ".assistant", ".assistant_instructions.md", "tools"]
+exclude = [
+    "**/*.crc",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "tools/**/README.md",
+    "tools/**/docs/**",
+    "tools/**/test_*.py",
+    "**/.DS_Store",
+    "**/*.sqlite*",
+    "**/*.db*",
+    "**/*.tmp",
+    "**/.env*",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.wheel.force-include]
+"agent_bootstrap.py" = "agent_bootstrap.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/.assistant/**",
+    "/.assistant_instructions.md",
+    "/.gitattributes",
+    "/.github/**",
+    "/.gitignore",
+    "/CHANGELOG.md",
+    "/CLAUDE.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/OUTPUT_SCHEMA.md",
+    "/README.md",
+    "/agent_bootstrap.py",
+    "/app.yaml",
+    "/docs/**",
+    "/pyproject.toml",
+    "/src/**",
+    "/tests/**",
+    "/tools/**",
+]
+exclude = [
+    "**/__pycache__/**",
+    "**/*.py[cod]",
+    "**/*.crc",
+    "**/*.sqlite*",
+    "**/*.db*",
+    "**/*.tmp",
+    "**/.env*",
+    "/.anchor*",
+    "/.context-workbench/**",
+    "/.odibi-anchor/**",
+    "/.pytest_cache/**",
+    "/.ruff_cache/**",
+    "/.venv/**",
+    "/dist/**",
+    "/sessions/**",
+    "/workspace/**",
+]
+
+[tool.hatch.build.targets.sdist.force-include]
+"agent_bootstrap.py" = "agent_bootstrap.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-p no:cacheprovider --tb=short -q"
+# Per-test wall-clock cap (pytest-timeout). "thread" method works on Windows.
+# Generous ceiling — no real test is anywhere near it; it just stops a hung test
+# (e.g. a deadlocked stdio/Spark call) from wedging the whole run.
+timeout = 300
+timeout_method = "thread"
+markers = [
+    "fast: marks tests that run in <1s (deselect with -m \"not fast\")",
+    "slow: marks tests requiring full codebase traversal (deselect with -m \"not slow\")",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]  # handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["odibi_anchor"]

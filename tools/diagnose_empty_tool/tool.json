@@ -1,0 +1,35 @@
+{
+    "name": "diagnose_empty",
+    "version": "1.0.0",
+    "description": "Diagnose why a DataFrame has zero or unexpectedly few rows by analyzing upstream DataFrames, key overlap, filter boundaries, null columns, and type mismatches",
+    "category": "diagnostics",
+    "entry_point": "diagnose_empty_impl:diagnose_empty_context",
+    "renderer": null,
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "result_df"
+        ],
+        "optional": [
+            "upstreams",
+            "keys",
+            "filter_expr",
+            "subject",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "diagnose_empty"
+    },
+    "dependencies": [],
+    "tags": [
+        "diagnostics",
+        "debugging",
+        "empty-output",
+        "data-quality"
+    ]
+}

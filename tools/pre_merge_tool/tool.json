@@ -1,0 +1,36 @@
+{
+    "name": "pre_merge",
+    "version": "1.0.0",
+    "description": "Pre-merge validation \u2014 checks duplicate source keys, null merge keys, schema compatibility, type casting safety, and predicts merge behavior (INSERT/UPDATE/MIXED) before running Delta MERGE",
+    "category": "data",
+    "entry_point": "pre_merge_impl:pre_merge_context",
+    "renderer": null,
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "source_df",
+            "target"
+        ],
+        "optional": [
+            "keys",
+            "source_subject",
+            "target_subject",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "pre_merge"
+    },
+    "dependencies": [],
+    "tags": [
+        "data",
+        "merge",
+        "delta",
+        "validation",
+        "pre-flight"
+    ]
+}

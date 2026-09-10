@@ -1,0 +1,36 @@
+{
+    "name": "partition_check",
+    "version": "1.0.0",
+    "description": "Diagnose small files, partition skew, and file layout issues on Delta tables. Reads file-level metadata to surface storage inefficiencies that silently degrade query performance.",
+    "category": "diagnostics",
+    "entry_point": "partition_check_impl:partition_check_context",
+    "renderer": "partition_check_impl:render_partition_check_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "table"
+        ],
+        "optional": [
+            "small_file_threshold_mb",
+            "skew_ratio_threshold",
+            "spark",
+            "subject"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "partition_check"
+    },
+    "dependencies": [],
+    "tags": [
+        "diagnostics",
+        "delta",
+        "partitioning",
+        "small-files",
+        "optimize",
+        "performance"
+    ]
+}

@@ -1,0 +1,1418 @@
+{
+  "deneb_public_docs": {
+    "reason": "The documentation repository has no explicit LICENSE file; the MIT-licensed application source and an original synthesis are retained instead.",
+    "source_revision": "00d6bc6f261f324905a78e26fe2b512cabfbe9ed",
+    "status": "not-copied"
+  },
+  "generated_on": "2026-08-20",
+  "policy": "Pinned licensed source documentation and API artifacts for offline use.",
+  "schema_version": 1,
+  "snapshots": [
+    {
+      "archive_sha256": "0633c398f4c4858bbe1cfb1d1fc38313fc5d6f1d85fd755208791fe85a5ad28a",
+      "archive_url": "https://github.com/vega/vega/archive/c42b7bad10730383c780f7769768b8b64bc0052a.tar.gz",
+      "files": [
+        {
+          "bytes": 1533,
+          "path": "vega-6.3.1/LICENSE",
+          "sha256": "63727832aaf62004a2b249c933e327f3c90caf49e41a72f4bf436edf632cbda8"
+        },
+        {
+          "bytes": 6003,
+          "path": "vega-6.3.1/docs/docs/api/debugging.md",
+          "sha256": "f4621a746d3751031638a9d506616f82f4181ac6276a434fc1001b9e8023641d"
+        },
+        {
+          "bytes": 9951,
+          "path": "vega-6.3.1/docs/docs/api/extensibility.md",
+          "sha256": "6b53ba02fad13ba347e01cf1f888addad2fe535465c6a83d0f67c2a8d9d4665b"
+        },
+        {
+          "bytes": 5565,
+          "path": "vega-6.3.1/docs/docs/api/locale.md",
+          "sha256": "552686e5591f5895d63da02559e85819c44164dcbdbaceb01493e46880ad52f3"
+        },
+        {
+          "bytes": 2118,
+          "path": "vega-6.3.1/docs/docs/api/parser.md",
+          "sha256": "e96626678cf86ca06633ee55070f0d5085fa76e7437135fac4f66b9cee3f6f4d"
+        },
+        {
+          "bytes": 27438,
+          "path": "vega-6.3.1/docs/docs/api/statistics.md",
+          "sha256": "33455c84e9580aa9fd7f4d1f11db364a63d9745f12d4a6e4e68182c55a857bb6"
+        },
+        {
+          "bytes": 13222,
+          "path": "vega-6.3.1/docs/docs/api/time.md",
+          "sha256": "cf1a7207927ad7ab7ecc002e15a084f0e9df6f497fdd60589f5a1b89f976b438"
+        },
+        {
+          "bytes": 35917,
+          "path": "vega-6.3.1/docs/docs/api/util.md",
+          "sha256": "2a12081e261113d995108800890a29c79e5981ecabba688d803c0690b7fa2c40"
+        },
+        {
+          "bytes": 44307,
+          "path": "vega-6.3.1/docs/docs/api/view.md",
+          "sha256": "b43810f1bacdba899c01a9d2948bbcb627d41dce4c2730459fa940099d89fac4"
+        },
+        {
+          "bytes": 1411,
+          "path": "vega-6.3.1/docs/docs/marks/arc.md",
+          "sha256": "2e2472fd2e382559b693cb22d9b4f8f948f8700090994d3a5941d22b211c7caa"
+        },
+        {
+          "bytes": 1562,
+          "path": "vega-6.3.1/docs/docs/marks/area.md",
+          "sha256": "08381f6021bb92ae59e0c0b130e296026eeb2e4296b7140a9dcb6e035d782dcb"
+        },
+        {
+          "bytes": 2713,
+          "path": "vega-6.3.1/docs/docs/marks/group.md",
+          "sha256": "a039975c1f704f185657ecc2fb20bd3c6147a4a6ad52112639fdd471e2c49db8"
+        },
+        {
+          "bytes": 2049,
+          "path": "vega-6.3.1/docs/docs/marks/image.md",
+          "sha256": "01fd8b90710fb0521accb55bd1eb177f739b99e7b902f187f72b5be8260cd60b"
+        },
+        {
+          "bytes": 1628,
+          "path": "vega-6.3.1/docs/docs/marks/line.md",
+          "sha256": "c637356b7580c40a97011ab36961ceadb13109685068038860d9cd83e43b1952"
+        },
+        {
+          "bytes": 1247,
+          "path": "vega-6.3.1/docs/docs/marks/path.md",
+          "sha256": "59b157941afd3763a3994dec233058ead12784137baad213cb32361a81339dd2"
+        },
+        {
+          "bytes": 1648,
+          "path": "vega-6.3.1/docs/docs/marks/rect.md",
+          "sha256": "b99795405fcb6d1b43347841ae107257508a1278ea9717946325314668bef3f9"
+        },
+        {
+          "bytes": 359,
+          "path": "vega-6.3.1/docs/docs/marks/rule.md",
+          "sha256": "1a3d5d5db4efa8864c043b43410660fb6ddb3c1cf379cdb6274dda6562166d68"
+        },
+        {
+          "bytes": 1032,
+          "path": "vega-6.3.1/docs/docs/marks/shape.md",
+          "sha256": "06dddf3e8449da7923ba9e681d6d05b749d225627aacef178765a753e7ba9007"
+        },
+        {
+          "bytes": 1646,
+          "path": "vega-6.3.1/docs/docs/marks/symbol.md",
+          "sha256": "e668185cba987f40b9ba72997829e830c95f68026950e56d28f8d1ec0c1f0e79"
+        },
+        {
+          "bytes": 3890,
+          "path": "vega-6.3.1/docs/docs/marks/text.md",
+          "sha256": "546f667ef5ee71c715d0fe1187f791f436350e747d5903251b6e1ed731d9f216"
+        },
+        {
+          "bytes": 1103,
+          "path": "vega-6.3.1/docs/docs/marks/trail.md",
+          "sha256": "bc0c59595f77c8c3d635c271d2294ed451e0a6ec85c0e380bd0bab058c53ef60"
+        },
+        {
+          "bytes": 6373,
+          "path": "vega-6.3.1/docs/docs/transforms/aggregate.md",
+          "sha256": "104582cbe6942fe9d442e71109aa6df76ed7634b4b54d47605e58326679a492d"
+        },
+        {
+          "bytes": 3515,
+          "path": "vega-6.3.1/docs/docs/transforms/bin.md",
+          "sha256": "4641c2eb4302290f1f85fa57f7914c3baef412da44814d07aec4e1a3f06517f8"
+        },
+        {
+          "bytes": 1180,
+          "path": "vega-6.3.1/docs/docs/transforms/collect.md",
+          "sha256": "c2ddec772a2fed3254c893284160d4134443d4f5c627d4516fce274b90e6665b"
+        },
+        {
+          "bytes": 3913,
+          "path": "vega-6.3.1/docs/docs/transforms/contour.md",
+          "sha256": "cea3ae1d9d085c92cdf8017bf2f31bedddb2a77fe67100cf35589a8bf84f749a"
+        },
+        {
+          "bytes": 2611,
+          "path": "vega-6.3.1/docs/docs/transforms/countpattern.md",
+          "sha256": "3932f133b1e77c81cde5262bf14e77dfd8d2dea98d74e78fbe4528c66b74034b"
+        },
+        {
+          "bytes": 1447,
+          "path": "vega-6.3.1/docs/docs/transforms/cross.md",
+          "sha256": "b0e6ca456584574d9a7412721f8827297a742b6d720155d8782fec90f59d1746"
+        },
+        {
+          "bytes": 3236,
+          "path": "vega-6.3.1/docs/docs/transforms/crossfilter.md",
+          "sha256": "fac15da402d89910411f06bc0ed2af4afcf31ecfc485bb32230b80b33d98e0e8"
+        },
+        {
+          "bytes": 6187,
+          "path": "vega-6.3.1/docs/docs/transforms/density.md",
+          "sha256": "8363b0c15014e682a83b36110c8211bee584cbbe29b73eedb0c8dbf0b855d50b"
+        },
+        {
+          "bytes": 2558,
+          "path": "vega-6.3.1/docs/docs/transforms/dotbin.md",
+          "sha256": "e397cbca02716e98f99f8fdc2ac164cfc0117b10e8a810343f9b6ee83de95543"
+        },
+        {
+          "bytes": 1080,
+          "path": "vega-6.3.1/docs/docs/transforms/extent.md",
+          "sha256": "51b87d2e17b716fec96b5852e11d917f951c81d455558a3d22783e2fa4b08b63"
+        },
+        {
+          "bytes": 894,
+          "path": "vega-6.3.1/docs/docs/transforms/filter.md",
+          "sha256": "4ac1a251de34f095ee77858c34f7e4eab11422e444862d916a54a4e253a00d98"
+        },
+        {
+          "bytes": 3380,
+          "path": "vega-6.3.1/docs/docs/transforms/flatten.md",
+          "sha256": "ad769f4cb82bac301768704242f1ab50ff328c731df6ea3117db0c1d0b6215f0"
+        },
+        {
+          "bytes": 1991,
+          "path": "vega-6.3.1/docs/docs/transforms/fold.md",
+          "sha256": "9ae0763dceaccf6fc417e599bd89de221f33010d4163c9198876fa95789eff61"
+        },
+        {
+          "bytes": 8842,
+          "path": "vega-6.3.1/docs/docs/transforms/force.md",
+          "sha256": "020651c9ae6a932f39b2667a15f0216e727528ed0fddd9cfb9cb7c8f0477df60"
+        },
+        {
+          "bytes": 1256,
+          "path": "vega-6.3.1/docs/docs/transforms/formula.md",
+          "sha256": "7df5b2bea9bd99fb5870efa43be602dd1109a5e6eccfa3fde0c081d3deb4fe40"
+        },
+        {
+          "bytes": 1642,
+          "path": "vega-6.3.1/docs/docs/transforms/geojson.md",
+          "sha256": "58cb5bf03a8a1ce762518b3d7503fe914edaf705978cc7bd55be54f9022e12b2"
+        },
+        {
+          "bytes": 1954,
+          "path": "vega-6.3.1/docs/docs/transforms/geopath.md",
+          "sha256": "eccee0c3bf8d18343d4dfe43b27599d3ad1d7cae896fdd44b49f3bd02888fc38"
+        },
+        {
+          "bytes": 1104,
+          "path": "vega-6.3.1/docs/docs/transforms/geopoint.md",
+          "sha256": "c00e79db66742da26fbca4355c929346c7e6f6c604b123d65325d18861f07bca"
+        },
+        {
+          "bytes": 1893,
+          "path": "vega-6.3.1/docs/docs/transforms/geoshape.md",
+          "sha256": "9b1321db9b83616ea2c5764326dee2eb5790dfc3a5d95e2b99533f52d95eef88"
+        },
+        {
+          "bytes": 1969,
+          "path": "vega-6.3.1/docs/docs/transforms/graticule.md",
+          "sha256": "9d829ea387de6296793e84981333c0737a200869af20641565f05f3a8606d41f"
+        },
+        {
+          "bytes": 4178,
+          "path": "vega-6.3.1/docs/docs/transforms/heatmap.md",
+          "sha256": "bc782783cbbe2f9e582eb5ad0325725896449ecb57e73c57f9dffa0d84836e04"
+        },
+        {
+          "bytes": 1061,
+          "path": "vega-6.3.1/docs/docs/transforms/identifier.md",
+          "sha256": "b9637d32edc37d17914a9f537cb9e65cdc57897186f94d08b4bbe5f28bd76443"
+        },
+        {
+          "bytes": 2304,
+          "path": "vega-6.3.1/docs/docs/transforms/impute.md",
+          "sha256": "07d5276e6d3d7ff5d738aa5d21824de11492621b1b7aa60abbe76c9c23533965"
+        },
+        {
+          "bytes": 3955,
+          "path": "vega-6.3.1/docs/docs/transforms/isocontour.md",
+          "sha256": "15ca6c7dfb12ff4509221d26557f1e36b4668aedd4dbae4124e56901888cb1d1"
+        },
+        {
+          "bytes": 3728,
+          "path": "vega-6.3.1/docs/docs/transforms/joinaggregate.md",
+          "sha256": "a163bf90e3241823770732bc875fb6c3e3879a7314ef4991f03b0f145956a9df"
+        },
+        {
+          "bytes": 3498,
+          "path": "vega-6.3.1/docs/docs/transforms/kde.md",
+          "sha256": "ed500059f3c300490902e1f2f3546ddba9bb6f96ec2f167a0d9f54134479d48b"
+        },
+        {
+          "bytes": 3184,
+          "path": "vega-6.3.1/docs/docs/transforms/kde2d.md",
+          "sha256": "6910cbcf56d419f113dc97d841ec633816dbfe7a633a53f706ca7431d3a895ed"
+        },
+        {
+          "bytes": 4600,
+          "path": "vega-6.3.1/docs/docs/transforms/label.md",
+          "sha256": "fb87936a348958fe7fc54063cf014bad7abea46d36f7807ecb5b0231860e7ca6"
+        },
+        {
+          "bytes": 2864,
+          "path": "vega-6.3.1/docs/docs/transforms/linkpath.md",
+          "sha256": "b3e812b0667744249b91f2c6af6cb5ff07e132c1421de17f06e1d0e2629085b4"
+        },
+        {
+          "bytes": 1844,
+          "path": "vega-6.3.1/docs/docs/transforms/loess.md",
+          "sha256": "b2974af50c10a049ceeb68d6f50de1a7e078e1b98951a95290c188e60d2f804d"
+        },
+        {
+          "bytes": 3728,
+          "path": "vega-6.3.1/docs/docs/transforms/lookup.md",
+          "sha256": "c2afc11a3a289f0d543e9525eac6f7cb007ac56d045549d057dc95ea6de4e477"
+        },
+        {
+          "bytes": 3746,
+          "path": "vega-6.3.1/docs/docs/transforms/nest.md",
+          "sha256": "1d42c721547eb64e216514b3343aa75011b5a702f8debc9c49bdfead7cfdf947"
+        },
+        {
+          "bytes": 2606,
+          "path": "vega-6.3.1/docs/docs/transforms/pack.md",
+          "sha256": "e26c0da24580574058ea258cfe06f26e7850bd2834cd881c34cee9dab884665a"
+        },
+        {
+          "bytes": 2678,
+          "path": "vega-6.3.1/docs/docs/transforms/partition.md",
+          "sha256": "70b4464c3b3a553e18c7e11b48abf6ebce3f66c7dfe1924add70c7692bd79be0"
+        },
+        {
+          "bytes": 1492,
+          "path": "vega-6.3.1/docs/docs/transforms/pie.md",
+          "sha256": "3e31776a19b1d96f4892d9c1808e7eee3ee580abbfc73c4dc7c2f9f50e9d6244"
+        },
+        {
+          "bytes": 2901,
+          "path": "vega-6.3.1/docs/docs/transforms/pivot.md",
+          "sha256": "9e9e33ca5807aea491066549fd2c0518bcb1c89c96555733dc1c41891724ae1d"
+        },
+        {
+          "bytes": 2070,
+          "path": "vega-6.3.1/docs/docs/transforms/project.md",
+          "sha256": "55bd3a08288c922a1b5d03ecd29a50df0b7a7f10e0459679554ceb0cfebccc86"
+        },
+        {
+          "bytes": 2042,
+          "path": "vega-6.3.1/docs/docs/transforms/quantile.md",
+          "sha256": "ff3c112f45addbdf66bd4730bf8f7950841ab8edb8783083ecb3c6ff2f5d00d2"
+        },
+        {
+          "bytes": 3993,
+          "path": "vega-6.3.1/docs/docs/transforms/regression.md",
+          "sha256": "9b95b2f9b0b20038f09445f6f41a2f19d18c1dbb7cd05252132a6d4495fa55f1"
+        },
+        {
+          "bytes": 3234,
+          "path": "vega-6.3.1/docs/docs/transforms/resolvefilter.md",
+          "sha256": "ac14e25e9ef77fa7570c5331c5ec9d28368ef278103246025d84d9b5607ad57a"
+        },
+        {
+          "bytes": 875,
+          "path": "vega-6.3.1/docs/docs/transforms/sample.md",
+          "sha256": "e976ede38f075ad7e9de19bd8c737fc6f37f57f09e12f542c0e020df339510a3"
+        },
+        {
+          "bytes": 1429,
+          "path": "vega-6.3.1/docs/docs/transforms/sequence.md",
+          "sha256": "904dbb051c1fbc149e0ea1354f199d3791b3b33f5af4c150469999c7a40f5d52"
+        },
+        {
+          "bytes": 2464,
+          "path": "vega-6.3.1/docs/docs/transforms/stack.md",
+          "sha256": "36c6682139d553adeceb90aaf341fb5104c021cd2896ea418ba9658c42d0e234"
+        },
+        {
+          "bytes": 1606,
+          "path": "vega-6.3.1/docs/docs/transforms/stratify.md",
+          "sha256": "2d2ab5bbfb0f5f6517cda804fce34f67b820f1b3cce887a77aec5e6b4eeaec3a"
+        },
+        {
+          "bytes": 6754,
+          "path": "vega-6.3.1/docs/docs/transforms/timeunit.md",
+          "sha256": "e3ba0d0cbcb71d4abd62f3e3534467a2f0fd05d27429c688c2be7917ebe6106e"
+        },
+        {
+          "bytes": 2882,
+          "path": "vega-6.3.1/docs/docs/transforms/tree.md",
+          "sha256": "fc7f92235d0048e3b15ed0fc94487c7ba4b62f828d40c1734978ffdfa2857562"
+        },
+        {
+          "bytes": 1753,
+          "path": "vega-6.3.1/docs/docs/transforms/treelinks.md",
+          "sha256": "2ad474bec11637edcd8ed3954f1d6b4a1144ba266df8e2ad8d62b981e301ae1b"
+        },
+        {
+          "bytes": 3889,
+          "path": "vega-6.3.1/docs/docs/transforms/treemap.md",
+          "sha256": "8c2ee13984c33de671fa2d0d993ff8535e825017ace25c83cc7ff51fa548b545"
+        },
+        {
+          "bytes": 1830,
+          "path": "vega-6.3.1/docs/docs/transforms/voronoi.md",
+          "sha256": "33c99059a8edf68d33c4d8f415e2a45a0439142f106019eb64182dc7e302c2cf"
+        },
+        {
+          "bytes": 8624,
+          "path": "vega-6.3.1/docs/docs/transforms/window.md",
+          "sha256": "b0a685f611907c5abcf0e7e21612a8cd877a39cddea329ebe50ec5e9739e9ff7"
+        },
+        {
+          "bytes": 2995,
+          "path": "vega-6.3.1/docs/docs/transforms/wordcloud.md",
+          "sha256": "e7a5da5a1cf131cdcadc8534c9465f625a6128570caf355f9b72669d6a6b97d1"
+        },
+        {
+          "bytes": 419767,
+          "path": "vega-6.3.1/docs/vega-schema.json",
+          "sha256": "6bc9ae0c52c66059ff079c7dbbb25b277ebeb9ab359e91f62ef2d52c2ab4363e"
+        }
+      ],
+      "license": "BSD-3-Clause",
+      "name": "vega-6.3.1",
+      "repository": "vega/vega",
+      "revision": "c42b7bad10730383c780f7769768b8b64bc0052a",
+      "version": "6.3.1"
+    },
+    {
+      "archive_sha256": "874c9ad5616cb8b4bf1daa3da3d8b6c4e7cd0d19d4e3d120a8aa3a6c6cf0bd74",
+      "archive_url": "https://github.com/vega/vega-lite/archive/f4bb2188709204860329aff2aeaf678c0280c315.tar.gz",
+      "files": [
+        {
+          "bytes": 1529,
+          "path": "vega-lite-6.4.3/LICENSE",
+          "sha256": "f618900fd0d64046963b29f40590cdd1e341a2f41449f99110d82fd81fea808c"
+        },
+        {
+          "bytes": 1879222,
+          "path": "vega-lite-6.4.3/build/vega-lite-schema.json",
+          "sha256": "4f11cd379b7cac0ddee17eefea84c028bd41619ace28778acf843c009e43abd2"
+        },
+        {
+          "bytes": 2535,
+          "path": "vega-lite-6.4.3/site/docs/composition/composition.md",
+          "sha256": "bc1feeb4e667eee5abfcdb8b4ea41586cb3062de3f2032c071818cf197ad2693"
+        },
+        {
+          "bytes": 2869,
+          "path": "vega-lite-6.4.3/site/docs/composition/concat.md",
+          "sha256": "01fbd0451dbeddb804f79d7400e6b6a8bca6dfcb72b7320128f9e652a341688f"
+        },
+        {
+          "bytes": 5727,
+          "path": "vega-lite-6.4.3/site/docs/composition/facet.md",
+          "sha256": "3392a23e95e775ef8c8a50507f43ce780fa12da904870fa0af8c23e5041fd67d"
+        },
+        {
+          "bytes": 2486,
+          "path": "vega-lite-6.4.3/site/docs/composition/layer.md",
+          "sha256": "32fc4dd7d33abeb89f092881b02c0a82e48815f44a50be320a92d8a54308c324"
+        },
+        {
+          "bytes": 3517,
+          "path": "vega-lite-6.4.3/site/docs/composition/repeat.md",
+          "sha256": "f605d37834bd66eaad302fb5112ecd8a7c5410b886b5c85a920c3ec30dc0669e"
+        },
+        {
+          "bytes": 1529,
+          "path": "vega-lite-6.4.3/site/docs/composition/resolve.md",
+          "sha256": "7a4461415be43a95daa3bc77397aa9964314a643c71e5e829151621a961fc71a"
+        },
+        {
+          "bytes": 8067,
+          "path": "vega-lite-6.4.3/site/docs/encoding/axis.md",
+          "sha256": "02e6d9ce3270dff48c64b512584fb1c4d612625b0245d81077589223c2f9f220"
+        },
+        {
+          "bytes": 947,
+          "path": "vega-lite-6.4.3/site/docs/encoding/bandPosition.md",
+          "sha256": "505da2bed51611a94e4fb01e874944465953bbd63bef980ee71ef65a35210ba6"
+        },
+        {
+          "bytes": 6125,
+          "path": "vega-lite-6.4.3/site/docs/encoding/condition.md",
+          "sha256": "ef72159e36ebc259f3d3a94e61027697b5402e065158480c8166f246cd4f1af6"
+        },
+        {
+          "bytes": 1130,
+          "path": "vega-lite-6.4.3/site/docs/encoding/datum.md",
+          "sha256": "81335350abe6f58420736409708701f82580c7f8f1e0a7d3e9ca7a5fccb620f1"
+        },
+        {
+          "bytes": 1834,
+          "path": "vega-lite-6.4.3/site/docs/encoding/field.md",
+          "sha256": "def81588125ce053de9744be213abc45c31abcf86f9f7ff2ee4976aa50594384"
+        },
+        {
+          "bytes": 2959,
+          "path": "vega-lite-6.4.3/site/docs/encoding/format.md",
+          "sha256": "7520281020e05da0a4315f6b73c5f0a237625a4ef8781e88f894b1bba7a12045"
+        },
+        {
+          "bytes": 3254,
+          "path": "vega-lite-6.4.3/site/docs/encoding/header.md",
+          "sha256": "699ccf064a24d779c599a2a43966ffb4c0d03ceffa34df2d32fe0b4ca2b738d9"
+        },
+        {
+          "bytes": 4352,
+          "path": "vega-lite-6.4.3/site/docs/encoding/legend.md",
+          "sha256": "79ff61af55ffe0a0fd166944eeec942595b48e91e27cf0ea198e1fbbe679ecc0"
+        },
+        {
+          "bytes": 25094,
+          "path": "vega-lite-6.4.3/site/docs/encoding/scale.md",
+          "sha256": "c7273b79b08fde10115d7c709d250b43a3f43e35d3bbc33e9ab7b06b356d97cb"
+        },
+        {
+          "bytes": 4638,
+          "path": "vega-lite-6.4.3/site/docs/encoding/sort.md",
+          "sha256": "302d2a1e8a6f4255e229987f1f572d943cc471ea4a245532170f3b043859a61b"
+        },
+        {
+          "bytes": 3665,
+          "path": "vega-lite-6.4.3/site/docs/encoding/type.md",
+          "sha256": "37f21b8f02e5f958ca1d8ea0a0a69d48c5526c31ce7a2eb0758f26a7ea216cba"
+        },
+        {
+          "bytes": 1351,
+          "path": "vega-lite-6.4.3/site/docs/encoding/value.md",
+          "sha256": "ac94172174933f19e0187d13d142a44283b5530930efda22af87c80c02b9141e"
+        },
+        {
+          "bytes": 2599,
+          "path": "vega-lite-6.4.3/site/docs/mark/arc.md",
+          "sha256": "46decf98d94adea09955e7df918a08b125ebf5b855cf4388efcfc24a1d269f70"
+        },
+        {
+          "bytes": 3500,
+          "path": "vega-lite-6.4.3/site/docs/mark/area.md",
+          "sha256": "34b25077622d211ffd1655b2a11fbb6f46b6713ef7d6a61504034061503a7def"
+        },
+        {
+          "bytes": 5923,
+          "path": "vega-lite-6.4.3/site/docs/mark/bar.md",
+          "sha256": "5485b3e58ac05d092e696ba8fa05b0e2c95539af14302ebb3d5ab16cd7d5c55e"
+        },
+        {
+          "bytes": 5695,
+          "path": "vega-lite-6.4.3/site/docs/mark/boxplot.md",
+          "sha256": "c369518e2a0dc3fcd836c0634d191f0a9edd76591a4e394ffbed057924aebe2c"
+        },
+        {
+          "bytes": 1315,
+          "path": "vega-lite-6.4.3/site/docs/mark/circle.md",
+          "sha256": "0c9a435fde6ae3e8393e500f3fb4aa2d0526b21faa7f0f224bcb9d4ff009f248"
+        },
+        {
+          "bytes": 4639,
+          "path": "vega-lite-6.4.3/site/docs/mark/errorband.md",
+          "sha256": "66b382bfcb07e7801dfd4456708fa94ced17ade929b3ecb253b4ecc2f57414b0"
+        },
+        {
+          "bytes": 6407,
+          "path": "vega-lite-6.4.3/site/docs/mark/errorbar.md",
+          "sha256": "713b4f798b98c2ebb5705c6bdb133eba57aa1a7646498c0f69f26204ff82639c"
+        },
+        {
+          "bytes": 992,
+          "path": "vega-lite-6.4.3/site/docs/mark/geoshape.md",
+          "sha256": "991ef2b4487421b103434e1e42845b6c5377a12c5b1ed06fa04de640dca79969"
+        },
+        {
+          "bytes": 1415,
+          "path": "vega-lite-6.4.3/site/docs/mark/image.md",
+          "sha256": "1a72e8ef400d3818025b111d82fb8e73b5d5e0d487fdf1997a367fb8cf012e26"
+        },
+        {
+          "bytes": 6435,
+          "path": "vega-lite-6.4.3/site/docs/mark/line.md",
+          "sha256": "2518c49dc50282798c5d7d5897560502dc78fd7b49a68cb4865ed841cbbfd989"
+        },
+        {
+          "bytes": 6133,
+          "path": "vega-lite-6.4.3/site/docs/mark/mark.md",
+          "sha256": "c01612e826ac8cc5bff2943d8e44879b6084648b1c4b436d6df30a8574ab53ae"
+        },
+        {
+          "bytes": 2918,
+          "path": "vega-lite-6.4.3/site/docs/mark/point.md",
+          "sha256": "91be739b9c21359447607e0b516b1af98e01c1f807b05af76a9a972889d03f86"
+        },
+        {
+          "bytes": 2165,
+          "path": "vega-lite-6.4.3/site/docs/mark/rect.md",
+          "sha256": "d0b116563e53e76c3773f597820e367b3d1383688fa6d56f84e02a221f49b003"
+        },
+        {
+          "bytes": 3091,
+          "path": "vega-lite-6.4.3/site/docs/mark/rule.md",
+          "sha256": "467971929ff8b1890a7b6564d3884a0b01a8628c97f448989e7fdf59e56dbea5"
+        },
+        {
+          "bytes": 1191,
+          "path": "vega-lite-6.4.3/site/docs/mark/square.md",
+          "sha256": "66e1c38b235ccc6d313fcd6eca0bf1341453ceb91b88131c7f3de365ebd217ed"
+        },
+        {
+          "bytes": 2227,
+          "path": "vega-lite-6.4.3/site/docs/mark/text.md",
+          "sha256": "5cfee90e35d21df1227c0fd983fa9cd68054937231497839dd75c042ddb5ac8d"
+        },
+        {
+          "bytes": 1779,
+          "path": "vega-lite-6.4.3/site/docs/mark/tick.md",
+          "sha256": "4d6a38cd493c46820000d4f08b6b753826fe3a83c8d5f5375622edb61aff0069"
+        },
+        {
+          "bytes": 1740,
+          "path": "vega-lite-6.4.3/site/docs/mark/trail.md",
+          "sha256": "85513101f316736f25d99841358c46d60fc698e58cb74a5608969384411ec328"
+        },
+        {
+          "bytes": 3928,
+          "path": "vega-lite-6.4.3/site/docs/parameter/bind.md",
+          "sha256": "bbf94dc24fee3707a3e9be4319427b18eb2d7a9532bba5ef819beccf9f094400"
+        },
+        {
+          "bytes": 9252,
+          "path": "vega-lite-6.4.3/site/docs/parameter/parameter.md",
+          "sha256": "fe9ac4ceed8fc4cd9cfefac28b5c8528a7a7153a696c0bb17b1ab4384c3198bd"
+        },
+        {
+          "bytes": 12130,
+          "path": "vega-lite-6.4.3/site/docs/parameter/select.md",
+          "sha256": "bf78c5548d5384c2609a3056029d6101370cb115f469955b27a94f4155f33988"
+        },
+        {
+          "bytes": 1042,
+          "path": "vega-lite-6.4.3/site/docs/parameter/value.md",
+          "sha256": "cb1517300ce255b0aa296bb51f4d5b05b5124635349e1e2a03530cdf4206e49f"
+        },
+        {
+          "bytes": 6255,
+          "path": "vega-lite-6.4.3/site/docs/transform/aggregate.md",
+          "sha256": "7e760d0108c7ed3579f747b9800a436f24e491b470af6674d1e3068e035d21d6"
+        },
+        {
+          "bytes": 3874,
+          "path": "vega-lite-6.4.3/site/docs/transform/bin.md",
+          "sha256": "01550608d6124d9b8077caacbb20ab1b66c2a72b4b03d9e573729e72d7ca3f1a"
+        },
+        {
+          "bytes": 644,
+          "path": "vega-lite-6.4.3/site/docs/transform/calculate.md",
+          "sha256": "7ab725ed174ee4c58bca186ef518c5331417e735ef63c552e585f050c42b2636"
+        },
+        {
+          "bytes": 1594,
+          "path": "vega-lite-6.4.3/site/docs/transform/density.md",
+          "sha256": "48ed1b51c8fadd8cfc47780c04ce2af8166e7ad3abf512168418eeaede4f01b3"
+        },
+        {
+          "bytes": 959,
+          "path": "vega-lite-6.4.3/site/docs/transform/extent.md",
+          "sha256": "02459cac2038d98b53a7f5051898a63cb135f0f9a09d7e382b8a92bf74e3d5c3"
+        },
+        {
+          "bytes": 503,
+          "path": "vega-lite-6.4.3/site/docs/transform/filter.md",
+          "sha256": "ddf835a909322b31fc18dd26919190079d3e7e7dfa63460c30de7fad2f22fc13"
+        },
+        {
+          "bytes": 1642,
+          "path": "vega-lite-6.4.3/site/docs/transform/flatten.md",
+          "sha256": "b2fd6c136371e1ad0f921b4dd8c59e557ca8e95fed49ff4f19d9e82abc14e6d7"
+        },
+        {
+          "bytes": 1687,
+          "path": "vega-lite-6.4.3/site/docs/transform/fold.md",
+          "sha256": "c818d69192f595dfabddbfc10f0cfb56c33760feaae82780aeea4be7dbb4a46e"
+        },
+        {
+          "bytes": 4719,
+          "path": "vega-lite-6.4.3/site/docs/transform/impute.md",
+          "sha256": "e48e4f23db5feb67011e708aa63e54d1173699dfd6a252245c492e67a308c94c"
+        },
+        {
+          "bytes": 3020,
+          "path": "vega-lite-6.4.3/site/docs/transform/joinaggregate.md",
+          "sha256": "cf713024c089d944f7974aae0d80818cba5c43243053f27b7d059939b7914628"
+        },
+        {
+          "bytes": 1281,
+          "path": "vega-lite-6.4.3/site/docs/transform/loess.md",
+          "sha256": "f1baad7f71f449260c36fb8ff07c9df5e718759e4485977384304bbab31d3bb0"
+        },
+        {
+          "bytes": 1526,
+          "path": "vega-lite-6.4.3/site/docs/transform/lookup.md",
+          "sha256": "d71e7fda5e2e8382aa4a40f5e54b66dd65ccce5393d7213429ca0a15a0e85e35"
+        },
+        {
+          "bytes": 1740,
+          "path": "vega-lite-6.4.3/site/docs/transform/pivot.md",
+          "sha256": "4d222bc23e1d28f2f077b7a39dabee98759aefdb4043d0fce831cccca74cd074"
+        },
+        {
+          "bytes": 1451,
+          "path": "vega-lite-6.4.3/site/docs/transform/quantile.md",
+          "sha256": "a3469ef9252e744211d8de63d727922074766a1825671bdc7bd0b4d57e3c5b37"
+        },
+        {
+          "bytes": 1886,
+          "path": "vega-lite-6.4.3/site/docs/transform/regression.md",
+          "sha256": "524146a1c4b401d0960d0326ba03abfac2a7e7193c564c18ca6a0e0908fb3852"
+        },
+        {
+          "bytes": 878,
+          "path": "vega-lite-6.4.3/site/docs/transform/sample.md",
+          "sha256": "b65b772bef2e5c6eb74700e4333dc765419005305e4ca3a317453a8c376528ca"
+        },
+        {
+          "bytes": 5120,
+          "path": "vega-lite-6.4.3/site/docs/transform/stack.md",
+          "sha256": "173e327e4ceeb8286a0bbef120fad0c923e8f28d9d2555bcfa66468fc42642c7"
+        },
+        {
+          "bytes": 6759,
+          "path": "vega-lite-6.4.3/site/docs/transform/timeunit.md",
+          "sha256": "9becd5c92e78a6517b9d89a64480b1a53df05d64d3e63e39bf36316a9daa7288"
+        },
+        {
+          "bytes": 1492,
+          "path": "vega-lite-6.4.3/site/docs/transform/transform.md",
+          "sha256": "670615902359c6f3516b6eb40b3a92c50c5d68bade9df38f618b257fe9237d04"
+        },
+        {
+          "bytes": 6344,
+          "path": "vega-lite-6.4.3/site/docs/transform/window.md",
+          "sha256": "7b775911a9ca41b3b802f1fc344a2810ee902d55c0c12ab679073bd98f757eac"
+        },
+        {
+          "bytes": 645,
+          "path": "vega-lite-6.4.3/site/docs/types/datetime.md",
+          "sha256": "708f12ff8dff8bbe2d2b4f6311830f79a52327386bf4bd8f4fb64a65911c10e6"
+        },
+        {
+          "bytes": 2025,
+          "path": "vega-lite-6.4.3/site/docs/types/gradient.md",
+          "sha256": "c71436b550b0959e9c0f3a5fd51eb6f3bdc45d1853bcd4453db5e85ded870ec8"
+        },
+        {
+          "bytes": 6016,
+          "path": "vega-lite-6.4.3/site/docs/types/predicate.md",
+          "sha256": "761418c8eca714f75ab07cf3c1542bc313d6c471b71d80dc0cba6dba400f5ec2"
+        },
+        {
+          "bytes": 9026,
+          "path": "vega-lite-6.4.3/site/docs/view/size.md",
+          "sha256": "af69aae92b41dc4c06e27f5a5f0e6e8201017d18aaaf1878518fab2365356899"
+        },
+        {
+          "bytes": 1220,
+          "path": "vega-lite-6.4.3/site/docs/view/title.md",
+          "sha256": "d65b1870f40b6a873fe10bc21ef48d4512ff8fb7723641cabc550305ab87b327"
+        }
+      ],
+      "license": "BSD-3-Clause",
+      "name": "vega-lite-6.4.3",
+      "repository": "vega/vega-lite",
+      "revision": "f4bb2188709204860329aff2aeaf678c0280c315",
+      "version": "6.4.3"
+    },
+    {
+      "archive_sha256": "64efce29cdea42e22685413e99ebb3a89bb41c9e64288d3fc67ac7836cd40868",
+      "archive_url": "https://github.com/vega/altair/archive/a9765713566095349cb1cfbbe85d6ad258c84245.tar.gz",
+      "files": [
+        {
+          "bytes": 1497,
+          "path": "altair-6.2.2/LICENSE",
+          "sha256": "648332da6631555f71f18305b96e9a2c409e73d73613b6c96587cdc0a449e054"
+        },
+        {
+          "bytes": 35,
+          "path": "altair-6.2.2/altair/vegalite/api.py.txt",
+          "sha256": "bb49eade5da319366e83980054b8548b227e609315f2566494360e2d3c662ef4"
+        },
+        {
+          "bytes": 75,
+          "path": "altair-6.2.2/altair/vegalite/schema.py.txt",
+          "sha256": "2b6ff7d07f8c7948cee1b81fd9f2157b57f911affb0997c3614810d58dff981a"
+        },
+        {
+          "bytes": 1203840,
+          "path": "altair-6.2.2/altair/vegalite/v6/schema/channels.py.txt",
+          "sha256": "20c11f923c43b730e71c5abd92cc8e1fb8e0b69701765bbf7e59fe1aacf5fb47"
+        },
+        {
+          "bytes": 1600660,
+          "path": "altair-6.2.2/altair/vegalite/v6/schema/core.py.txt",
+          "sha256": "8c648ef9a3b996dd7c4d06a9a7b84d71414fd04922b87b7a444fbd3c171b0924"
+        },
+        {
+          "bytes": 87040,
+          "path": "altair-6.2.2/altair/vegalite/v6/schema/mixins.py.txt",
+          "sha256": "e7e7afa9faccf0da4b7a0c7bab1712abedb03786d1b0d987721d45469b977e89"
+        },
+        {
+          "bytes": 1879222,
+          "path": "altair-6.2.2/altair/vegalite/v6/schema/vega-lite-schema.json",
+          "sha256": "4f11cd379b7cac0ddee17eefea84c028bd41619ace28778acf843c009e43abd2"
+        },
+        {
+          "bytes": 2493,
+          "path": "altair-6.2.2/doc/index.rst",
+          "sha256": "9b0bb036fe93d173ab75159882de00429c998ce680d8a025b778defabd374013"
+        },
+        {
+          "bytes": 3279,
+          "path": "altair-6.2.2/doc/user_guide/encodings/channel_options.rst",
+          "sha256": "f83f7f8cd23d054c5d5a32a8673879da6b92a668aacedb6e7fcf479e0dbbf026"
+        },
+        {
+          "bytes": 9324,
+          "path": "altair-6.2.2/doc/user_guide/encodings/channels.rst",
+          "sha256": "9747698c30b1dba717fe3853567cecb2d124640b45fa3ef69437ac4ed725a3e1"
+        },
+        {
+          "bytes": 23116,
+          "path": "altair-6.2.2/doc/user_guide/encodings/index.rst",
+          "sha256": "cffa5c771be4d339cbe60b5df5e307b85774615c34f5e48bb19f0c839691e0d2"
+        },
+        {
+          "bytes": 14733,
+          "path": "altair-6.2.2/doc/user_guide/interactions/bindings_widgets.rst",
+          "sha256": "9cafb8089b7cc7b1a79f3511fafa4d0f48ed9c7b2c527b9230269c8b95c26a6e"
+        },
+        {
+          "bytes": 8428,
+          "path": "altair-6.2.2/doc/user_guide/interactions/expressions.rst",
+          "sha256": "a6db42a0844bb7eb0e5064b013b4667d1967b74303372aa54ec8112ee33b9c8f"
+        },
+        {
+          "bytes": 1779,
+          "path": "altair-6.2.2/doc/user_guide/interactions/index.rst",
+          "sha256": "c72cf2813fd91d631b0222816eb5d8dfdbdb585bfd634d17757a1e8853fee01d"
+        },
+        {
+          "bytes": 15200,
+          "path": "altair-6.2.2/doc/user_guide/interactions/jupyter_chart.rst",
+          "sha256": "f60ea856bb4f27124b9b11c95d89b375cf55aa11f76aa4ea4bec8455c782cad7"
+        },
+        {
+          "bytes": 27006,
+          "path": "altair-6.2.2/doc/user_guide/interactions/parameters.rst",
+          "sha256": "1e263a53c3846790676650e92e7e57e72455bed36328d76ceff89efcfba8e6a0"
+        },
+        {
+          "bytes": 3761,
+          "path": "altair-6.2.2/doc/user_guide/marks/arc.rst",
+          "sha256": "bdd81d7b68fa3308376c11191eef6adc64eb60e51ae1830b5639c3d55eac94e2"
+        },
+        {
+          "bytes": 5908,
+          "path": "altair-6.2.2/doc/user_guide/marks/area.rst",
+          "sha256": "8c9218eb230ffd8ec6ab688d31c89b013e0a8002186c50beea3206da48ee11bc"
+        },
+        {
+          "bytes": 4309,
+          "path": "altair-6.2.2/doc/user_guide/marks/bar.rst",
+          "sha256": "a119a079183b6b24e9e1397d1429f9ab75ee0661d11cb0b5b506fba017040c86"
+        },
+        {
+          "bytes": 4421,
+          "path": "altair-6.2.2/doc/user_guide/marks/boxplot.rst",
+          "sha256": "79613ee9c7e9f4832439856d8238bc530de5f2843170a67e406e58c282404b46"
+        },
+        {
+          "bytes": 777,
+          "path": "altair-6.2.2/doc/user_guide/marks/circle.rst",
+          "sha256": "6dd8c431ac2613642304ddf2de195add89e2f2e7dfe3d2fd7d538ba78c8d947a"
+        },
+        {
+          "bytes": 5151,
+          "path": "altair-6.2.2/doc/user_guide/marks/errorband.rst",
+          "sha256": "4b678191865b4317b170382fa78e9d6b210f2b167bc6739484cfee7b23950716"
+        },
+        {
+          "bytes": 7975,
+          "path": "altair-6.2.2/doc/user_guide/marks/errorbar.rst",
+          "sha256": "4cfaff16714a32551e72de3820da5e63e2db21141ff8054079f22772ffb1c412"
+        },
+        {
+          "bytes": 23954,
+          "path": "altair-6.2.2/doc/user_guide/marks/geoshape.rst",
+          "sha256": "21e4d90a2c844f3d89b1a392334b6ad3098b41212d8a488f47a77bbfa5e5250d"
+        },
+        {
+          "bytes": 5612,
+          "path": "altair-6.2.2/doc/user_guide/marks/image.rst",
+          "sha256": "cf4f0adbf2bd13765d46202a71c465b3ce2f9a1bdf988380067fc1dfdb6c0d90"
+        },
+        {
+          "bytes": 5262,
+          "path": "altair-6.2.2/doc/user_guide/marks/index.rst",
+          "sha256": "d1090b228187fc94e7ba6e9f1bbbdc7e749f49ebcd0349c102556a4bf902bbd3"
+        },
+        {
+          "bytes": 10744,
+          "path": "altair-6.2.2/doc/user_guide/marks/line.rst",
+          "sha256": "db48ea9911b87fabe8136c2fbef0aee66542aaa59f661c2506079fff33640e1f"
+        },
+        {
+          "bytes": 5971,
+          "path": "altair-6.2.2/doc/user_guide/marks/point.rst",
+          "sha256": "1cc69b2e95484b0e8b87ba9e5202f15344e2c2430f3218f3cba683c6d8a65fa6"
+        },
+        {
+          "bytes": 2658,
+          "path": "altair-6.2.2/doc/user_guide/marks/rect.rst",
+          "sha256": "a28d5609674016c89cc6faa0a3ec4b529b0a4374d0d7cc0104a89655ab449299"
+        },
+        {
+          "bytes": 6726,
+          "path": "altair-6.2.2/doc/user_guide/marks/rule.rst",
+          "sha256": "af52aca81b01c2d494bcc5682fc93390b9f5144be4e302355e0f3e268e2cac01"
+        },
+        {
+          "bytes": 711,
+          "path": "altair-6.2.2/doc/user_guide/marks/square.rst",
+          "sha256": "24c4d20323ca31f0614f7226285bac4d691d30ea02fd54434a7ff36c354c1f4a"
+        },
+        {
+          "bytes": 7094,
+          "path": "altair-6.2.2/doc/user_guide/marks/text.rst",
+          "sha256": "d744deb64099648bd645dcda3ce3ca8e45902a37b4eb3b2ae655e832a5caf178"
+        },
+        {
+          "bytes": 1463,
+          "path": "altair-6.2.2/doc/user_guide/marks/tick.rst",
+          "sha256": "5b43e037733cdc9799ed26f5ded6fb88d6688c5f3aa96802221571fe2547a173"
+        },
+        {
+          "bytes": 2186,
+          "path": "altair-6.2.2/doc/user_guide/marks/trail.rst",
+          "sha256": "57eba34ef2470b83f518060faa8d1d22bc557aee0b3aeb9362699c6c39ff15be"
+        },
+        {
+          "bytes": 10594,
+          "path": "altair-6.2.2/doc/user_guide/transform/aggregate.rst",
+          "sha256": "f9f002c199f25eaa981dfa4a50ce5ec9fd6092cc2842ad56405af1c52eacdd79"
+        },
+        {
+          "bytes": 2587,
+          "path": "altair-6.2.2/doc/user_guide/transform/bin.rst",
+          "sha256": "339e59411d6789ed8996a46371fef528d784340af6714af416e49a58c3faa5e2"
+        },
+        {
+          "bytes": 1991,
+          "path": "altair-6.2.2/doc/user_guide/transform/calculate.rst",
+          "sha256": "b50de8aca287c646f5566089f8ac390e32b60a6ac3efbcc389c4c1b1852908f3"
+        },
+        {
+          "bytes": 1494,
+          "path": "altair-6.2.2/doc/user_guide/transform/density.rst",
+          "sha256": "53f686bbfb21248fe7646ba5a93dcbd8141bbc92b89d53725e28952fdfd0d712"
+        },
+        {
+          "bytes": 1549,
+          "path": "altair-6.2.2/doc/user_guide/transform/extent.rst",
+          "sha256": "0c27818f45afd66f07941a931f3818d5f7c19156c61ac3d2f091145115130201"
+        },
+        {
+          "bytes": 6708,
+          "path": "altair-6.2.2/doc/user_guide/transform/filter.rst",
+          "sha256": "098609260cf87b1dafe5c1fc82985d2435933f5c6126d6f745eb131ae97a554f"
+        },
+        {
+          "bytes": 1791,
+          "path": "altair-6.2.2/doc/user_guide/transform/flatten.rst",
+          "sha256": "83abf573e307b3ae3dda86717fa35fbe2cc98bb69f96d2083e4b21ceba79328b"
+        },
+        {
+          "bytes": 1466,
+          "path": "altair-6.2.2/doc/user_guide/transform/fold.rst",
+          "sha256": "aee7c5cd0f3b7b9a8e43fb840223630ba2f6e6501943bca963b942fa4a1cc95c"
+        },
+        {
+          "bytes": 3425,
+          "path": "altair-6.2.2/doc/user_guide/transform/impute.rst",
+          "sha256": "417a623fabd8b813125a0c16cb6fc5d8efad92e9ac9ee432310c7a721d4a145c"
+        },
+        {
+          "bytes": 7092,
+          "path": "altair-6.2.2/doc/user_guide/transform/index.rst",
+          "sha256": "d070857e5c8618e4e6b3069ef006990a33b66d0319b8fc0dd68ed4a2e48f2d2f"
+        },
+        {
+          "bytes": 2253,
+          "path": "altair-6.2.2/doc/user_guide/transform/joinaggregate.rst",
+          "sha256": "a426c758e06140175a6c20232ffb4c5cf81a846614e5bebc672db40b43586058"
+        },
+        {
+          "bytes": 1027,
+          "path": "altair-6.2.2/doc/user_guide/transform/loess.rst",
+          "sha256": "7e4c2d1b93dcf32905df0f30ae0c5f38d185068a44d8fd7173b2d78e051f4aaf"
+        },
+        {
+          "bytes": 4480,
+          "path": "altair-6.2.2/doc/user_guide/transform/lookup.rst",
+          "sha256": "a737732b8f0f2c4bbce34181c4612e62d22a5b6a42fc85144c466366983c4a0f"
+        },
+        {
+          "bytes": 2431,
+          "path": "altair-6.2.2/doc/user_guide/transform/pivot.rst",
+          "sha256": "ffa7b7356bd500a897b067feb79cf7e3c822694a6895c09f58716508b7945c56"
+        },
+        {
+          "bytes": 1006,
+          "path": "altair-6.2.2/doc/user_guide/transform/quantile.rst",
+          "sha256": "4c66c6a453ee4baa965ded4fc5d302438b5fc2dab734252435a2d2e7e069bb99"
+        },
+        {
+          "bytes": 1604,
+          "path": "altair-6.2.2/doc/user_guide/transform/regression.rst",
+          "sha256": "b82e2ac8f29b3184c3f022029391c8feb017db1bb02f0c49667db3367543b59b"
+        },
+        {
+          "bytes": 968,
+          "path": "altair-6.2.2/doc/user_guide/transform/sample.rst",
+          "sha256": "5b5288a7a5dacdc2e67e376e30fc8da1b60d52c446d32f5f7c0eebf6404fadb1"
+        },
+        {
+          "bytes": 1534,
+          "path": "altair-6.2.2/doc/user_guide/transform/stack.rst",
+          "sha256": "a505a567ca0b876ba5d343d54f3cad589dc8243568b21c20259875992b563816"
+        },
+        {
+          "bytes": 3503,
+          "path": "altair-6.2.2/doc/user_guide/transform/timeunit.rst",
+          "sha256": "dbfa35582e5fe9a1a0144f74d70748675617ca6225fe83520ea690de4b114938"
+        },
+        {
+          "bytes": 7263,
+          "path": "altair-6.2.2/doc/user_guide/transform/window.rst",
+          "sha256": "c088a71f04b94b04cee2e3e8a76d0eed27d98247dc3b521c636f1485b65e715a"
+        }
+      ],
+      "license": "BSD-3-Clause",
+      "name": "altair-6.2.2",
+      "repository": "vega/altair",
+      "revision": "a9765713566095349cb1cfbbe85d6ad258c84245",
+      "version": "6.2.2"
+    },
+    {
+      "archive_sha256": "91fd489eb1cd6fc1c6196955304384dbb11551d25f20585892e4a662fb32c89c",
+      "archive_url": "https://github.com/vega/vl-convert/archive/655a7579017b9f52cf67b9631cc5def17cf92fae.tar.gz",
+      "files": [
+        {
+          "bytes": 1453,
+          "path": "vl-convert-1.9.0/LICENSE",
+          "sha256": "9a8e49b841a4062ae698bae5c4167cb0834867e4aa81b0a82f750e870bc913ac"
+        },
+        {
+          "bytes": 8021,
+          "path": "vl-convert-1.9.0/README.md",
+          "sha256": "7e1c23bca97f290095071f1c0674928f61650b08c6b93068112048334bd85066"
+        },
+        {
+          "bytes": 4588,
+          "path": "vl-convert-1.9.0/thirdparty_font.md",
+          "sha256": "71f3dee407b18096c1c05aa8ac438f9eba84bb2eab9f2c17ae297f0700eb9d10"
+        },
+        {
+          "bytes": 884,
+          "path": "vl-convert-1.9.0/thirdparty_javascript.md",
+          "sha256": "a890f0a9483853ba16dc5df60ae72c48ca29ab775daefc9eac040a98fb7ddc68"
+        },
+        {
+          "bytes": 4654,
+          "path": "vl-convert-1.9.0/vl-convert-python/README.md",
+          "sha256": "9f5aabb9f425b9f91af905baadfcc31ea9f58840a91566c2661e37d88469c292"
+        },
+        {
+          "bytes": 21422,
+          "path": "vl-convert-1.9.0/vl-convert-python/vl_convert.pyi",
+          "sha256": "91ba65b3eeebca0da726db298da71e1dd2fa061a975aa010b9d5e67ef82ad5be"
+        }
+      ],
+      "license": "BSD-3-Clause",
+      "name": "vl-convert-1.9.0",
+      "repository": "vega/vl-convert",
+      "revision": "655a7579017b9f52cf67b9631cc5def17cf92fae",
+      "version": "1.9.0"
+    },
+    {
+      "archive_sha256": "db4710b8c113c19d46cfcb77678b29aa3b0804dcd0d016b672143facd971f416",
+      "archive_url": "https://github.com/pydantic/pydantic/archive/cf67d4b3193c3fe43ede18612ed62785eee11382.tar.gz",
+      "files": [
+        {
+          "bytes": 1129,
+          "path": "pydantic-2.13.4/LICENSE",
+          "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+        },
+        {
+          "bytes": 21,
+          "path": "pydantic-2.13.4/docs/api/aliases.md",
+          "sha256": "c02588828a424785b1463529a832e4dd25dc487ea8097e015a020e4ce49a10f5"
+        },
+        {
+          "bytes": 32,
+          "path": "pydantic-2.13.4/docs/api/annotated_handlers.md",
+          "sha256": "898a961c16e9b3fff7352deb33806287bbad8764f319a24faf8d47257ce8a8f8"
+        },
+        {
+          "bytes": 930,
+          "path": "pydantic-2.13.4/docs/api/base_model.md",
+          "sha256": "c658c1b542279d3704e399264b031602c040a71853ef18daa11290920edc26e2"
+        },
+        {
+          "bytes": 239,
+          "path": "pydantic-2.13.4/docs/api/config.md",
+          "sha256": "70c1a8e34789ae9a983e9958d760fd85f5e37a8a0bf5536cef598ac87451ed64"
+        },
+        {
+          "bytes": 25,
+          "path": "pydantic-2.13.4/docs/api/dataclasses.md",
+          "sha256": "f5b36aca073eb993fad651f3376c75f28530a358448d896ede4bf3c9094e0483"
+        },
+        {
+          "bytes": 20,
+          "path": "pydantic-2.13.4/docs/api/errors.md",
+          "sha256": "96f41e4a4e4d873184508784e7a3bb6e165b22b5edfc2d2bcc3152e325ce6051"
+        },
+        {
+          "bytes": 265,
+          "path": "pydantic-2.13.4/docs/api/experimental.md",
+          "sha256": "313a537df95549f5fc7843689e4f782332ad0107824adc687895559f8a2b57eb"
+        },
+        {
+          "bytes": 430,
+          "path": "pydantic-2.13.4/docs/api/fields.md",
+          "sha256": "f8bcf375e89f8e624756f6532cc0f9db0fc876ecb1c4622d6bdefafe74e59538"
+        },
+        {
+          "bytes": 36,
+          "path": "pydantic-2.13.4/docs/api/functional_serializers.md",
+          "sha256": "a019080a60ab5acd13b7f3150eab32501dc9f4aad7c775bb8d15e1fbdf22785c"
+        },
+        {
+          "bytes": 35,
+          "path": "pydantic-2.13.4/docs/api/functional_validators.md",
+          "sha256": "70c45b47ab1bdd5c4d52dc8ebc0fe2dac9a09958035be879d0080a4fb4533e9e"
+        },
+        {
+          "bytes": 25,
+          "path": "pydantic-2.13.4/docs/api/json_schema.md",
+          "sha256": "ba40934a820aadd9e842af74efe558f53af880f782f8b3fa53d8d50789b6889d"
+        },
+        {
+          "bytes": 22,
+          "path": "pydantic-2.13.4/docs/api/networks.md",
+          "sha256": "d3ae7a040e35abb47fd564a391ad01c1fd7338718fee3c77c400e97408c77db0"
+        },
+        {
+          "bytes": 706,
+          "path": "pydantic-2.13.4/docs/api/pydantic_core.md",
+          "sha256": "4caacfed84e3bd97551411ba8c9c1c91b5c6eaabfa4b408c5d46d43cce8e9920"
+        },
+        {
+          "bytes": 30,
+          "path": "pydantic-2.13.4/docs/api/pydantic_core_schema.md",
+          "sha256": "cc30c5592403795d3c7c1eac674a619f1a9e6731b3daa3eb45725d35d8ac78be"
+        },
+        {
+          "bytes": 31,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_color.md",
+          "sha256": "c3738cd0e235d50932ad81a1175d1f214f8e22d8dd0cc32a672d683e4ce35330"
+        },
+        {
+          "bytes": 36,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_coordinate.md",
+          "sha256": "b2061b270fb11eb6d8c5510a24b70b6c4a345b8618b909ef066b2ca3921dd7cb"
+        },
+        {
+          "bytes": 33,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_country.md",
+          "sha256": "1016760aab3a61a72ee0ad7247038c0cccbe8ceca05a34e2c83babbdb90f00d0"
+        },
+        {
+          "bytes": 39,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_currency_code.md",
+          "sha256": "ad71e89514df2d87e53f770983958110aa8ad758bb173719a88aed2dd8579dde"
+        },
+        {
+          "bytes": 30,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_isbn.md",
+          "sha256": "0758c035222c7d9e9ba6935999b2ddd057e11092cc40e27652f3eeb5a553f8f3"
+        },
+        {
+          "bytes": 39,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_language_code.md",
+          "sha256": "8bb2d7acffcd4fc33eaad0e83b447efc09eba367a6f661d51b64eea594bdf820"
+        },
+        {
+          "bytes": 37,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_mac_address.md",
+          "sha256": "d6edab693dc592ff7a18a83ce09798fc116ab3a74cb8e3221f3801326e0df744"
+        },
+        {
+          "bytes": 33,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_payment.md",
+          "sha256": "e347eec1be8db55970d9383629a8b9b7f697e19317d8ddfd09409b1ac301f69f"
+        },
+        {
+          "bytes": 37,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_pendulum_dt.md",
+          "sha256": "a53b10c87ed85de9aab22f6b94682a7940d8e26c991844014fb1df626bdfa074"
+        },
+        {
+          "bytes": 39,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_phone_numbers.md",
+          "sha256": "1251d7637af076303584bafcb6928181b6961a842644fc355774e75110a4c332"
+        },
+        {
+          "bytes": 40,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_routing_numbers.md",
+          "sha256": "16e8dd734035970a177bdb6e1771c00eb2f5a6d4cd5e265584bc968d8148ad68"
+        },
+        {
+          "bytes": 37,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_script_code.md",
+          "sha256": "13c2e0068536b0478c81dd004c0e7f82e1366f196fd7101c5a221dd01cf28c47"
+        },
+        {
+          "bytes": 42,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_semantic_version.md",
+          "sha256": "a8c8fc1d97d5129b9b52d0359cfb5b15da6fc381323311565f690862702a839c"
+        },
+        {
+          "bytes": 39,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_timezone_name.md",
+          "sha256": "2db1112fb2d3e3e759bd2b277c5650dc652f7ef76a7dc0785f50d319a746ce3b"
+        },
+        {
+          "bytes": 30,
+          "path": "pydantic-2.13.4/docs/api/pydantic_extra_types_ulid.md",
+          "sha256": "bc9cd5274106a9f43e65a41c27bbd32312a78c3e6c685e5acee3e05174b62824"
+        },
+        {
+          "bytes": 22,
+          "path": "pydantic-2.13.4/docs/api/pydantic_settings.md",
+          "sha256": "fd6cc54aadf1ccf8101760130e14627a8b5e20f8a06dd970e967ba5719630cd4"
+        },
+        {
+          "bytes": 24,
+          "path": "pydantic-2.13.4/docs/api/root_model.md",
+          "sha256": "67186da1096bf00908a4499768af806b7110ac0173090f1ef94c020ed6b05e02"
+        },
+        {
+          "bytes": 61856,
+          "path": "pydantic-2.13.4/docs/api/standard_library_types.md",
+          "sha256": "7a271a47867d50a1e75bd85ca7aca93dea95947dc8ffcc15fd30bce045907d21"
+        },
+        {
+          "bytes": 38,
+          "path": "pydantic-2.13.4/docs/api/type_adapter.md",
+          "sha256": "c4165225df9d09c9129e860cc351bebf5066bd402da97daf6f86dc837a69f402"
+        },
+        {
+          "bytes": 101,
+          "path": "pydantic-2.13.4/docs/api/types.md",
+          "sha256": "632428da80a75cfffa56af7a0f29f437063a5d070b93b819af59933ca22532a7"
+        },
+        {
+          "bytes": 37,
+          "path": "pydantic-2.13.4/docs/api/validate_call.md",
+          "sha256": "2b0f6db845f8cbf6fb028afd4085a26395e978063932a438ef26fdcc2ec7b8e1"
+        },
+        {
+          "bytes": 150,
+          "path": "pydantic-2.13.4/docs/api/version.md",
+          "sha256": "79ee358670c3a224f51346269f8b991735f9ee9e7f9efe67331420ebc324fcaa"
+        },
+        {
+          "bytes": 13902,
+          "path": "pydantic-2.13.4/docs/concepts/alias.md",
+          "sha256": "e1c0e47174ec2aecd079b787ecfa60aa1501d5f36a02efeaca47b6eb00382e48"
+        },
+        {
+          "bytes": 6282,
+          "path": "pydantic-2.13.4/docs/concepts/config.md",
+          "sha256": "81a44717f6ce0ce82c3d20a910d4a383f09fb1c0ba17a43ef3d9b11cf0cb9377"
+        },
+        {
+          "bytes": 482,
+          "path": "pydantic-2.13.4/docs/concepts/conversion_table.md",
+          "sha256": "d599331ebabb99675c70492545bfc56d622ca7ea24e4d3fa9ddee92f51f47aa2"
+        },
+        {
+          "bytes": 12820,
+          "path": "pydantic-2.13.4/docs/concepts/dataclasses.md",
+          "sha256": "20ae5cd70e426784f9f2b47b4563970d55bbda492700064db81471990d616d03"
+        },
+        {
+          "bytes": 20671,
+          "path": "pydantic-2.13.4/docs/concepts/experimental.md",
+          "sha256": "469021af7cf414e53bd0b859663ba7a54ee8ea6cdb766a229604e56a508d17e8"
+        },
+        {
+          "bytes": 28037,
+          "path": "pydantic-2.13.4/docs/concepts/fields.md",
+          "sha256": "02fe0fa96bf32b40fe143b52b52a45517ed7154b78007ed50030f832a92fbe37"
+        },
+        {
+          "bytes": 6655,
+          "path": "pydantic-2.13.4/docs/concepts/forward_annotations.md",
+          "sha256": "437681e3dd50292346f2c857d649dbbce216199ee26ea5c037be8ede156d1e0e"
+        },
+        {
+          "bytes": 8744,
+          "path": "pydantic-2.13.4/docs/concepts/json.md",
+          "sha256": "849f76c6ca51e9a7bf90df264f51ec14c26dee4605d61a55cdcba6da6576720e"
+        },
+        {
+          "bytes": 36429,
+          "path": "pydantic-2.13.4/docs/concepts/json_schema.md",
+          "sha256": "3bbdc228a235239dd15fcfef17b78252372436c7458fc37d100e1ad46ade577d"
+        },
+        {
+          "bytes": 59238,
+          "path": "pydantic-2.13.4/docs/concepts/models.md",
+          "sha256": "a5e71a28dee897ecec0d2bc2f80ff388622d59d3b8eb5497164947dbbced9499"
+        },
+        {
+          "bytes": 6107,
+          "path": "pydantic-2.13.4/docs/concepts/performance.md",
+          "sha256": "299ea374227df6de108afb8e1de6d449ec178f73474b78fa0c2b7cb5a1654ca0"
+        },
+        {
+          "bytes": 349,
+          "path": "pydantic-2.13.4/docs/concepts/pydantic_settings.md",
+          "sha256": "859a1b3e4969a925792c1a51b44d2b218ba977dedf9dda977df3f6e8d5305b62"
+        },
+        {
+          "bytes": 32321,
+          "path": "pydantic-2.13.4/docs/concepts/serialization.md",
+          "sha256": "08f1bfee7ec43b38e44d9e0d1dc05fe750bc48108631070c37eee51026131d2b"
+        },
+        {
+          "bytes": 5907,
+          "path": "pydantic-2.13.4/docs/concepts/strict_mode.md",
+          "sha256": "92202c1e2ef9e68a5a4f8a3c2f64059dad3a9900643e8d400015ac9772c4ffc7"
+        },
+        {
+          "bytes": 5123,
+          "path": "pydantic-2.13.4/docs/concepts/type_adapter.md",
+          "sha256": "11efcdc1afe16289ffe96cfc00b481bde3a105dfb90b3cb4235b59b5fbcad2e9"
+        },
+        {
+          "bytes": 30791,
+          "path": "pydantic-2.13.4/docs/concepts/types.md",
+          "sha256": "85256efec75e988b848158eaa4725d87fdef1765ff453c089eaec5edc874721f"
+        },
+        {
+          "bytes": 22745,
+          "path": "pydantic-2.13.4/docs/concepts/unions.md",
+          "sha256": "1f90d2d1e8052ad2effb2814d4fed14bdb31dc907817883154d805024f89b968"
+        },
+        {
+          "bytes": 11321,
+          "path": "pydantic-2.13.4/docs/concepts/validation_decorator.md",
+          "sha256": "31b25100e65f4beee0cee22219721eec16d0429d952376bd5e99d5dde59ec19a"
+        },
+        {
+          "bytes": 30236,
+          "path": "pydantic-2.13.4/docs/concepts/validators.md",
+          "sha256": "a1d7fd9fa9c0e690961034508f55b93fc272504b368fab4482a545b65f35096b"
+        },
+        {
+          "bytes": 10195,
+          "path": "pydantic-2.13.4/docs/errors/errors.md",
+          "sha256": "d7b0290f8641587398d7c7e2ee7e037b1eba1f71ea6f6bd8dadf6a0735b50c5d"
+        },
+        {
+          "bytes": 35430,
+          "path": "pydantic-2.13.4/docs/errors/usage_errors.md",
+          "sha256": "3f2f82d6085410bbf4f5e25ad364fa948aebb38b8ffb3e38f746b9145edcb593"
+        },
+        {
+          "bytes": 45326,
+          "path": "pydantic-2.13.4/docs/errors/validation_errors.md",
+          "sha256": "0ff6a285737ad6118bb45b6385ac3784128e2acf52026fa82ee081cb20d2fd5f"
+        },
+        {
+          "bytes": 9349,
+          "path": "pydantic-2.13.4/docs/internals/architecture.md",
+          "sha256": "b4a922442ccecbca5999c86ae0cf8896f9f26f110d3b0d94887393e33223354e"
+        },
+        {
+          "bytes": 10817,
+          "path": "pydantic-2.13.4/docs/internals/resolving_annotations.md",
+          "sha256": "bd3903ce6af1739789cf231d5f96184523abc564ef1a5e9f5dc80a7df72494eb"
+        },
+        {
+          "bytes": 50035,
+          "path": "pydantic-2.13.4/docs/migration.md",
+          "sha256": "3a33c005259e6ede170df1904a168a4a64e8d8efc5b7fed360b65e5c000c05b7"
+        }
+      ],
+      "license": "MIT",
+      "name": "pydantic-2.13.4",
+      "repository": "pydantic/pydantic",
+      "revision": "cf67d4b3193c3fe43ede18612ed62785eee11382",
+      "version": "2.13.4"
+    },
+    {
+      "archive_sha256": "05b64dddd8928663fd72c676eddc6d3777a18e8d2fe3e0bfcd3af98988f3ead4",
+      "archive_url": "https://github.com/deneb-viz/deneb/archive/0615a47dc20b7e03d6d5143b1d045aaa47e0b508.tar.gz",
+      "files": [
+        {
+          "bytes": 8989,
+          "path": "deneb-1.9.1/CHANGELOG.md",
+          "sha256": "d1ad339eb147203d5e050956267d7e425b60276e485b8defcdb52b2039275d26"
+        },
+        {
+          "bytes": 1077,
+          "path": "deneb-1.9.1/LICENSE",
+          "sha256": "e12574bf30e2b68c2a47b6d42fba518619e68b00d067ac084d95b6f0d93043cc"
+        },
+        {
+          "bytes": 143,
+          "path": "deneb-1.9.1/README.md",
+          "sha256": "6c3bdb2f28a5970dd316e028b996c171718aaf7e158ba96c24f4d83149251dd1"
+        },
+        {
+          "bytes": 11233,
+          "path": "deneb-1.9.1/capabilities.json",
+          "sha256": "7b84ff66e00c133e61c525901227db8a5ca2a29a4053bf4dc0ee85e0767cdbec"
+        },
+        {
+          "bytes": 1533,
+          "path": "deneb-1.9.1/packages/vega-runtime/src/lib/embed/index.ts",
+          "sha256": "a4331ef8697957cb3990878693422040ce61335fc144ad72694912b505b471df"
+        },
+        {
+          "bytes": 746,
+          "path": "deneb-1.9.1/pbiviz.json",
+          "sha256": "e01cf03a490de5db6a2dfab52b13c3b31fa294170d235ddcd0d41dd7d11cc068"
+        }
+      ],
+      "license": "MIT",
+      "name": "deneb-1.9.1",
+      "repository": "deneb-viz/deneb",
+      "revision": "0615a47dc20b7e03d6d5143b1d045aaa47e0b508",
+      "version": "1.9.1"
+    }
+  ]
+}

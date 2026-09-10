@@ -1,0 +1,37 @@
+{
+    "name": "pre_join",
+    "version": "1.0.0",
+    "description": "Pre-join validation — checks key overlap, cardinality, null rates, format compatibility, and predicts output size before joining two DataFrames",
+    "category": "data",
+    "entry_point": "pre_join_impl:pre_join_context",
+    "renderer": null,
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "left_df",
+            "right_df"
+        ],
+        "optional": [
+            "keys",
+            "left_keys",
+            "right_keys",
+            "left_subject",
+            "right_subject",
+            "sample_limit"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "pre_join"
+    },
+    "dependencies": [],
+    "tags": [
+        "data",
+        "joins",
+        "validation",
+        "pre-flight"
+    ]
+}

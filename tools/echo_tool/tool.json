@@ -1,0 +1,30 @@
+{
+    "name": "echo",
+    "version": "1.0.0",
+    "description": "Echo tool \u2014 returns input arguments as a Anchor contract (proof-of-concept)",
+    "category": "diagnostics",
+    "entry_point": "echo_impl:echo_context",
+    "renderer": null,
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [
+            "message"
+        ],
+        "optional": [
+            "repeat"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "echo"
+    },
+    "dependencies": [],
+    "tags": [
+        "diagnostics",
+        "testing",
+        "proof-of-concept"
+    ]
+}

@@ -1,0 +1,10 @@
+{
+  "include": ["src", "tools", "tests", "scripts"],
+  "exclude": [
+    "tests/schema_migrate/test_schema_migrate_errors.py",
+    "tests/suggest_rules/test_suggest_rules_errors.py",
+    "tests/watermark/test_watermark_errors.py"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

@@ -1,0 +1,39 @@
+{
+    "name": "suggest_rules",
+    "version": "1.0.0",
+    "description": "Auto-generate validation rules from profile output. Infers not_null, unique, accepted_values, range, and expression rules from data shape.",
+    "category": "data",
+    "entry_point": "suggest_rules_impl:suggest_rules_context",
+    "renderer": "suggest_rules_impl:render_suggest_rules_report",
+    "requires_planning": false,
+    "accepts_output_format": true,
+    "allowed_effects": ["read"],
+    "pre_task_access": "task_required",
+    "inputs": {
+        "required": [],
+        "optional": [
+            "profile_ctx",
+            "df",
+            "subject",
+            "strictness",
+            "include_types",
+            "exclude_columns",
+            "output_format"
+        ]
+    },
+    "outputs": {
+        "contract": "StandardContract",
+        "kind": "suggest_rules"
+    },
+    "dependencies": [
+        "dataset_profile_context",
+        "validation_summary_context"
+    ],
+    "tags": [
+        "data",
+        "validation",
+        "rules",
+        "quality",
+        "profiling"
+    ]
+}
