@@ -117,7 +117,8 @@ The importer fails closed on destination collisions, incompatible/newer schemas,
 ambiguous managed-project targets, or open tasks. It copies project artifacts, rewrites only
 exact managed-project self-targets, and leaves the source unchanged. Legacy database history
 is preserved in a verified backup but is not activated: its branded task/memory payloads are
-not an Anchor runtime contract. The first Anchor launch creates a fresh live database and task.
+not an Anchor runtime contract. The first Anchor launch creates fresh runtime ownership state;
+new tasks are established through the normal lifecycle.
 
 ## Routing and concurrent runtimes
 
