@@ -56,12 +56,12 @@ Equivalent client configuration:
 
 The project must already be registered under `ANCHOR_HOME`. See [runtime rollout](docs/guides/runtime-rollout.md) and [MCP integration](docs/guides/amp-project-integration.md) for setup and operational details.
 
-## Databricks wheel quickstart
+## Databricks quickstart
 
-Build a wheel on a trusted workstation or in CI, then upload `dist/odibi_anchor-0.1.0-py3-none-any.whl` to a Unity Catalog volume or Workspace Files. In a Databricks notebook:
+Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install /Volumes/<catalog>/<schema>/<volume>/odibi_anchor-0.1.0-py3-none-any.whl
+%pip install "odibi-anchor==0.1.0"
 dbutils.library.restartPython()
 ```
 
@@ -90,6 +90,25 @@ Run `install_guidance(project_root)` once when that repository should receive th
 
 `ANCHOR_HOME` must be durable, writable, and outside the installed package/source checkout. The managed project must already register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md) for host limitations.
 
+## Import legacy v0.11.0 state
+
+Legacy Context Workbench state is never selected or mutated implicitly. Import one exact
+v0.11.0 home into a new, non-overlapping Anchor home with the explicit two-step API:
+
+```python
+from odibi_anchor import apply_legacy_import, plan_legacy_import
+
+plan = plan_legacy_import(
+    "/absolute/path/to/legacy-home",
+    anchor_home="/absolute/path/to/new-anchor-home",
+)
+# Inspect the source, destination, schema set, and plan_id before approving the write.
+result = apply_legacy_import(plan)
+```
+
+The importer fails closed on destination collisions or incompatible/newer schemas, creates
+a verified backup before conversion, and leaves the source unchanged.
+
 ## Routing and concurrent runtimes
 
 Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. If the root matches exactly one managed project, `launch()` can derive its ID; ambiguous roots fail closed and require an explicit ID. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
@@ -102,4 +121,4 @@ Odibi Anchor records operational state under `ANCHOR_HOME`; keep it outside sour
 
 For bugs and feature requests, use [GitHub Issues](https://github.com/henryodibi11/odibi-anchor/issues). Security-sensitive reports should not include credentials, private repository content, or runtime state in a public issue.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and [LICENSE](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md), and [LICENSE](LICENSE).

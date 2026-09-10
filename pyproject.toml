@@ -109,6 +109,7 @@ include = [
     "/NOTICE",
     "/OUTPUT_SCHEMA.md",
     "/README.md",
+    "/SECURITY.md",
     "/agent_bootstrap.py",
     "/app.yaml",
     "/docs/**",
