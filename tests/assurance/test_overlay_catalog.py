@@ -31,9 +31,9 @@ def test_catalogs_have_deliberate_versions_closed_counts_and_digests():
     assert len(OVERLAYS) == 8
     assert len(OVERLAY_CONTROLS) == 24
     assert len(CONTROL_CATALOG) == 35
-    assert core_catalog_digest() == "c6a160d8a514cf185ccf96f8a4a3da8afa9d449c24f2ce42cdff0afc6c553f8a"
-    assert overlay_catalog_digest() == "7bbdea003dec8ad8a36a56340d490194ca2ffb43294908a3eb6bb93e224ffb83"
-    assert catalog_digest() == "db82b8c8064295f44bd5293ba44320b22935fdaa83c4b25cc745d7d766356566"
+    assert core_catalog_digest() == "a64fad1c5f7fd1834daf1b087667191f4ec0a15e2e7066ce66016fba6d2c1e0e"
+    assert overlay_catalog_digest() == "0277bea95ab65a69255794fe9e4d651a3fcf95548b6b980aa63f93de7ccc473b"
+    assert catalog_digest() == "f58e6ca37d29134e0ace3f94b96315746aa1fd324a1cd120e5f5da3e0cba5d8c"
     assert len({item.control_id for item in CONTROL_CATALOG}) == 35
 
 

@@ -80,6 +80,20 @@ def test_parser_help_documents_discovery_and_state(capsys):
     assert "do not share session state" in captured.err
 
 
+def test_doctor_and_guidance_commands_do_not_boot_dispatcher(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "_boot", lambda _root: pytest.fail("dispatcher booted"))
+    monkeypatch.setattr("odibi_anchor.startup.doctor", lambda: {"kind": "startup_doctor"})
+    assert cli.main(["doctor"]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["kind"] == "startup_doctor"
+
+    monkeypatch.setattr(
+        "odibi_anchor.startup.install_guidance",
+        lambda target: {"kind": "guidance_install", "target_root": target},
+    )
+    assert cli.main(["install-guidance", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["kind"] == "guidance_install"
+
+
 def test_invalid_input_is_rejected_before_bootstrap(monkeypatch, capsys):
     boots = []
     monkeypatch.setattr(cli, "_boot", lambda root: boots.append(root))

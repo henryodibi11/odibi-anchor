@@ -37,7 +37,6 @@ Add `.amp/settings.json`:
       "command": "${AMP_WORKING_DIRECTORY}/.venv/bin/python",
       "args": ["-m", "odibi_anchor.mcp_server"],
       "env": {
-        "ANCHOR_MCP_GATEWAY_ONLY": "1",
         "ANCHOR_PROJECT_ID": "my-managed-project",
         "ANCHOR_PROJECT_ROOT": "${AMP_WORKING_DIRECTORY}",
         "ANCHOR_HOME": "/absolute/writable/state/odibi-anchor"
@@ -52,8 +51,8 @@ Add `.amp/settings.json`:
 its registered target matches `ANCHOR_PROJECT_ROOT`. If the ID is omitted, startup succeeds only
 when the target matches exactly one registry entry. It never creates or retargets a project.
 `ANCHOR_HOME` must be an absolute, writable location outside that checkout (and outside the
-installed package); do not commit its state. Gateway-only mode intentionally prevents Amp
-from bypassing `anchor_execute` and `anchor_help` with a broad generated tool surface.
+installed package); do not commit its state. The public MCP server exposes only
+`anchor_execute` and `anchor_help`, so writes cannot bypass the governed gateway.
 
 The server freezes this route for its process lifetime. Changing cwd, environment variables,
 or `workspace/.active_project` does not redirect it; deleting or retargeting its registry entry

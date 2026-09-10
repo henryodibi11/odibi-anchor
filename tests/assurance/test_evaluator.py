@@ -139,7 +139,7 @@ def test_catalog_is_closed_ordered_advisory_and_digestible():
     )
     assert {control.disposition for control in CORE_CONTROLS} == {"advisory"}
     assert len(CONTROL_CATALOG) == 35
-    assert catalog_digest() == "db82b8c8064295f44bd5293ba44320b22935fdaa83c4b25cc745d7d766356566"
+    assert catalog_digest() == "f58e6ca37d29134e0ace3f94b96315746aa1fd324a1cd120e5f5da3e0cba5d8c"
     with pytest.raises(ValueError, match="accepted evidence"):
         ControlDefinition(
             "AK-001", "functional-suitability", "all-plans", ["mutable"],  # type: ignore[arg-type]

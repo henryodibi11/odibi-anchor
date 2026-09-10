@@ -79,6 +79,9 @@ def _parser() -> argparse.ArgumentParser:
     batch.add_argument("file", nargs="?", default="-", help="UTF-8 input file, or - for stdin")
     commands.add_parser("shell", help="boot once; read one request JSON object per input line")
     commands.add_parser("help", help="discover core actions")
+    commands.add_parser("doctor", help="inspect startup and routing without mutation")
+    guidance = commands.add_parser("install-guidance", help="copy packaged agent guidance into a repository")
+    guidance.add_argument("target", help="existing repository root; existing guidance is never overwritten")
     verify = commands.add_parser("verify-delivery", help="verify local delivery evidence under declared policy")
     verify.add_argument("--request", required=True, help="UTF-8 JSON request file, or - for stdin")
     return parser
@@ -210,6 +213,20 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             return _emit({"ok": False, "error": {"type": type(exc).__name__,
                                                    "message": "delivery verification failed"}}, EXIT_ACTION)
+    if ns.command == "doctor":
+        try:
+            from odibi_anchor.startup import doctor
+
+            return _emit({"ok": True, "result": doctor()})
+        except Exception as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_BOOTSTRAP)
+    if ns.command == "install-guidance":
+        try:
+            from odibi_anchor.startup import install_guidance
+
+            return _emit({"ok": True, "result": install_guidance(ns.target)})
+        except (OSError, RuntimeError, ValueError) as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
     try:
         prepared = _prepare(ns)
     except (OSError, UnicodeError, RequestError) as exc:

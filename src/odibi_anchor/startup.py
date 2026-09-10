@@ -1,9 +1,12 @@
 """Explicit, installed-distribution startup and read-only diagnostics."""
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -24,7 +27,7 @@ def _absolute_directory(value: str | os.PathLike[str], name: str) -> Path:
 def launch(
     *,
     anchor_home: str | os.PathLike[str],
-    project_id: str,
+    project_id: str | None = None,
     project_root: str | os.PathLike[str],
     output_format: str = "dict",
 ) -> Callable[..., Any]:
@@ -35,31 +38,91 @@ def launch(
     """
     home = _absolute_directory(anchor_home, "ANCHOR_HOME")
     target = _absolute_directory(project_root, "ANCHOR_PROJECT_ROOT")
-    if not isinstance(project_id, str) or not project_id.strip() or project_id != project_id.strip():
+    environment_project = os.environ.get("ANCHOR_PROJECT_ID")
+    if project_id is not None and (
+        not isinstance(project_id, str) or not project_id.strip() or project_id != project_id.strip()
+    ):
         raise ValueError("ANCHOR_PROJECT_ID must be a non-empty project ID")
+    if project_id is not None and environment_project not in (None, project_id):
+        raise RuntimeError("ANCHOR_PROJECT_ID conflicts with the requested startup route")
+    requested_project = project_id or environment_project
+
+    from odibi_anchor._dispatcher._project import resolve_route_binding
+
+    route = resolve_route_binding(
+        home, project=requested_project, target_hint=target,
+        runtime_instance_id=f"startup:{os.getpid()}",
+    )
+    if route is None:
+        raise RuntimeError("startup route resolution returned no binding")
 
     bindings = {
         "ANCHOR_HOME": str(home),
-        "ANCHOR_PROJECT_ID": project_id,
-        "ANCHOR_PROJECT_ROOT": str(target),
+        "ANCHOR_PROJECT_ID": route.project_id,
+        "ANCHOR_PROJECT_ROOT": route.target_root,
     }
+    previous = {name: os.environ.get(name) for name in bindings}
     for name, value in bindings.items():
         current = os.environ.get(name)
         if current is not None and current != value:
             raise RuntimeError(f"{name} conflicts with the requested startup route")
     os.environ.update(bindings)
 
-    from odibi_anchor._dispatcher._project import resolve_route_binding
     from odibi_anchor.bootstrap import init
 
-    route = resolve_route_binding(
-        home, project=project_id, target_hint=target,
-        runtime_instance_id=f"startup:{os.getpid()}",
-    )
-    anchor, _root, _manifest = init(route_binding=route, output_format=output_format)
+    try:
+        anchor, _root, _manifest = init(route_binding=route, output_format=output_format)
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     if not callable(anchor):
         raise RuntimeError("bootstrap did not return a callable Anchor dispatcher")
     return anchor
+
+
+def register_project(
+    *,
+    anchor_home: str | os.PathLike[str],
+    project_id: str,
+    project_root: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Create one explicit managed-project route before first launch."""
+    text = os.fspath(anchor_home)
+    home = Path(text)
+    if not text or "\n" in text or "\r" in text or text.startswith("~") or not home.is_absolute():
+        raise ValueError("ANCHOR_HOME must be an explicit absolute, single-line path")
+    home = home.resolve()
+    if home.exists() and not home.is_dir():
+        raise ValueError("ANCHOR_HOME must be a directory")
+    target = _absolute_directory(project_root, "ANCHOR_PROJECT_ROOT")
+    from odibi_anchor._dispatcher._project import _normalize_project_id, project_action
+
+    if not isinstance(project_id, str) or _normalize_project_id(project_id) != project_id:
+        raise ValueError("project_id must already be a normalized non-empty project ID")
+    home.mkdir(parents=True, exist_ok=True)
+    result = project_action(
+        home, "create", name=project_id, target=target, output_format="dict"
+    )
+    assert isinstance(result, dict)
+    return {
+        "kind": "startup_project_registration",
+        "status": "created",
+        "project_id": result["project_id"],
+        "anchor_home": str(home),
+        "artifact_root": result["artifact_root"],
+        "target_root": result["target_root"],
+        "next_operation": {
+            "operation": "launch",
+            "arguments": {
+                "anchor_home": str(home),
+                "project_id": result["project_id"],
+                "project_root": result["target_root"],
+            },
+        },
+    }
 
 
 def _open_tasks(database: Path, project_id: str | None, target: Path | None) -> dict[str, Any]:
@@ -129,6 +192,31 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         "ANCHOR_PROJECT_ID": raw_project,
         "ANCHOR_PROJECT_ROOT": raw_target,
     }
+    next_operation = (
+        {
+            "operation": "launch",
+            "arguments": {
+                "anchor_home": str(paths.anchor_home),
+                "project_id": route.project_id,
+                "project_root": route.target_root,
+            },
+        }
+        if route is not None
+        else {
+            "operation": (
+                "register_project"
+                if raw_project and target and not (
+                    paths.anchor_home / "workspace" / "projects" / raw_project / "PROJECT.md"
+                ).is_file()
+                else "resolve_route_inputs"
+            ),
+            "arguments": {
+                "anchor_home": str(paths.anchor_home),
+                **({"project_id": raw_project} if raw_project else {}),
+                **({"project_root": str(target)} if target else {}),
+            },
+        }
+    )
     return {
         "kind": "startup_doctor",
         "read_only": True,
@@ -143,6 +231,7 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         "routing": {"status": "exact" if route else "ambiguous_or_invalid",
                     "diagnostics": route_binding_diagnostics(route) if route else None,
                     "reason": route_error},
+        "next_operation": next_operation,
         "tasks": _open_tasks(database, raw_project, target),
         "concurrency": {
             "status": "unqualified",
@@ -152,4 +241,59 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     }
 
 
-__all__ = ["doctor", "launch"]
+def install_guidance(target_root: str | os.PathLike[str]) -> dict[str, Any]:
+    """Copy the packaged agent contract into one explicit repository.
+
+    Existing guidance is never overwritten. Updating an installed contract requires
+    an explicit human-reviewed replacement rather than a silent package-side mutation.
+    """
+    target = _absolute_directory(target_root, "target_root")
+    from odibi_anchor._runtime_paths import resolve_resource_root
+
+    resources = resolve_resource_root()
+    sources = {
+        ".assistant": resources / ".assistant",
+        ".assistant_instructions.md": resources / ".assistant_instructions.md",
+    }
+    missing = [name for name, path in sources.items() if not path.exists()]
+    if missing:
+        raise RuntimeError("installed distribution is missing guidance resources: " + ", ".join(missing))
+    collisions = [name for name in sources if (target / name).exists()]
+    if collisions:
+        raise RuntimeError("guidance destination collision: " + ", ".join(collisions))
+
+    digest = hashlib.sha256()
+    file_count = 0
+    for _name, source in sources.items():
+        candidates = source.rglob("*") if source.is_dir() else (source,)
+        for candidate in sorted(path for path in candidates if path.is_file()):
+            relative = candidate.relative_to(resources).as_posix()
+            digest.update(relative.encode() + b"\0" + candidate.read_bytes() + b"\0")
+            file_count += 1
+
+    staging = Path(tempfile.mkdtemp(prefix=".anchor-guidance-", dir=target))
+    installed: list[Path] = []
+    try:
+        shutil.copytree(sources[".assistant"], staging / ".assistant")
+        shutil.copy2(sources[".assistant_instructions.md"], staging / ".assistant_instructions.md")
+        for name in sources:
+            destination = target / name
+            os.replace(staging / name, destination)
+            installed.append(destination)
+    except Exception:
+        for path in reversed(installed):
+            shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "kind": "guidance_install",
+        "status": "installed",
+        "target_root": str(target),
+        "paths": [str(target / name) for name in sources],
+        "file_count": file_count,
+        "content_sha256": digest.hexdigest(),
+    }
+
+
+__all__ = ["doctor", "install_guidance", "launch", "register_project"]

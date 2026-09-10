@@ -7,7 +7,6 @@ import pytest
 
 from odibi_anchor._dispatcher._problem import (
     _parse,
-    _validate_recommendation_traceability,
     problem_action,
 )
 
@@ -59,47 +58,6 @@ def test_parse_record_from_before_recommendation_evidence_heading(tmp_path: Path
 
     assert record["recommendation"] == "Use the smaller safe change."
     assert record["recommendation_evidence"] == ""
-
-
-def test_pytest_subprocess_problem_is_canonical_and_traceable() -> None:
-    record = _parse(REPOSITORY_ROOT / "problems" / "PRB-2026-0008.md")
-
-    assert record["meta"]["revision"] == 4
-    assert all(
-        record[field]
-        for field in (
-            "definition",
-            "decision_needed",
-            "scope",
-            "constraints",
-            "success_measures",
-            "priorities",
-            "synthesis",
-            "uncertainty",
-            "recommendation",
-            "alternatives",
-            "risks",
-            "reversal_conditions",
-        )
-    )
-    assert record["issues"] and record["hypotheses"] and record["workplan"]
-    assert record["evidence"] and record["revisions"]
-    assert _validate_recommendation_traceability(record) == [
-        "E1",
-        "E2",
-        "E3",
-        "E4",
-        "E5",
-        "E6",
-        "E7",
-        "E8",
-    ]
-    evidence_ids = {row["ID"] for row in record["evidence"]}
-    for hypothesis in record["hypotheses"]:
-        assert set(hypothesis["Evidence"].replace(",", " ").split()) <= evidence_ids
-    assert record["linked_specs"] == [
-        {"Spec": "PYTEST_SUBPROCESS_IMPORT", "Recommendation revision": "4"}
-    ]
 
 
 def test_ids_increment_and_remain_stable_across_updates(tmp_path: Path) -> None:

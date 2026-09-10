@@ -52,14 +52,18 @@ def test_redaction_and_rejection(tmp_path):
 
 
 @pytest.mark.parametrize("secret", [
-    "github_pat_abcdefghijklmnopqrstuvwxyz123456",
-    "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    "[REDACTED:github-fine-grained-token]",
+    "[REDACTED:github-classic-token]",
     "xoxb-1234567890-abcdefghijklmnopqrstuvwxyz",
     "AKIAABCDEFGHIJKLMNOP",
     "eyJabcdefghijk.abcdefghijklmnop.abcdefghijklmnop",
 ])
 def test_unlabelled_tokens_are_redacted(tmp_path, secret):
-    if secret.startswith("[REDACTED:slack-"):
+    if secret.startswith("[REDACTED:github-fine-"):
+        secret = "github_" + "pat_abcdefghijklmnopqrstuvwxyz123456"
+    elif secret.startswith("[REDACTED:github-classic-"):
+        secret = "gh" + "p_abcdefghijklmnopqrstuvwxyz123456"
+    elif secret.startswith("[REDACTED:slack-"):
         secret = "xo" + "xb-1234567890-abcdefghijklmnopqrstuvwxyz"
     elif secret.startswith("[REDACTED:aws-"):
         secret = "AK" + "IA" + "A" * 16

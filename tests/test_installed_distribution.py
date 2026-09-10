@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -16,6 +15,7 @@ import sys
 import tarfile
 import textwrap
 import time
+import tomllib
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -24,11 +24,6 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -189,6 +184,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
     "cryptography<50,>=44; extra == 'all'",
     "cryptography<50,>=44; extra == 'dev'",
     "cryptography<50,>=44; extra == 'governance'",
+    "fastmcp>=3.0; extra == 'all'",
     "fastmcp>=3.0; extra == 'mcp'",
     "libcst>=1.0; extra == 'all'",
     "libcst>=1.0; extra == 'dev'",
@@ -211,9 +207,9 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
 EXPECTED_DISTRIBUTION_METADATA = {
     "Name": ["odibi-anchor"],
     "Version": ["0.1.0"],
-    "Summary": ["Standalone context-generator toolkit for AI agents and data engineers."],
+    "Summary": ["Provider-neutral reliability, context, and evidence tooling for engineering agents."],
     "Requires-Python": [">=3.11"],
-    "License": ["MIT"],
+    "License-Expression": ["Apache-2.0"],
     "Author": ["Henry Odibi"],
     "Provides-Extra": ["all", "dev", "governance", "mcp", "pandas", "semantic", "spark"],
     "Requires-Dist": EXPECTED_OPTIONAL_REQUIREMENTS,
@@ -506,9 +502,9 @@ def test_package_metadata_has_one_source_authority() -> None:
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
     assert project["version"] == "0.1.0"
-    assert project["description"] == "Standalone context-generator toolkit for AI agents and data engineers."
+    assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
-    assert project["license"] == {"text": "MIT"}
+    assert project["license"] == "Apache-2.0"
     assert project["dependencies"] == []
     assert project["scripts"] == {
         "anchor": "odibi_anchor.cli:main",
@@ -527,6 +523,7 @@ def test_package_metadata_has_one_source_authority() -> None:
             "libcst>=1.0",
             "cryptography>=44,<50",
             "rfc8785==0.1.4",
+            "fastmcp>=3.0",
         ],
         "dev": [
             "pytest>=7.0",
@@ -540,24 +537,6 @@ def test_package_metadata_has_one_source_authority() -> None:
         ],
     }
 
-    setup_path = REPOSITORY_ROOT / "setup.py"
-    setup_tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-    setup_calls = [
-        node
-        for node in ast.walk(setup_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setup"
-    ]
-    assert len(setup_calls) == 1
-    assert setup_calls[0].args == []
-    assert setup_calls[0].keywords == []
-    imported_names = {
-        alias.name
-        for node in setup_tree.body
-        if isinstance(node, ast.ImportFrom) and node.module == "setuptools"
-        for alias in node.names
-    }
-    assert imported_names == {"setup"}
-
     init_source = (REPOSITORY_ROOT / "src" / "odibi_anchor" / "__init__.py").read_text(encoding="utf-8")
     assert '"0.1.0"' not in init_source
     assert '"0.7.1"' not in init_source
@@ -568,7 +547,7 @@ def _copy_package_candidate(destination: Path) -> None:
     """Copy only the files consumed by the configured Hatch build."""
     destination.mkdir()
     for name in (
-        "pyproject.toml", "setup.py", "README.md", ".assistant_instructions.md", "agent_bootstrap.py"
+        "pyproject.toml", "README.md", ".assistant_instructions.md", "agent_bootstrap.py"
     ):
         shutil.copy2(REPOSITORY_ROOT / name, destination / name)
     for name in ("src", ".assistant", "tools"):
@@ -586,7 +565,7 @@ def _create_venv(root: Path, environment: dict[str, str]) -> Path:
 def _metadata_contract(metadata_bytes: bytes) -> dict[str, list[str]]:
     """Project the distribution fields that must agree across artifacts."""
     message = BytesParser(policy=policy.default).parsebytes(metadata_bytes)
-    fields = ("Name", "Version", "Summary", "Requires-Python", "License", "Author", "Provides-Extra", "Requires-Dist")
+    fields = ("Name", "Version", "Summary", "Requires-Python", "License-Expression", "Author", "Provides-Extra", "Requires-Dist")
     return {field: sorted(message.get_all(field, [])) for field in fields}
 
 
@@ -614,7 +593,7 @@ def _runtime_probe(
             "distribution_version": installed.version,
             "summary": installed.metadata["Summary"],
             "author": installed.metadata["Author"],
-            "license": installed.metadata["License"],
+            "license": installed.metadata["License-Expression"],
             "requires_python": installed.metadata["Requires-Python"],
             "extras": sorted(installed.metadata.get_all("Provides-Extra") or []),
             "requirements": sorted(installed.requires or []),
@@ -689,23 +668,10 @@ def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     assert probe["runtime_version"] == probe["distribution_version"] == "0.1.0"
     assert probe["summary"] == EXPECTED_DISTRIBUTION_METADATA["Summary"][0]
     assert probe["author"] == "Henry Odibi"
-    assert probe["license"] == "MIT"
+    assert probe["license"] == "Apache-2.0"
     assert probe["requires_python"] == ">=3.11"
     assert probe["extras"] == EXPECTED_DISTRIBUTION_METADATA["Provides-Extra"]
     assert probe["requirements"] == EXPECTED_OPTIONAL_REQUIREMENTS
-
-
-def _qualify_setup_introspection(source: Path, python: Path, environment: dict[str, str]) -> None:
-    """Qualify only the three supported direct setup.py metadata commands."""
-    assert _run([str(python), "setup.py", "--name"], cwd=source, environment=environment).stdout.strip() == (
-        "odibi-anchor"
-    )
-    assert _run([str(python), "setup.py", "--version"], cwd=source, environment=environment).stdout.strip() == "0.1.0"
-    _run([str(python), "setup.py", "egg_info"], cwd=source, environment=environment)
-    egg_info = list(source.rglob("*.egg-info"))
-    assert len(egg_info) == 1
-    shutil.rmtree(egg_info[0])
-    assert not list(source.rglob("*.egg-info"))
 
 
 def _qualify_package_metadata_matrix(audit_root: Path) -> None:
@@ -736,7 +702,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         assert "odibi_anchor/_governance_host_probe/__main__.py" in wheel_names
         assert "odibi_anchor/behavior_runner.py" in wheel_names
         assert wheel_archive.read(wheel_entry_points_name).decode("utf-8") == (
-            "[console_scripts]\ncw = odibi_anchor.cli:main\n"
+            "[console_scripts]\nanchor = odibi_anchor.cli:main\n"
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         packaged_init = wheel_archive.read("odibi_anchor/__init__.py").decode("utf-8")
@@ -771,7 +737,6 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     with tarfile.open(sdist, "r:gz") as sdist_archive:
         sdist_names = sdist_archive.getnames()
         pkg_info_name = next(name for name in sdist_names if name.endswith("/PKG-INFO"))
-        setup_name = next(name for name in sdist_names if name.endswith("/setup.py"))
         instructions_name = next(name for name in sdist_names if name.endswith("/.assistant_instructions.md"))
         assistant_launcher_name = next(
             name for name in sdist_names if name.endswith("/.assistant/agent_bootstrap.py")
@@ -782,17 +747,14 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             if name.endswith("/agent_bootstrap.py") and name != assistant_launcher_name
         )
         pkg_info_file = sdist_archive.extractfile(pkg_info_name)
-        setup_file = sdist_archive.extractfile(setup_name)
         instructions_file = sdist_archive.extractfile(instructions_name)
         agent_bootstrap_file = sdist_archive.extractfile(agent_bootstrap_name)
         assistant_launcher_file = sdist_archive.extractfile(assistant_launcher_name)
         assert pkg_info_file is not None
-        assert setup_file is not None
         assert instructions_file is not None
         assert agent_bootstrap_file is not None
         assert assistant_launcher_file is not None
         sdist_metadata = _metadata_contract(pkg_info_file.read())
-        assert setup_file.read() == (candidate / "setup.py").read_bytes()
         assert instructions_file.read() == (candidate / ".assistant_instructions.md").read_bytes()
         assert agent_bootstrap_file.read() == (candidate / "agent_bootstrap.py").read_bytes()
         assert assistant_launcher_file.read() == (
@@ -1206,7 +1168,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         )
         assert _metadata_contract(sdist_wheel_archive.read(sdist_metadata_name)) == EXPECTED_DISTRIBUTION_METADATA
         assert sdist_wheel_archive.read(sdist_entry_points_name).decode("utf-8") == (
-            "[console_scripts]\ncw = odibi_anchor.cli:main\n"
+            "[console_scripts]\nanchor = odibi_anchor.cli:main\n"
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         assert sdist_wheel_archive.read(".assistant_instructions.md") == (
@@ -1221,17 +1183,6 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     assert sdist_factory == wheel_factory
     sdist_cw = audit_root / "sdist-venv" / ("Scripts/anchor.exe" if os.name == "nt" else "bin/anchor")
     _run([str(sdist_cw), "--help"], cwd=audit_root, environment=environment)
-
-    current_setup = audit_root / "setup-current"
-    shutil.copytree(candidate, current_setup)
-    _qualify_setup_introspection(current_setup, Path(sys.executable), environment)
-    # Setuptools 65 uses pkgutil.ImpImporter, which Python 3.12 removed.
-    if sys.version_info < (3, 12):
-        old_setup = audit_root / "setup-65"
-        shutil.copytree(candidate, old_setup)
-        old_setup_python = _create_venv(audit_root / "setup-65-venv", environment)
-        _run([str(old_setup_python), "-m", "pip", "install", "setuptools==65.5.1"], environment=environment)
-        _qualify_setup_introspection(old_setup, old_setup_python, environment)
 
     python_floor_probe = _run(
         [
@@ -1931,7 +1882,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
     def run_probe(mode: str, home: Path, version: int | None = None) -> dict[str, object]:
         env = {**environment, "ANCHOR_HOME": str(home), "ANCHOR_MEMORY_DB": str(home / ".agent_memory.db"),
                "ANCHOR_PROJECT_ROOT": str(target), "TARGET": str(target), "MODE": mode,
-               "PYTHON": str(python), "ANCHOR_MCP_GATEWAY_ONLY": "1"}
+               "PYTHON": str(python)}
         env["PROJECT_A"], env["PROJECT_B"] = str(tmp_path / "project-a"), str(tmp_path / "project-b")
         if version is not None:
             env["VERSION"] = str(version)
@@ -3444,7 +3395,6 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             async def main():
                 server_environment = os.environ.copy()
                 server_environment.pop("PYTHONPATH", None)
-                server_environment["ANCHOR_MCP_GATEWAY_ONLY"] = "1"
                 transport = StdioTransport(
                     command=os.environ["CANDIDATE_PYTHON"],
                     args=["-m", "odibi_anchor.mcp_server"],

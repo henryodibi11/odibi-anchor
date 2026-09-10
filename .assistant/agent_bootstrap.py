@@ -55,41 +55,71 @@ else:
     except RuntimeError:
         try:
             _checkout = _validated_checkout(_copied_candidate, source="copied-tree topology")
-        except RuntimeError as exc:
-            raise RuntimeError(
-                "No Odibi Anchor checkout exists at the source-tree location or fixed "
-                "sibling 'odibi_anchor'. Set one exact absolute, non-tilde "
-                "ANCHOR_SOURCE_CHECKOUT path; no workspace scan was attempted."
-            ) from exc
+        except RuntimeError:
+            _checkout = None
 
-_delegate_globals = {}
-if "ANCHOR_REPOSITORY_PROVIDER" in globals():
-    _delegate_globals["ANCHOR_REPOSITORY_PROVIDER"] = globals()["ANCHOR_REPOSITORY_PROVIDER"]
-_namespace = runpy.run_path(
-    str(_checkout / "agent_bootstrap.py"),
-    init_globals=_delegate_globals,
-    run_name="__odibi_anchor_checkout_bootstrap__",
-)
+if _checkout is None:
+    from odibi_anchor import launch
 
-_required = ("anchor", "ROOT", "MANIFEST", "ORIENTATION", "BOOTSTRAP")
-_missing = tuple(name for name in _required if name not in _namespace)
-if _missing:
-    raise RuntimeError(f"Odibi Anchor bootstrap omitted required values: {', '.join(_missing)}")
-_bootstrap = _namespace["BOOTSTRAP"]
-if not isinstance(_bootstrap, Mapping) or _bootstrap.get("success") is not True:
-    raise RuntimeError("Odibi Anchor bootstrap did not report success")
-try:
-    _reported_repository = Path(_bootstrap["repository"]).resolve(strict=True)
-except (KeyError, OSError, TypeError, ValueError) as exc:
-    raise RuntimeError("Odibi Anchor bootstrap reported an invalid repository") from exc
-if _reported_repository != _checkout:
-    raise RuntimeError(
-        "Odibi Anchor bootstrap repository does not match the selected checkout: "
-        f"{_reported_repository} != {_checkout}"
+    _home = os.environ.get("ANCHOR_HOME")
+    if not _home:
+        raise RuntimeError(
+            "Installed Odibi Anchor startup requires one explicit durable ANCHOR_HOME"
+        )
+    _target = os.environ.get("ANCHOR_PROJECT_ROOT") or str(_launcher.parent.parent)
+    anchor = launch(
+        anchor_home=_home,
+        project_id=os.environ.get("ANCHOR_PROJECT_ID"),
+        project_root=_target,
+        output_format="dict",
+    )
+    ROOT = str(Path(_target).resolve())
+    MANIFEST = getattr(anchor, "manifest", None)
+    ORIENTATION = anchor("orient", output_format="dict")
+    if not isinstance(ORIENTATION, Mapping) or ORIENTATION.get("kind") != "orientation":
+        raise RuntimeError("Odibi Anchor orientation returned an invalid structured result")
+    _status = ORIENTATION.get("status")
+    _runtime = _status.get("runtime") if isinstance(_status, Mapping) else None
+    _binding = _runtime.get("route_binding") if isinstance(_runtime, Mapping) else None
+    _project_id = _binding.get("project_id") if isinstance(_binding, Mapping) else None
+    BOOTSTRAP = {
+        "success": True,
+        "kind": "agent_bootstrap",
+        "runtime": "installed_distribution",
+        "repository": ROOT,
+        "state_home": str(Path(_home).resolve()),
+        "project_id": _project_id,
+        "target_root": ROOT,
+    }
+else:
+    _delegate_globals = {}
+    if "ANCHOR_REPOSITORY_PROVIDER" in globals():
+        _delegate_globals["ANCHOR_REPOSITORY_PROVIDER"] = globals()["ANCHOR_REPOSITORY_PROVIDER"]
+    _namespace = runpy.run_path(
+        str(_checkout / "agent_bootstrap.py"),
+        init_globals=_delegate_globals,
+        run_name="__odibi_anchor_checkout_bootstrap__",
     )
 
-anchor = _namespace["anchor"]
-ROOT = _namespace["ROOT"]
-MANIFEST = _namespace["MANIFEST"]
-ORIENTATION = _namespace["ORIENTATION"]
-BOOTSTRAP = _bootstrap
+    _required = ("anchor", "ROOT", "MANIFEST", "ORIENTATION", "BOOTSTRAP")
+    _missing = tuple(name for name in _required if name not in _namespace)
+    if _missing:
+        raise RuntimeError(f"Odibi Anchor bootstrap omitted required values: {', '.join(_missing)}")
+    _bootstrap = _namespace["BOOTSTRAP"]
+    if not isinstance(_bootstrap, Mapping) or _bootstrap.get("success") is not True:
+        raise RuntimeError("Odibi Anchor bootstrap did not report success")
+    try:
+        _reported_repository = Path(_bootstrap["repository"]).resolve(strict=True)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise RuntimeError("Odibi Anchor bootstrap reported an invalid repository") from exc
+    if _reported_repository != _checkout:
+        raise RuntimeError(
+            "Odibi Anchor bootstrap repository does not match the selected checkout: "
+            f"{_reported_repository} != {_checkout}"
+        )
+
+    anchor = _namespace["anchor"]
+    ROOT = _namespace["ROOT"]
+    MANIFEST = _namespace["MANIFEST"]
+    ORIENTATION = _namespace["ORIENTATION"]
+    BOOTSTRAP = _bootstrap

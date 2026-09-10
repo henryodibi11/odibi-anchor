@@ -36,7 +36,7 @@ may not.
   authorization for that external write.
 - Stop and re-scope when target or source SHAs change. Never silently review a moving
   diff under old evidence.
-- Passing tests, mergeability, or a Odibi Anchor gate does not establish that the
+- Passing tests, mergeability, or an Odibi Anchor gate does not establish that the
   implementation satisfies its intent.
 
 ## Gather evidence in decision order

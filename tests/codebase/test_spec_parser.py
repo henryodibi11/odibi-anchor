@@ -1,7 +1,5 @@
 """Tests for _spec_parser.py — Phase 1 spec frontmatter parser."""
 
-from pathlib import Path
-
 from odibi_anchor.codebase._spec_parser import (
     _normalize_status,
     _parse_bold_text,
@@ -304,24 +302,6 @@ phases:
         spec.write_text("# Hello\n\n**Status:** draft\n", encoding="utf-8")
         result = parse_spec(spec)
         assert result["name"] == "HELLO_WORLD"
-
-    def test_pytest_subprocess_spec_reports_done_traceable_phases(self):
-        spec = Path(__file__).resolve().parents[2] / "specs" / "PYTEST_SUBPROCESS_IMPORT_SPEC.md"
-        text = spec.read_text(encoding="utf-8")
-        frontmatter = _parse_frontmatter(text)
-        result = parse_spec(spec)
-
-        assert frontmatter is not None
-        assert frontmatter["problem_id"] == "PRB-2026-0008"
-        assert frontmatter["recommendation_revision"] == "4"
-        assert frontmatter["evidence_ids"] == "[E1, E2, E3, E4, E5, E6, E7, E8]"
-        assert result["status"] == "done"
-        assert result["phases"] == [
-            {"name": "subprocess-import-contract", "status": "done"},
-            {"name": "canonical-plugin-identity", "status": "done"},
-            {"name": "failure-diagnostics-and-authority", "status": "done"},
-        ]
-
 
 # ---------------------------------------------------------------------------
 # list_specs

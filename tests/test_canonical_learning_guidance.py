@@ -96,7 +96,6 @@ def test_user_facing_guidance_labels_every_legacy_learn_example_compatibility_on
         *sorted((ROOT / "docs").rglob("*.md")),
         *sorted((ROOT / "src" / "odibi_anchor").rglob("*.md")),
         *active_specs,
-        ROOT / "DEPLOYING_DATABRICKS_APPS.md",
     ]
     guidance = [path for path in guidance if ".assistant/references/snapshots/" not in path.as_posix()]
     for path in guidance:

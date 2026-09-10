@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "name": "public-agent-reliability-lessons",
+  "trust_domain": "public-repository",
+  "manifest_sha256": "a43ac3bf88b3f7248a932a6431371624c14bd987ff1b7731ff22d522cd365c07",
+  "withdrawn": [
+    {
+      "id": "seed_agent_reliability_03",
+      "reason": "A cited source path is absent at the declared public commit."
+    },
+    {
+      "id": "seed_agent_reliability_08",
+      "reason": "The cited public commit was not reproducible from the declared repository."
+    },
+    {
+      "id": "seed_agent_reliability_09",
+      "reason": "No direct public evidence supports normal global retrieval."
+    }
+  ],
+  "entries": [
+    {
+      "id": "seed_agent_reliability_01",
+      "project": "all",
+      "type": "convention",
+      "content": "Verify the pushed source revision and external CI result; a local terminal summary is not delivery evidence.",
+      "related_files": [
+        ".github/workflows/**"
+      ],
+      "tags": [
+        "protective",
+        "delivery",
+        "git",
+        "ci",
+        "verification"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          ".github/workflows/quality.yml",
+          "tests/test_release_verification_scripts.py"
+        ],
+        "limitation": "Repository evidence supports exact-head and CI verification; no retained human confirmation promotes this seed."
+      },
+      "content_sha256": "ad8c3e958c0583a6b9a654b5fa779cf16f6c6e0bbac834ebbfe266b2f86729fa"
+    },
+    {
+      "id": "seed_agent_reliability_02",
+      "project": "all",
+      "type": "gotcha",
+      "content": "Helper and unit tests do not prove the public production path; qualify the installed or externally invoked boundary.",
+      "related_files": [
+        "tests/test_installed_distribution.py",
+        "tests/test_delivery.py"
+      ],
+      "tags": [
+        "protective",
+        "production-path",
+        "integration",
+        "testing"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "scripts/verify_distribution.py",
+          "tests/test_installed_distribution.py"
+        ],
+        "limitation": "A production-parser discrepancy is retained, but recurrence/human confirmation is incomplete."
+      },
+      "content_sha256": "b413519daaf5490d4e5a7febdf8079b1fa65ee86c672736d8730ffa38ca4461e"
+    },
+    {
+      "id": "seed_agent_reliability_04",
+      "project": "all",
+      "type": "pattern",
+      "content": "Run fail-closed preflight before side effects, and test claimed bounds with adversarial counterexamples.",
+      "related_files": [
+        "tests/test_delivery.py",
+        "tests/assurance/test_evaluator.py"
+      ],
+      "tags": [
+        "protective",
+        "fail-closed",
+        "preflight",
+        "side-effects",
+        "bounds"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "tests/test_delivery.py#L97-L105",
+          "tests/assurance/test_evaluator.py#L74-L81"
+        ],
+        "limitation": "Tests support both clauses; this record remains advisory pending confirmation."
+      },
+      "content_sha256": "df80edea2688ce509a23730dbd5fd860f4fa7ba192a40756e4bf8515ee87bc9f"
+    },
+    {
+      "id": "seed_agent_reliability_05",
+      "project": "all",
+      "type": "convention",
+      "content": "Unavailable or skipped evidence is not a pass; preserve that state explicitly in gates and reports.",
+      "related_files": [
+        "src/odibi_anchor/assurance/**",
+        "docs/guides/quickstart.md"
+      ],
+      "tags": [
+        "protective",
+        "evidence",
+        "unavailable",
+        "skipped",
+        "gate"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "src/odibi_anchor/assurance/evaluator.py#L179-L188",
+          "docs/guides/quickstart.md#L58-L64"
+        ],
+        "limitation": "Public implementation and guidance support the rule; no human confirmation is retained."
+      },
+      "content_sha256": "08c2fb8fe98df8163f69b559e26bc73f28e09217227a518953c07fbabe508d29"
+    },
+    {
+      "id": "seed_agent_reliability_06",
+      "project": "all",
+      "type": "pattern",
+      "content": "Derive qualification totals and matrices from executed facts; do not hardcode report outcomes.",
+      "related_files": [
+        "src/odibi_anchor/assurance/qualification.py",
+        "tests/assurance/test_outcome_qualification.py"
+      ],
+      "tags": [
+        "protective",
+        "qualification",
+        "reporting",
+        "executed-facts"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "src/odibi_anchor/assurance/qualification.py#L524-L647",
+          "tests/assurance/test_outcome_qualification.py#L100-L114"
+        ],
+        "limitation": "Scorecard derivation is directly tested; the generalized lesson is not human-confirmed."
+      },
+      "content_sha256": "1261e91cee231d40eab349a7987582768c29a5dbfe1159d3eb80de46c9ce5240"
+    },
+    {
+      "id": "seed_agent_reliability_07",
+      "project": "all",
+      "type": "gotcha",
+      "content": "Validate late-added assets and keep status, narrative, and index projections mutually consistent at the exact delivery revision.",
+      "related_files": [
+        "docs/**",
+        ".assistant/references/**"
+      ],
+      "tags": [
+        "protective",
+        "documentation",
+        "consistency",
+        "late-assets",
+        "delivery"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          ".assistant/references/reviewing/independent-pr-review.md",
+          "tests/test_skill_pointers_table_complete.py"
+        ],
+        "limitation": "Incident records support exact-head consistency checks, but evidence for every listed projection is incomplete."
+      },
+      "content_sha256": "3287aaad9d65a59464a1b7cec5285e94abf6b76b89e2a4f01d85651b5bd617f3"
+    },
+    {
+      "id": "seed_agent_reliability_10",
+      "project": "all",
+      "type": "pattern",
+      "content": "Bind quality baselines to analyzer versions and fail closed when the analyzer or baseline drifts.",
+      "related_files": [
+        "scripts/quality_ratchet.py",
+        "tests/test_quality_ratchet.py",
+        ".quality/**"
+      ],
+      "tags": [
+        "protective",
+        "quality",
+        "baseline",
+        "analyzer-version",
+        "fail-closed"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "tests/test_quality_ratchet.py#L69-L75",
+          "tests/test_quality_ratchet.py#L151-L208",
+          "scripts/quality_ratchet.py#L171-L210"
+        ],
+        "limitation": "Version pinning and drift failure are directly tested; the seed remains candidate without human confirmation."
+      },
+      "content_sha256": "0338545b28f39fbaaf0b3607ed0caf54fa93954543fd08d767440188e779e736"
+    },
+    {
+      "id": "seed_agent_reliability_11",
+      "project": "all",
+      "type": "pattern",
+      "content": "Capture the exact failing input and trace the real call path before assigning root cause; a nearby failure is only a hypothesis.",
+      "related_files": [
+        "src/odibi_anchor/planning/_task_config.py",
+        "tests/debugging/**"
+      ],
+      "tags": [
+        "protective",
+        "debugging",
+        "root-cause",
+        "reproduction",
+        "call-path"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "src/odibi_anchor/planning/_task_config.py#L439-L477",
+          "tests/debugging/test_error_trace_context.py"
+        ],
+        "limitation": "Public guidance and trace tests support capture, reproduction, and isolation; the generalized call-path lesson remains candidate-only."
+      },
+      "content_sha256": "a7652d7ee243dc841f2f988f960addc1f79c571c33bab7ef7b014d0d41ef0038"
+    },
+    {
+      "id": "seed_agent_reliability_12",
+      "project": "all",
+      "type": "gotcha",
+      "content": "When an authority or integrity bypass is found, audit equivalent entry routes before declaring the boundary closed; direct creation and bulk import are concrete routes to check.",
+      "related_files": [
+        "src/odibi_anchor/codebase/_memory_db.py",
+        "src/odibi_anchor/codebase/memory_context.py",
+        "tests/codebase/test_memory_db.py"
+      ],
+      "tags": [
+        "protective",
+        "authority",
+        "integrity",
+        "bypass",
+        "attack-surface"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          "src/odibi_anchor/codebase/_memory_db.py#L797-L801",
+          "src/odibi_anchor/codebase/memory_context.py#L600-L625",
+          "tests/codebase/test_memory_db.py#L202-L238"
+        ],
+        "limitation": "Creation and Markdown-import routes are directly constrained to candidate authority; exhaustive coverage of every future route remains an ongoing review obligation."
+      },
+      "content_sha256": "22f2a62a21675ec4335b38dba661fada55d79a45ebed8e743b82e7885d44748b"
+    },
+    {
+      "id": "seed_agent_reliability_13",
+      "project": "all",
+      "type": "convention",
+      "content": "After review-driven changes, re-review the exact new diff against the prior source revision, preserve finding history, and keep review approval separate from merge or publication authority.",
+      "related_files": [
+        ".assistant/references/reviewing/independent-pr-review.md",
+        "tests/test_skill_pointers_table_complete.py"
+      ],
+      "tags": [
+        "protective",
+        "review",
+        "exact-head",
+        "provenance",
+        "authority"
+      ],
+      "confidence": 0.5,
+      "status": "candidate",
+      "human_review": null,
+      "evidence": {
+        "trust_domain": "public-repository",
+        "repository": "https://github.com/henryodibi11/odibi-anchor",
+        "commit": "dc1fa55354f33b4ea5732124d9cdfa94ee5cba68",
+        "references": [
+          ".assistant/references/reviewing/independent-pr-review.md#L31-L54",
+          ".assistant/references/reviewing/independent-pr-review.md#L93-L121",
+          "tests/test_skill_pointers_table_complete.py#L326-L343"
+        ],
+        "limitation": "The portable review contract and routing test support this practice; no merge or publication authority is inferred from review evidence."
+      },
+      "content_sha256": "a9b772bc2f80fda8bb520008291b958f15f14f8a74ac4e7ceb41a832684ad19f"
+    }
+  ]
+}

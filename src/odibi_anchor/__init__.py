@@ -5,6 +5,7 @@ Zero dependency on external framework packages.
 
 All submodule imports are lazy-loaded to avoid ~540ms FUSE latency at boot.
 """
+# pyright: reportUnsupportedDunderAll=false
 
 import ast
 import csv
@@ -146,10 +147,12 @@ __all__ = [
     "doctor",
     "get_human_input_request",
     "handoff_context",
+    "install_guidance",
     "launch",
     "notify_human",
     "plan_legacy_import",
     "quick_context",
+    "register_project",
     "render_handoff_report",
     "render_task_execution_report",
     "request_human_input",
@@ -161,6 +164,8 @@ __all__ = [
 _LAZY_IMPORTS = {
     "launch": ("odibi_anchor.startup", "launch"),
     "doctor": ("odibi_anchor.startup", "doctor"),
+    "install_guidance": ("odibi_anchor.startup", "install_guidance"),
+    "register_project": ("odibi_anchor.startup", "register_project"),
     "plan_legacy_import": ("odibi_anchor.legacy_import", "plan_legacy_import"),
     "apply_legacy_import": ("odibi_anchor.legacy_import", "apply_legacy_import"),
     "task_execution_context": ("odibi_anchor.planning", "task_execution_context"),

@@ -19,6 +19,13 @@ The `anchor` CLI emits deterministic JSON. One-shot execution does not preserve 
 printf '%s\n' '{"action":"status"}' '{"action":"audit_history"}' | anchor batch -
 ```
 
+Check routing before bootstrap, or install the packaged agent contract into a repository:
+
+```bash
+anchor doctor
+anchor install-guidance /absolute/path/to/repository
+```
+
 For source development, clone the repository, create a virtual environment, and run `python -m pip install -e '.[dev,mcp]'`.
 
 ## MCP quickstart (stdio)
@@ -49,34 +56,73 @@ Equivalent client configuration:
 
 The project must already be registered under `ANCHOR_HOME`. See [runtime rollout](docs/guides/runtime-rollout.md) and [MCP integration](docs/guides/amp-project-integration.md) for setup and operational details.
 
-## Databricks wheel quickstart
+## Databricks quickstart
 
-Build a wheel on a trusted workstation or in CI, then upload `dist/odibi_anchor-0.1.0-py3-none-any.whl` to a Unity Catalog volume or Workspace Files. In a Databricks notebook:
+Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install /Volumes/<catalog>/<schema>/<volume>/odibi_anchor-0.1.0-py3-none-any.whl
+%pip install "odibi-anchor==0.1.0"
 dbutils.library.restartPython()
 ```
 
-Then bind external durable state and the exact Git folder checkout **before importing** Odibi Anchor:
+Then bind local compute state and the exact Git folder checkout. No source clone is required:
 
 ```python
 import os
 
-os.environ["ANCHOR_HOME"] = "/Volumes/<catalog>/<schema>/<volume>/anchor-state"
+os.environ["ANCHOR_HOME"] = "/tmp/anchor-state"  # local compute disk; session-scoped
 os.environ["ANCHOR_PROJECT_ID"] = "my-databricks-project"
 os.environ["ANCHOR_PROJECT_ROOT"] = "/Workspace/Users/<user>/<git-folder>"
 
-import runpy
-namespace = runpy.run_path("/Workspace/Users/<user>/<git-folder>/.assistant/agent_bootstrap.py")
-anchor = namespace["anchor"]
+from odibi_anchor import doctor, launch, register_project
+
+startup = doctor()
+if startup["next_operation"]["operation"] == "register_project":
+    registration = register_project(**startup["next_operation"]["arguments"])
+anchor = launch(
+    anchor_home=os.environ["ANCHOR_HOME"],
+    project_id=os.environ["ANCHOR_PROJECT_ID"],
+    project_root=os.environ["ANCHOR_PROJECT_ROOT"],
+)
+orientation = anchor("orient", output_format="dict")
 ```
 
-`ANCHOR_HOME` must be durable, writable, and outside the installed package/source checkout. The managed project must already register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md) for host limitations.
+Run `install_guidance(project_root)` once when that repository should receive the packaged
+`.assistant` skills and `.assistant_instructions.md`. Existing guidance is never overwritten.
+
+`ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
+checkout. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Stop all
+Anchor processes before copying a closed backup to durable storage such as a Volume; restore it
+to qualified local storage before reuse. Do not run live SQLite state from Workspace Files,
+DBFS, Volumes, or another network/distributed filesystem. The managed project must already
+register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md).
+
+## Import legacy v0.11.0 state
+
+Legacy Context Workbench state is never selected or mutated implicitly. Import one exact
+v0.11.0 home into a new, non-overlapping Anchor home with the explicit two-step API:
+
+```python
+from odibi_anchor import apply_legacy_import, plan_legacy_import
+
+plan = plan_legacy_import(
+    "/absolute/path/to/legacy-home",
+    anchor_home="/absolute/path/to/new-anchor-home",
+)
+# Inspect the source, destination, schema set, and plan_id before approving the write.
+result = apply_legacy_import(plan)
+```
+
+The importer fails closed on destination collisions, incompatible/newer schemas, symlinks,
+ambiguous managed-project targets, or open tasks. It copies project artifacts, rewrites only
+exact managed-project self-targets, and leaves the source unchanged. Legacy database history
+is preserved in a verified backup but is not activated: its branded task/memory payloads are
+not an Anchor runtime contract. The first Anchor launch creates fresh runtime ownership state;
+new tasks are established through the normal lifecycle.
 
 ## Routing and concurrent runtimes
 
-Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
+Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. If the root matches exactly one managed project, `launch()` can derive its ID; ambiguous roots fail closed and require an explicit ID. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
 
 Concurrent runtimes may share an `ANCHOR_HOME` only when it is a **local filesystem** that provides the required locking and atomic filesystem semantics. Do not place a concurrently shared home on DBFS, object storage, an NFS-like mount, or another network/distributed filesystem. Bind every process explicitly, use distinct project IDs for distinct roots, and use a separate per-project `ANCHOR_HOME` when local-filesystem guarantees are uncertain. A shared home does not make same-project conflicting writers safe.
 
@@ -86,4 +132,4 @@ Odibi Anchor records operational state under `ANCHOR_HOME`; keep it outside sour
 
 For bugs and feature requests, use [GitHub Issues](https://github.com/henryodibi11/odibi-anchor/issues). Security-sensitive reports should not include credentials, private repository content, or runtime state in a public issue.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), and [LICENSE](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md), and [LICENSE](LICENSE).

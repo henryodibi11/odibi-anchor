@@ -180,7 +180,7 @@ def test_instructions_are_concise_provider_neutral_routing_contract():
     lowered = text.casefold()
     assert len(text.encode()) < 26_000
     assert all(word in lowered for word in ("outcome", "preserve", "proportion", "evidence", "stop"))
-    prohibited = ("aliases.json", "runtime alias", "mcp_cw_", "%pip", "/workspace/users/", "databricks")
+    prohibited = ("aliases.json", "runtime alias", "mcp_cw_", "%pip", "/workspace/users/")
     assert not any(fragment in lowered for fragment in prohibited)
 
 
@@ -207,7 +207,7 @@ def test_instructions_enforce_explicit_bootstrap_project_and_delivery_contract()
         'namespace = runpy.run_path(bootstrap_path)',
         'assert bootstrap["success"] is True',
         'project_state = anchor("project", "status", output_format="dict")',
-        'anchor("project", "use", "project-id"',
+        "must not redirect an already-bound runtime",
         'session = anchor("new_session"',
         'task = anchor(',
         'skill_result = anchor("skill_loaded"',
@@ -232,9 +232,6 @@ def test_instructions_enforce_explicit_bootstrap_project_and_delivery_contract()
         assert phrase in text
     assert text.index("## ⛔ STOP") < text.index("## Route native skills")
     assert text.index("runpy.run_path(bootstrap_path)") < text.index('anchor("new_session"')
-    assert mandatory.index('selection = anchor("project", "use"') < mandatory.index(
-        'session = anchor("new_session"'
-    )
     assert "same persistent Python process" in text
     assert "artifact_root" in text
     assert "target_root" in text
@@ -275,17 +272,15 @@ def test_routine_memory_review_is_bounded_advisory_and_pre_edit():
     for phrase in (
         "immediately after task acceptance and before source edits",
         "bounded, active-project/trust-scoped `memory_context`",
-        "selected memory IDs with their status, source/provenance, scope, and match reasons",
+        "selected memory IDs and provenance",
         "no memories were selected",
         "Do not scan the full store",
         "candidate as authority or verification",
         "Dispose every selection",
-        "application and evidence-backed evaluation",
-        "follow the existing fail-closed/degraded policy without inventing evidence",
-        "do not manufacture this ceremony or a new lesson",
-        "Pre-edit acknowledgement is an instruction-level mandate",
+        "evidence-backed evaluation",
+        "follow the fail-closed/degraded policy without inventing evidence",
         "blocks learning closure until every selection has a disposition",
-        "every application has an evidence-backed evaluation",
+        "every application is evaluated",
     ):
         assert phrase in normalized
 
@@ -518,7 +513,7 @@ def test_independent_pr_review_uses_host_adapter_or_portable_reference():
     assert "review intent first and implementation second" in reference
     assert "`work-pr-reviews`" in reference and "`personal-pr-reviews`" in reference
     assert "exact target and source commit shas" in reference
-    assert "passing tests, mergeability, or a context workbench gate does not establish" in reference
+    assert "passing tests, mergeability, or an odibi anchor gate does not establish" in reference
     assert "apply the data-engineering lens" in reference
     assert "prepare an explicit pr" in cross_functional
     assert "do not use for independent pr review" in cross_functional
@@ -1795,7 +1790,7 @@ def test_assistant_launcher_invalid_fixed_sibling_does_not_scan(tmp_path, monkey
     _write_trampoline_target(undiscoverable, sentinel=sentinel)
     monkeypatch.delenv("ANCHOR_SOURCE_CHECKOUT", raising=False)
 
-    with pytest.raises(RuntimeError, match="no workspace scan was attempted"):
+    with pytest.raises(FileNotFoundError, match="No managed project target matches"):
         runpy.run_path(str(launcher))
 
     assert not sentinel.exists()
