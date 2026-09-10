@@ -287,6 +287,19 @@ def test_legacy_import_rejects_ambiguous_project_descriptors(tmp_path, extra, me
     assert not destination.exists()
 
 
+def test_legacy_import_rejects_routing_quote_disagreement(tmp_path):
+    source = tmp_path / "cw"
+    project = source / "workspace" / "projects" / "alpha"
+    project.mkdir(parents=True)
+    _legacy_db(source / ".agent_memory.db")
+    (project / "PROJECT.md").write_text(
+        "---\nid: alpha\nproject_type: referenced\ntarget_root: \"/srv/project'\"\n---\n"
+    )
+
+    with pytest.raises(RuntimeError, match="ambiguous quoting"):
+        plan_legacy_import(source, anchor_home=tmp_path / "anchor")
+
+
 @pytest.mark.parametrize("entry", ["workspace", ".agent_memory.db"])
 def test_legacy_import_rejects_symlinked_source_authority(tmp_path, entry):
     source = tmp_path / "cw"
@@ -352,7 +365,6 @@ def test_legacy_import_rollback_removes_only_entries_it_created(tmp_path, monkey
 
     def failing_copytree(source_path, target_path, *args, **kwargs):
         if Path(target_path) == destination / "workspace":
-            Path(target_path).mkdir()
             (Path(target_path) / "partial.txt").write_text("partial")
             raise OSError("injected activation failure")
         return original_copytree(source_path, target_path, *args, **kwargs)
@@ -362,4 +374,58 @@ def test_legacy_import_rollback_removes_only_entries_it_created(tmp_path, monkey
         apply_legacy_import(plan)
 
     assert preserved.read_text() == "keep"
+    assert not (destination / "workspace").exists()
+
+
+def test_legacy_import_does_not_delete_competing_destination(tmp_path, monkeypatch):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    (source / "workspace").mkdir()
+    _legacy_db(source / ".agent_memory.db")
+    plan = plan_legacy_import(source, anchor_home=destination)
+    target = destination / "workspace"
+    original_mkdir = Path.mkdir
+    injected = False
+
+    def racing_mkdir(path, *args, **kwargs):
+        nonlocal injected
+        if path == target and not injected:
+            injected = True
+            original_mkdir(path)
+            (path / "competing.txt").write_text("keep")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+    with pytest.raises(FileExistsError):
+        apply_legacy_import(plan)
+
+    assert (target / "competing.txt").read_text() == "keep"
+
+
+def test_legacy_import_detects_file_to_directory_snapshot_drift(tmp_path, monkeypatch):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    workspace = source / "workspace"
+    workspace.mkdir()
+    changing = workspace / "changing"
+    changing.write_text("")
+    _legacy_db(source / ".agent_memory.db")
+    plan = plan_legacy_import(source, anchor_home=destination)
+    original_copytree = shutil.copytree
+    injected = False
+
+    def drifting_copytree(source_path, target_path, *args, **kwargs):
+        nonlocal injected
+        if Path(source_path) == workspace and not injected:
+            injected = True
+            changing.unlink()
+            changing.mkdir()
+        return original_copytree(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr("odibi_anchor.legacy_import.shutil.copytree", drifting_copytree)
+    with pytest.raises(RuntimeError, match="workspace changed"):
+        apply_legacy_import(plan)
+
     assert not (destination / "workspace").exists()

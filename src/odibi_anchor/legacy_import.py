@@ -145,8 +145,13 @@ def _descriptor_fields(descriptor: Path) -> dict[str, str]:
                 f"legacy project descriptor has duplicate field {key!r}: {descriptor.parent.name}"
             )
         raw_value = value.strip()
+        runtime_value = raw_value.strip("\"'")
         if len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in "\"'":
             raw_value = raw_value[1:-1]
+        if raw_value != runtime_value:
+            raise RuntimeError(
+                f"legacy project descriptor has ambiguous quoting: {descriptor.parent.name}"
+            )
         values[key] = raw_value
     if not terminated or not {"id", "project_type", "target_root"}.issubset(values):
         raise RuntimeError(f"legacy project descriptor is incomplete: {descriptor.parent.name}")
@@ -194,15 +199,26 @@ def _project_rewrites(source: Path, destination: Path) -> list[dict[str, str]]:
 
 
 def _workspace_digest(workspace: Path) -> str:
-    """Bind the import plan to every copied path and file byte."""
-    digest = hashlib.sha256()
+    """Hash a canonical typed manifest of every workspace entry."""
+    if workspace.is_symlink() or not workspace.is_dir():
+        raise RuntimeError("legacy workspace must be a regular directory")
+    manifest: list[dict[str, str]] = []
     for path in sorted(workspace.rglob("*"), key=lambda item: item.relative_to(workspace).as_posix()):
         relative = path.relative_to(workspace).as_posix()
-        digest.update(relative.encode("utf-8") + b"\0")
-        if path.is_file():
-            digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+        if path.is_symlink():
+            raise RuntimeError("legacy workspace contains a symlink and cannot be imported safely")
+        if path.is_dir():
+            manifest.append({"path": relative, "type": "directory"})
+        elif path.is_file():
+            manifest.append({
+                "path": relative,
+                "type": "file",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+        else:
+            raise RuntimeError("legacy workspace contains an unsupported filesystem entry")
+    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _backup_database(source: Path, destination: Path) -> None:
@@ -301,9 +317,11 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
             if _path_exists(target_path):
                 raise RuntimeError(f"destination collision: {name}")
             if backup_path.is_dir():
+                target_path.mkdir()
                 created_targets.append(target_path)
-                shutil.copytree(backup_path, target_path)
+                shutil.copytree(backup_path, target_path, dirs_exist_ok=True)
             else:
+                target_path.touch(exist_ok=False)
                 created_targets.append(target_path)
                 shutil.copy2(backup_path, target_path)
             copied.append(name)
