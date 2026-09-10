@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -58,6 +57,11 @@ def _directory(value: str | os.PathLike[str], name: str, *, must_exist: bool) ->
     if must_exist and not resolved.is_dir():
         raise ValueError(f"{name} must be an existing directory")
     return resolved
+
+
+def _path_exists(path: Path) -> bool:
+    """Return true for regular entries and dangling symlinks."""
+    return path.exists() or path.is_symlink()
 
 
 def _schema_versions(database: Path) -> list[dict[str, Any]]:
@@ -116,9 +120,52 @@ def _open_task_count(database: Path) -> int:
         connection.close()
 
 
+def _descriptor_fields(descriptor: Path) -> dict[str, str]:
+    """Parse the flat routing authority without accepting ambiguous YAML."""
+    try:
+        lines = descriptor.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise RuntimeError(f"legacy project descriptor is unreadable: {descriptor.parent.name}") from exc
+    if not lines or lines[0].strip() != "---":
+        raise RuntimeError(f"legacy project descriptor is incomplete: {descriptor.parent.name}")
+    values: dict[str, str] = {}
+    terminated = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            terminated = True
+            break
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            raise RuntimeError(f"legacy project descriptor is ambiguous: {descriptor.parent.name}")
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key in values:
+            raise RuntimeError(
+                f"legacy project descriptor has duplicate field {key!r}: {descriptor.parent.name}"
+            )
+        raw_value = value.strip()
+        if len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in "\"'":
+            raw_value = raw_value[1:-1]
+        values[key] = raw_value
+    if not terminated or not {"id", "project_type", "target_root"}.issubset(values):
+        raise RuntimeError(f"legacy project descriptor is incomplete: {descriptor.parent.name}")
+    if values["id"] != descriptor.parent.name:
+        raise RuntimeError(f"legacy project descriptor has an ambiguous ID: {descriptor.parent.name}")
+    if values["project_type"] not in {"managed", "referenced"}:
+        raise RuntimeError(
+            f"legacy project descriptor has unsupported project_type: {descriptor.parent.name}"
+        )
+    if not Path(values["target_root"]).is_absolute():
+        raise RuntimeError(f"legacy project descriptor has an ambiguous target: {descriptor.parent.name}")
+    return values
+
+
 def _project_rewrites(source: Path, destination: Path) -> list[dict[str, str]]:
     """Validate descriptors and plan exact self-target rewrites for managed projects."""
     workspace = source / "workspace"
+    if workspace.is_symlink():
+        raise RuntimeError("legacy workspace is a symlink and cannot be imported safely")
     for path in workspace.rglob("*"):
         if path.is_symlink():
             raise RuntimeError("legacy workspace contains a symlink and cannot be imported safely")
@@ -127,14 +174,10 @@ def _project_rewrites(source: Path, destination: Path) -> list[dict[str, str]]:
     if not projects.is_dir():
         return rewrites
     for descriptor in sorted(projects.glob("*/PROJECT.md")):
-        text = descriptor.read_text(encoding="utf-8")
-        kind = re.search(r"(?m)^project_type:\s*(\S+)\s*$", text)
-        target = re.search(r"(?m)^target_root:\s*(.+?)\s*$", text)
-        if kind is None or target is None:
-            raise RuntimeError(f"legacy project descriptor is incomplete: {descriptor.parent.name}")
-        if kind.group(1) != "managed":
+        fields = _descriptor_fields(descriptor)
+        if fields["project_type"] != "managed":
             continue
-        old_target = Path(target.group(1)).resolve()
+        old_target = Path(fields["target_root"]).resolve()
         expected = descriptor.parent.resolve()
         if old_target != expected:
             raise RuntimeError(
@@ -185,13 +228,15 @@ def plan_legacy_import(
     destination = _directory(anchor_home, "ANCHOR_HOME", must_exist=False)
     if source == destination or source in destination.parents or destination in source.parents:
         raise RuntimeError("source CW_HOME and ANCHOR_HOME must not overlap")
+    database = source / ".agent_memory.db"
+    if database.is_symlink():
+        raise RuntimeError("legacy database is a symlink and cannot be imported safely")
     selected = [name for name in _COPY_NAMES if (source / name).exists()]
     if not selected:
         raise RuntimeError("selected CW_HOME contains no supported legacy state")
-    collisions = [name for name in selected if (destination / name).exists()]
+    collisions = [name for name in selected if _path_exists(destination / name)]
     if collisions:
         raise RuntimeError("destination collision: " + ", ".join(collisions))
-    database = source / ".agent_memory.db"
     versions = _schema_versions(database)
     open_tasks = _open_task_count(database)
     if open_tasks:
@@ -212,6 +257,7 @@ def plan_legacy_import(
             "workspace_sha256": workspace_sha256,
             "open_tasks": 0, "live_history_imported": False,
             "history_disposition": "backup_only",
+            "activation_exclusions": ["projects/*/continuity"],
             "plan_id": f"sha256:{identity}", "applicable": True}
 
 
@@ -225,43 +271,64 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
     source = Path(plan["source_cw_home"])
     destination = Path(plan["anchor_home"])
     destination.mkdir(parents=True, exist_ok=True)
-    backup = destination / "legacy-import-backups" / plan["plan_id"].split(":", 1)[1]
-    if backup.exists():
+    backup_root = destination / "legacy-import-backups"
+    if backup_root.is_symlink():
+        raise RuntimeError("legacy import backup destination is a symlink")
+    backup = backup_root / plan["plan_id"].split(":", 1)[1]
+    if _path_exists(backup):
         raise RuntimeError("legacy import backup collision")
     backup.mkdir(parents=True)
     source_database = source / ".agent_memory.db"
     backup_database = backup / ".agent_memory.db"
     _backup_database(source_database, backup_database)
-    attempted: list[str] = []
+    copied: list[str] = []
+    created_targets: list[Path] = []
     try:
         for name in plan["selected"]:
-            attempted.append(name)
             source_path = source / name
             backup_path = backup / name
-            target_path = destination / name
             if source_path.is_dir():
                 shutil.copytree(source_path, backup_path)
-                shutil.copytree(backup_path, target_path)
             else:
                 shutil.copy2(source_path, backup_path)
+        if _schema_versions(backup_database) != plan["schemas"] or _open_task_count(backup_database):
+            raise RuntimeError("legacy database changed while its backup was being created")
+        if _workspace_digest(backup / "workspace") != plan["workspace_sha256"]:
+            raise RuntimeError("legacy workspace changed while its backup was being created")
+        for name in plan["selected"]:
+            backup_path = backup / name
+            target_path = destination / name
+            if _path_exists(target_path):
+                raise RuntimeError(f"destination collision: {name}")
+            if backup_path.is_dir():
+                created_targets.append(target_path)
+                shutil.copytree(backup_path, target_path)
+            else:
+                created_targets.append(target_path)
                 shutil.copy2(backup_path, target_path)
+            copied.append(name)
+        for continuity in (destination / "workspace" / "projects").glob("*/continuity"):
+            shutil.rmtree(continuity)
         for rewrite in plan["project_rewrites"]:
             descriptor = destination / "workspace" / "projects" / rewrite["project_id"] / "PROJECT.md"
-            text = descriptor.read_text(encoding="utf-8")
-            old = f"target_root: {rewrite['old_target']}"
-            new = f"target_root: {rewrite['new_target']}"
-            if text.count(old) != 1:
+            if hashlib.sha256(descriptor.read_bytes()).hexdigest() != rewrite["descriptor_sha256"]:
                 raise RuntimeError("legacy managed-project target changed during import")
-            descriptor.write_text(text.replace(old, new, 1), encoding="utf-8")
+            lines = descriptor.read_text(encoding="utf-8").splitlines(keepends=True)
+            indexes = [index for index, line in enumerate(lines) if line.split(":", 1)[0].strip() == "target_root"]
+            if len(indexes) != 1:
+                raise RuntimeError("legacy managed-project target changed during import")
+            ending = "\n" if lines[indexes[0]].endswith("\n") else ""
+            lines[indexes[0]] = f"target_root: {rewrite['new_target']}{ending}"
+            descriptor.write_text("".join(lines), encoding="utf-8")
     except Exception:
-        for name in attempted:
-            path = destination / name
+        for path in reversed(created_targets):
             shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
         raise
     database_sha256 = hashlib.sha256(backup_database.read_bytes()).hexdigest()
     return {"kind": "legacy_import_result", "status": "applied", "backup": str(backup),
-            "copied": attempted, "legacy_database_backup_sha256": database_sha256,
+            "copied": copied, "legacy_database_backup_sha256": database_sha256,
             "live_history_imported": False, "history_disposition": "verified_backup_only",
+            "activation_exclusions": plan["activation_exclusions"],
             "project_rewrites": plan["project_rewrites"], "plan_id": plan["plan_id"]}
 
 

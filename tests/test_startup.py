@@ -169,7 +169,9 @@ def _legacy_db(path, *, overrides=None):
     connection.close()
 
 
-def test_legacy_import_plans_without_mutation_then_backs_up_and_copies(tmp_path):
+def test_legacy_import_plans_without_mutation_then_backs_up_copies_and_launches(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "cw"
     destination = tmp_path / "anchor"
     source.mkdir()
@@ -178,8 +180,11 @@ def test_legacy_import_plans_without_mutation_then_backs_up_and_copies(tmp_path)
     managed.mkdir(parents=True)
     (managed / "PROJECT.md").write_text(
         "---\nid: managed-project\nname: Managed\nstatus: active\n"
-        f"project_type: managed\ntarget_root: {managed}\n---\n"
+        f"project_type: \"managed\"\ntarget_root: \"{managed}\"\n---\n"
     )
+    legacy_owner = managed / "continuity" / "v1" / "OWNER.json"
+    legacy_owner.parent.mkdir(parents=True)
+    legacy_owner.write_text("{}\n", encoding="utf-8")
     (source / "workspace" / "record.txt").write_text("legacy")
     source_digest = hashlib.sha256((source / ".agent_memory.db").read_bytes()).hexdigest()
 
@@ -201,6 +206,21 @@ def test_legacy_import_plans_without_mutation_then_backs_up_and_copies(tmp_path)
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     imported = (destination / "workspace" / "projects" / "managed-project" / "PROJECT.md")
     assert f"target_root: {destination / 'workspace' / 'projects' / 'managed-project'}" in imported.read_text()
+    assert (backup.parent / "workspace" / "projects" / "managed-project" /
+            "continuity" / "v1" / "OWNER.json").is_file()
+    assert not (imported.parent / "continuity").exists()
+
+    monkeypatch.setenv("ANCHOR_HOME", str(destination))
+    monkeypatch.setenv("ANCHOR_PROJECT_ID", "managed-project")
+    monkeypatch.setenv("ANCHOR_PROJECT_ROOT", str(imported.parent))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(destination / ".agent_memory.db"))
+    anchor = launch(
+        anchor_home=destination,
+        project_id="managed-project",
+        project_root=imported.parent,
+    )
+    assert anchor("status", output_format="dict")["runtime"]["route_binding"]["project_id"] == "managed-project"
+    assert (imported.parent / "continuity" / "v1" / "OWNER.json").is_file()
 
 
 def test_legacy_import_rejects_open_tasks_before_destination_mutation(tmp_path):
@@ -242,3 +262,104 @@ def test_legacy_import_fails_closed_on_collision_newer_schema_and_cw_env(tmp_pat
     (destination / "workspace").mkdir()
     with pytest.raises(RuntimeError, match="destination collision"):
         plan_legacy_import(source, anchor_home=destination)
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ("project_type: referenced\n", "duplicate field"),
+        ("", "unsupported project_type"),
+    ],
+)
+def test_legacy_import_rejects_ambiguous_project_descriptors(tmp_path, extra, message):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    project = source / "workspace" / "projects" / "alpha"
+    project.mkdir(parents=True)
+    _legacy_db(source / ".agent_memory.db")
+    kind = "unsupported" if not extra else "managed"
+    (project / "PROJECT.md").write_text(
+        f"---\nid: alpha\nproject_type: {kind}\n{extra}target_root: {project}\n---\n"
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        plan_legacy_import(source, anchor_home=destination)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("entry", ["workspace", ".agent_memory.db"])
+def test_legacy_import_rejects_symlinked_source_authority(tmp_path, entry):
+    source = tmp_path / "cw"
+    source.mkdir()
+    real_workspace = tmp_path / "real-workspace"
+    real_workspace.mkdir()
+    real_database = tmp_path / "real.db"
+    _legacy_db(real_database)
+    if entry == "workspace":
+        (source / "workspace").symlink_to(real_workspace, target_is_directory=True)
+        shutil.copy2(real_database, source / ".agent_memory.db")
+    else:
+        (source / "workspace").mkdir()
+        (source / ".agent_memory.db").symlink_to(real_database)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        plan_legacy_import(source, anchor_home=tmp_path / "anchor")
+
+
+def test_legacy_import_rejects_dangling_destination_symlink(tmp_path):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    (source / "workspace").mkdir()
+    _legacy_db(source / ".agent_memory.db")
+    destination.mkdir()
+    (destination / "workspace").symlink_to(tmp_path / "missing", target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="destination collision"):
+        plan_legacy_import(source, anchor_home=destination)
+    assert (destination / "workspace").is_symlink()
+
+
+def test_legacy_import_rejects_symlinked_backup_destination(tmp_path):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    (source / "workspace").mkdir()
+    _legacy_db(source / ".agent_memory.db")
+    plan = plan_legacy_import(source, anchor_home=destination)
+    destination.mkdir()
+    (destination / "legacy-import-backups").symlink_to(
+        tmp_path / "outside", target_is_directory=True
+    )
+
+    with pytest.raises(RuntimeError, match="backup destination is a symlink"):
+        apply_legacy_import(plan)
+    assert not (tmp_path / "outside").exists()
+
+
+def test_legacy_import_rollback_removes_only_entries_it_created(tmp_path, monkeypatch):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    (source / "workspace").mkdir()
+    (source / "workspace" / "record.txt").write_text("legacy")
+    _legacy_db(source / ".agent_memory.db")
+    plan = plan_legacy_import(source, anchor_home=destination)
+    destination.mkdir()
+    preserved = destination / "preserved.txt"
+    preserved.write_text("keep")
+    original_copytree = shutil.copytree
+
+    def failing_copytree(source_path, target_path, *args, **kwargs):
+        if Path(target_path) == destination / "workspace":
+            Path(target_path).mkdir()
+            (Path(target_path) / "partial.txt").write_text("partial")
+            raise OSError("injected activation failure")
+        return original_copytree(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr("odibi_anchor.legacy_import.shutil.copytree", failing_copytree)
+    with pytest.raises(OSError, match="injected activation failure"):
+        apply_legacy_import(plan)
+
+    assert preserved.read_text() == "keep"
+    assert not (destination / "workspace").exists()
