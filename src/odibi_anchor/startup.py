@@ -53,6 +53,8 @@ def launch(
         home, project=requested_project, target_hint=target,
         runtime_instance_id=f"startup:{os.getpid()}",
     )
+    if route is None:
+        raise RuntimeError("startup route resolution returned no binding")
 
     bindings = {
         "ANCHOR_HOME": str(home),
