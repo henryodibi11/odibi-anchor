@@ -14,7 +14,6 @@ def test_external_amp_guide_has_portable_safety_contract() -> None:
         "ANCHOR_PROJECT_ROOT",
         "ANCHOR_HOME",
         "outside that checkout",
-        "ANCHOR_MCP_GATEWAY_ONLY",
         "AGENTS.md",
     ):
         assert contract in guide

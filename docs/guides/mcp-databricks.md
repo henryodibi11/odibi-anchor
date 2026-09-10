@@ -19,27 +19,30 @@ Use runtimes in this order:
 2. The standard-library `anchor` CLI where only a process interface is available.
 3. Optional MCP stdio when an MCP client is required.
 
-For direct Python in a Databricks notebook, configure an external writable `ANCHOR_HOME` and bind one
+For direct Python in a Databricks notebook, configure local compute storage and bind one
 existing managed project explicitly; do not use notebook cwd, workspace visibility,
 authentication, or `.active_project` as routing/task authority:
 
 ```python
 import os
-from odibi_anchor.bootstrap import init
+from odibi_anchor import launch, register_project
 
-os.environ["ANCHOR_HOME"] = "/absolute/writable/odibi-anchor-state"
-anchor, ROOT, MANIFEST = init(
-    root="/absolute/checked-out-target",
-    project="existing-managed-project",
+os.environ["ANCHOR_HOME"] = "/tmp/odibi-anchor-state"
+registration = register_project(
+    anchor_home=os.environ["ANCHOR_HOME"],
+    project_id="exact-project-id",
+    project_root="/absolute/checked-out-target",
 )
+anchor = launch(**registration["next_operation"]["arguments"])
 diagnostics = anchor("concurrency", command="inspect")
 ```
 
 The paths are placeholders and must be supplied by the host; do not hard-code credentials or copy
-private state into the product repository. Direct-Python Databricks concurrency is **not
-qualified** by orb/Linux results. Until the full two-process, crash/restart, migration, recovery,
-and packaging matrix runs on the exact Databricks filesystem/runtime profile, use one writer and a
-per-project `ANCHOR_HOME`. The archived HTTP App remains unqualified regardless of these settings.
+private state into the product repository. `/tmp` is session-scoped. Stop every Anchor process
+before copying a closed backup to durable storage, and restore it to local storage before reuse.
+Workspace Files, DBFS, and Volumes are not supported locations for the live SQLite database.
+Direct-Python Databricks concurrency is **not qualified** by orb/Linux results. Use one writer and
+a per-project `ANCHOR_HOME`. The archived HTTP App remains unqualified regardless of these settings.
 
 See the [runtime rollout guide](runtime-rollout.md) for supported commands and
 compatibility guarantees. A future HTTP design requires a separate approved spec for

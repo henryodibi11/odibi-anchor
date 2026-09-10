@@ -81,6 +81,48 @@ def launch(
     return anchor
 
 
+def register_project(
+    *,
+    anchor_home: str | os.PathLike[str],
+    project_id: str,
+    project_root: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Create one explicit managed-project route before first launch."""
+    text = os.fspath(anchor_home)
+    home = Path(text)
+    if not text or "\n" in text or "\r" in text or text.startswith("~") or not home.is_absolute():
+        raise ValueError("ANCHOR_HOME must be an explicit absolute, single-line path")
+    home = home.resolve()
+    if home.exists() and not home.is_dir():
+        raise ValueError("ANCHOR_HOME must be a directory")
+    target = _absolute_directory(project_root, "ANCHOR_PROJECT_ROOT")
+    from odibi_anchor._dispatcher._project import _normalize_project_id, project_action
+
+    if not isinstance(project_id, str) or _normalize_project_id(project_id) != project_id:
+        raise ValueError("project_id must already be a normalized non-empty project ID")
+    home.mkdir(parents=True, exist_ok=True)
+    result = project_action(
+        home, "create", name=project_id, target=target, output_format="dict"
+    )
+    assert isinstance(result, dict)
+    return {
+        "kind": "startup_project_registration",
+        "status": "created",
+        "project_id": result["project_id"],
+        "anchor_home": str(home),
+        "artifact_root": result["artifact_root"],
+        "target_root": result["target_root"],
+        "next_operation": {
+            "operation": "launch",
+            "arguments": {
+                "anchor_home": str(home),
+                "project_id": result["project_id"],
+                "project_root": result["target_root"],
+            },
+        },
+    }
+
+
 def _open_tasks(database: Path, project_id: str | None, target: Path | None) -> dict[str, Any]:
     if not database.is_file():
         return {"status": "unavailable", "count": None, "implication": "no state database exists"}
@@ -148,6 +190,31 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         "ANCHOR_PROJECT_ID": raw_project,
         "ANCHOR_PROJECT_ROOT": raw_target,
     }
+    next_operation = (
+        {
+            "operation": "launch",
+            "arguments": {
+                "anchor_home": str(paths.anchor_home),
+                "project_id": route.project_id,
+                "project_root": route.target_root,
+            },
+        }
+        if route is not None
+        else {
+            "operation": (
+                "register_project"
+                if raw_project and target and not (
+                    paths.anchor_home / "workspace" / "projects" / raw_project / "PROJECT.md"
+                ).is_file()
+                else "resolve_route_inputs"
+            ),
+            "arguments": {
+                "anchor_home": str(paths.anchor_home),
+                **({"project_id": raw_project} if raw_project else {}),
+                **({"project_root": str(target)} if target else {}),
+            },
+        }
+    )
     return {
         "kind": "startup_doctor",
         "read_only": True,
@@ -162,6 +229,7 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         "routing": {"status": "exact" if route else "ambiguous_or_invalid",
                     "diagnostics": route_binding_diagnostics(route) if route else None,
                     "reason": route_error},
+        "next_operation": next_operation,
         "tasks": _open_tasks(database, raw_project, target),
         "concurrency": {
             "status": "unqualified",
@@ -226,4 +294,4 @@ def install_guidance(target_root: str | os.PathLike[str]) -> dict[str, Any]:
     }
 
 
-__all__ = ["doctor", "install_guidance", "launch"]
+__all__ = ["doctor", "install_guidance", "launch", "register_project"]

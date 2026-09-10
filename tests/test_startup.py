@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -9,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from odibi_anchor.legacy_import import apply_legacy_import, plan_legacy_import
-from odibi_anchor.startup import doctor, install_guidance, launch
+from odibi_anchor.startup import doctor, install_guidance, launch, register_project
 
 
 def test_launch_binds_exact_route_and_returns_callable(tmp_path, monkeypatch):
@@ -54,6 +55,29 @@ def test_launch_derives_unique_project_from_verified_target(tmp_path, monkeypatc
     assert status["runtime"]["route_binding"]["project_id"] == "alpha"
 
 
+def test_register_project_prepares_exact_first_launch(tmp_path, monkeypatch):
+    home = tmp_path / "new-home"
+    target = tmp_path / "target"
+    target.mkdir()
+    for name in ("ANCHOR_HOME", "ANCHOR_PROJECT_ID", "ANCHOR_PROJECT_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+
+    result = register_project(anchor_home=home, project_id="alpha", project_root=target)
+
+    assert result["next_operation"] == {
+        "operation": "launch",
+        "arguments": {
+            "anchor_home": str(home),
+            "project_id": "alpha",
+            "project_root": str(target),
+        },
+    }
+    anchor = launch(**result["next_operation"]["arguments"])
+    assert anchor("status", output_format="dict")["runtime"]["route_binding"]["project_id"] == "alpha"
+    with pytest.raises(FileExistsError):
+        register_project(anchor_home=home, project_id="alpha", project_root=target)
+
+
 def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     home = tmp_path / "missing-home"
     target = tmp_path / "target"
@@ -67,6 +91,7 @@ def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     assert result["route_inputs"] == {"ANCHOR_HOME": str(home), "ANCHOR_PROJECT_ID": "alpha",
                                       "ANCHOR_PROJECT_ROOT": str(target)}
     assert result["routing"]["status"] == "ambiguous_or_invalid"
+    assert result["next_operation"]["operation"] == "register_project"
     assert result["tasks"]["status"] == "unavailable"
     assert result["concurrency"]["status"] == "unqualified"
     assert "secret" not in repr(result)
@@ -149,25 +174,53 @@ def test_legacy_import_plans_without_mutation_then_backs_up_and_copies(tmp_path)
     destination = tmp_path / "anchor"
     source.mkdir()
     _legacy_db(source / ".agent_memory.db")
-    (source / "workspace").mkdir()
+    managed = source / "workspace" / "projects" / "managed-project"
+    managed.mkdir(parents=True)
+    (managed / "PROJECT.md").write_text(
+        "---\nid: managed-project\nname: Managed\nstatus: active\n"
+        f"project_type: managed\ntarget_root: {managed}\n---\n"
+    )
     (source / "workspace" / "record.txt").write_text("legacy")
+    source_digest = hashlib.sha256((source / ".agent_memory.db").read_bytes()).hexdigest()
 
     plan = plan_legacy_import(source, anchor_home=destination)
     assert not destination.exists()
+    assert plan["live_history_imported"] is False
     result = apply_legacy_import(plan)
 
     assert result["status"] == "applied"
+    assert result["history_disposition"] == "verified_backup_only"
+    assert hashlib.sha256((source / ".agent_memory.db").read_bytes()).hexdigest() == source_digest
     assert (destination / "workspace" / "record.txt").read_text() == "legacy"
-    assert (destination / ".agent_memory.db").is_file()
-    assert (destination / "legacy-import-backups" / plan["plan_id"].split(":", 1)[1]
-            / ".agent_memory.db").is_file()
-    with sqlite3.connect(destination / ".agent_memory.db") as connection:
-        tables = {row[0] for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
-        assert "anchor_schema_versions" in tables
-        assert "cw_schema_versions" not in tables
+    assert not (destination / ".agent_memory.db").exists()
+    backup = (destination / "legacy-import-backups" / plan["plan_id"].split(":", 1)[1]
+              / ".agent_memory.db")
+    assert backup.is_file()
+    assert result["legacy_database_backup_sha256"] == hashlib.sha256(backup.read_bytes()).hexdigest()
+    with sqlite3.connect(backup) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    imported = (destination / "workspace" / "projects" / "managed-project" / "PROJECT.md")
+    assert f"target_root: {destination / 'workspace' / 'projects' / 'managed-project'}" in imported.read_text()
+
+
+def test_legacy_import_rejects_open_tasks_before_destination_mutation(tmp_path):
+    source = tmp_path / "cw"
+    destination = tmp_path / "anchor"
+    source.mkdir()
+    database = source / ".agent_memory.db"
+    _legacy_db(database)
+    (source / "workspace").mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE accepted_task_records (task_window_id TEXT PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE accepted_task_events "
+            "(task_window_id TEXT,event_type TEXT)"
+        )
+        connection.execute("INSERT INTO accepted_task_records VALUES ('ltw_open')")
+
+    with pytest.raises(RuntimeError, match="1 open task"):
+        plan_legacy_import(source, anchor_home=destination)
+    assert not destination.exists()
 
 
 def test_legacy_import_fails_closed_on_collision_newer_schema_and_cw_env(tmp_path, monkeypatch):
@@ -177,6 +230,7 @@ def test_legacy_import_fails_closed_on_collision_newer_schema_and_cw_env(tmp_pat
     source.mkdir()
     other.mkdir()
     destination.mkdir()
+    (source / "workspace").mkdir()
     _legacy_db(source / ".agent_memory.db", overrides={"memory_lifecycle": (999, "f" * 64)})
     _legacy_db(other / ".agent_memory.db")
     monkeypatch.setenv("CW_HOME", str(other))
@@ -185,7 +239,6 @@ def test_legacy_import_fails_closed_on_collision_newer_schema_and_cw_env(tmp_pat
         plan_legacy_import(source, anchor_home=destination)
 
     (source / ".agent_memory.db").unlink()
-    (source / "workspace").mkdir()
     (destination / "workspace").mkdir()
     with pytest.raises(RuntimeError, match="destination collision"):
         plan_legacy_import(source, anchor_home=destination)

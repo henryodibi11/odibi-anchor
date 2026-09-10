@@ -65,18 +65,20 @@ Install the pinned public release in a Databricks notebook:
 dbutils.library.restartPython()
 ```
 
-Then bind external durable state and the exact Git folder checkout. No source clone is required:
+Then bind local compute state and the exact Git folder checkout. No source clone is required:
 
 ```python
 import os
 
-os.environ["ANCHOR_HOME"] = "/Volumes/<catalog>/<schema>/<volume>/anchor-state"
+os.environ["ANCHOR_HOME"] = "/tmp/anchor-state"  # local compute disk; session-scoped
 os.environ["ANCHOR_PROJECT_ID"] = "my-databricks-project"
 os.environ["ANCHOR_PROJECT_ROOT"] = "/Workspace/Users/<user>/<git-folder>"
 
-from odibi_anchor import doctor, launch
+from odibi_anchor import doctor, launch, register_project
 
 startup = doctor()
+if startup["next_operation"]["operation"] == "register_project":
+    registration = register_project(**startup["next_operation"]["arguments"])
 anchor = launch(
     anchor_home=os.environ["ANCHOR_HOME"],
     project_id=os.environ["ANCHOR_PROJECT_ID"],
@@ -88,7 +90,12 @@ orientation = anchor("orient", output_format="dict")
 Run `install_guidance(project_root)` once when that repository should receive the packaged
 `.assistant` skills and `.assistant_instructions.md`. Existing guidance is never overwritten.
 
-`ANCHOR_HOME` must be durable, writable, and outside the installed package/source checkout. The managed project must already register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md) for host limitations.
+`ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
+checkout. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Stop all
+Anchor processes before copying a closed backup to durable storage such as a Volume; restore it
+to qualified local storage before reuse. Do not run live SQLite state from Workspace Files,
+DBFS, Volumes, or another network/distributed filesystem. The managed project must already
+register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md).
 
 ## Import legacy v0.11.0 state
 
@@ -106,8 +113,11 @@ plan = plan_legacy_import(
 result = apply_legacy_import(plan)
 ```
 
-The importer fails closed on destination collisions or incompatible/newer schemas, creates
-a verified backup before conversion, and leaves the source unchanged.
+The importer fails closed on destination collisions, incompatible/newer schemas, symlinks,
+ambiguous managed-project targets, or open tasks. It copies project artifacts, rewrites only
+exact managed-project self-targets, and leaves the source unchanged. Legacy database history
+is preserved in a verified backup but is not activated: its branded task/memory payloads are
+not an Anchor runtime contract. The first Anchor launch creates a fresh live database and task.
 
 ## Routing and concurrent runtimes
 

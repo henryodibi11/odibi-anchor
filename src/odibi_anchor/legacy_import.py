@@ -4,12 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-_COPY_NAMES = (".agent_memory.db", "workspace")
+_COPY_NAMES = ("workspace",)
 _LEGACY_SCHEMA_TABLE = "cw_schema_versions"
 _ANCHOR_SCHEMA_TABLE = "anchor_schema_versions"
 _LEGACY_V0110_SCHEMAS = {
@@ -95,6 +96,72 @@ def _schema_versions(database: Path) -> list[dict[str, Any]]:
     return versions
 
 
+def _open_task_count(database: Path) -> int:
+    """Return exact open legacy task count without loading untrusted payloads."""
+    connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if "accepted_task_records" not in tables:
+            return 0
+        if "accepted_task_events" not in tables:
+            raise RuntimeError("legacy task authority tables are incomplete")
+        return int(connection.execute(
+            "SELECT COUNT(*) FROM accepted_task_records r WHERE NOT EXISTS "
+            "(SELECT 1 FROM accepted_task_events e "
+            "WHERE e.task_window_id=r.task_window_id AND e.event_type='closed')"
+        ).fetchone()[0])
+    finally:
+        connection.close()
+
+
+def _project_rewrites(source: Path, destination: Path) -> list[dict[str, str]]:
+    """Validate descriptors and plan exact self-target rewrites for managed projects."""
+    workspace = source / "workspace"
+    for path in workspace.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError("legacy workspace contains a symlink and cannot be imported safely")
+    projects = workspace / "projects"
+    rewrites: list[dict[str, str]] = []
+    if not projects.is_dir():
+        return rewrites
+    for descriptor in sorted(projects.glob("*/PROJECT.md")):
+        text = descriptor.read_text(encoding="utf-8")
+        kind = re.search(r"(?m)^project_type:\s*(\S+)\s*$", text)
+        target = re.search(r"(?m)^target_root:\s*(.+?)\s*$", text)
+        if kind is None or target is None:
+            raise RuntimeError(f"legacy project descriptor is incomplete: {descriptor.parent.name}")
+        if kind.group(1) != "managed":
+            continue
+        old_target = Path(target.group(1)).resolve()
+        expected = descriptor.parent.resolve()
+        if old_target != expected:
+            raise RuntimeError(
+                f"managed legacy project has an ambiguous target: {descriptor.parent.name}"
+            )
+        new_target = destination / "workspace" / "projects" / descriptor.parent.name
+        rewrites.append({
+            "project_id": descriptor.parent.name,
+            "descriptor_sha256": hashlib.sha256(descriptor.read_bytes()).hexdigest(),
+            "old_target": str(old_target),
+            "new_target": str(new_target.resolve()),
+        })
+    return rewrites
+
+
+def _workspace_digest(workspace: Path) -> str:
+    """Bind the import plan to every copied path and file byte."""
+    digest = hashlib.sha256()
+    for path in sorted(workspace.rglob("*"), key=lambda item: item.relative_to(workspace).as_posix()):
+        relative = path.relative_to(workspace).as_posix()
+        digest.update(relative.encode("utf-8") + b"\0")
+        if path.is_file():
+            digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _backup_database(source: Path, destination: Path) -> None:
     """Create a transactionally consistent SQLite backup and verify it."""
     source_connection = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
@@ -106,33 +173,6 @@ def _backup_database(source: Path, destination: Path) -> None:
     finally:
         destination_connection.close()
         source_connection.close()
-
-
-def _convert_database(database: Path) -> None:
-    """Convert the exact v0.11.0 schema authority to Anchor naming atomically."""
-    supported = _supported_schemas()
-    connection = sqlite3.connect(database)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            f"ALTER TABLE {_LEGACY_SCHEMA_TABLE} RENAME TO {_ANCHOR_SCHEMA_TABLE}"
-        )
-        for domain, (_version, legacy_checksum) in _LEGACY_V0110_SCHEMAS.items():
-            anchor_checksum = supported[domain][1]
-            if anchor_checksum != legacy_checksum:
-                connection.execute(
-                    f"UPDATE {_ANCHOR_SCHEMA_TABLE} SET schema_sha256=? "
-                    "WHERE domain=? AND schema_sha256=?",
-                    (anchor_checksum, domain, legacy_checksum),
-                )
-        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise RuntimeError("converted database integrity check failed")
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
 
 def plan_legacy_import(
@@ -151,14 +191,27 @@ def plan_legacy_import(
     collisions = [name for name in selected if (destination / name).exists()]
     if collisions:
         raise RuntimeError("destination collision: " + ", ".join(collisions))
-    versions = _schema_versions(source / ".agent_memory.db")
+    database = source / ".agent_memory.db"
+    versions = _schema_versions(database)
+    open_tasks = _open_task_count(database)
+    if open_tasks:
+        raise RuntimeError(
+            f"legacy database contains {open_tasks} open task(s); close them before import"
+        )
+    rewrites = _project_rewrites(source, destination)
+    workspace_sha256 = _workspace_digest(source / "workspace")
     identity = hashlib.sha256(json.dumps(
         {"source": str(source), "destination": str(destination), "selected": selected,
-         "schemas": versions}, sort_keys=True, separators=(",", ":")
+         "schemas": versions, "project_rewrites": rewrites,
+         "workspace_sha256": workspace_sha256},
+        sort_keys=True, separators=(",", ":")
     ).encode()).hexdigest()
     return {"kind": "legacy_import_plan", "read_only": True, "source_cw_home": str(source),
             "anchor_home": str(destination), "selected": selected, "schemas": versions,
-            "legacy_version": "0.11.0", "schema_conversion": "cw_to_anchor",
+            "legacy_version": "0.11.0", "project_rewrites": rewrites,
+            "workspace_sha256": workspace_sha256,
+            "open_tasks": 0, "live_history_imported": False,
+            "history_disposition": "backup_only",
             "plan_id": f"sha256:{identity}", "applicable": True}
 
 
@@ -176,6 +229,9 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
     if backup.exists():
         raise RuntimeError("legacy import backup collision")
     backup.mkdir(parents=True)
+    source_database = source / ".agent_memory.db"
+    backup_database = backup / ".agent_memory.db"
+    _backup_database(source_database, backup_database)
     attempted: list[str] = []
     try:
         for name in plan["selected"]:
@@ -183,26 +239,30 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
             source_path = source / name
             backup_path = backup / name
             target_path = destination / name
-            if name == ".agent_memory.db":
-                _backup_database(source_path, backup_path)
-                shutil.copy2(backup_path, target_path)
-                _convert_database(target_path)
-            elif source_path.is_dir():
+            if source_path.is_dir():
                 shutil.copytree(source_path, backup_path)
                 shutil.copytree(backup_path, target_path)
             else:
                 shutil.copy2(source_path, backup_path)
                 shutil.copy2(backup_path, target_path)
+        for rewrite in plan["project_rewrites"]:
+            descriptor = destination / "workspace" / "projects" / rewrite["project_id"] / "PROJECT.md"
+            text = descriptor.read_text(encoding="utf-8")
+            old = f"target_root: {rewrite['old_target']}"
+            new = f"target_root: {rewrite['new_target']}"
+            if text.count(old) != 1:
+                raise RuntimeError("legacy managed-project target changed during import")
+            descriptor.write_text(text.replace(old, new, 1), encoding="utf-8")
     except Exception:
         for name in attempted:
             path = destination / name
             shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
         raise
-    database = destination / ".agent_memory.db"
-    database_sha256 = hashlib.sha256(database.read_bytes()).hexdigest() if database.is_file() else None
+    database_sha256 = hashlib.sha256(backup_database.read_bytes()).hexdigest()
     return {"kind": "legacy_import_result", "status": "applied", "backup": str(backup),
-            "copied": attempted, "database_sha256": database_sha256,
-            "schema_conversion": plan["schema_conversion"], "plan_id": plan["plan_id"]}
+            "copied": attempted, "legacy_database_backup_sha256": database_sha256,
+            "live_history_imported": False, "history_disposition": "verified_backup_only",
+            "project_rewrites": plan["project_rewrites"], "plan_id": plan["plan_id"]}
 
 
 __all__ = ["apply_legacy_import", "plan_legacy_import"]

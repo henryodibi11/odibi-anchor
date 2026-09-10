@@ -15,6 +15,7 @@ import sys
 import tarfile
 import textwrap
 import time
+import tomllib
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -23,11 +24,6 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1886,7 +1882,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
     def run_probe(mode: str, home: Path, version: int | None = None) -> dict[str, object]:
         env = {**environment, "ANCHOR_HOME": str(home), "ANCHOR_MEMORY_DB": str(home / ".agent_memory.db"),
                "ANCHOR_PROJECT_ROOT": str(target), "TARGET": str(target), "MODE": mode,
-               "PYTHON": str(python), "ANCHOR_MCP_GATEWAY_ONLY": "1"}
+               "PYTHON": str(python)}
         env["PROJECT_A"], env["PROJECT_B"] = str(tmp_path / "project-a"), str(tmp_path / "project-b")
         if version is not None:
             env["VERSION"] = str(version)
@@ -3399,7 +3395,6 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             async def main():
                 server_environment = os.environ.copy()
                 server_environment.pop("PYTHONPATH", None)
-                server_environment["ANCHOR_MCP_GATEWAY_ONLY"] = "1"
                 transport = StdioTransport(
                     command=os.environ["CANDIDATE_PYTHON"],
                     args=["-m", "odibi_anchor.mcp_server"],

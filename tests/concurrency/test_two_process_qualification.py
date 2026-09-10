@@ -105,7 +105,6 @@ class StdioWorker:
             "ANCHOR_PROJECT_ID": project,
             "ANCHOR_PROJECT_ROOT": str(target),
             "ANCHOR_RUNTIME_INSTANCE_ID": runtime,
-            "ANCHOR_MCP_GATEWAY_ONLY": "1",
         }
         self.project = project
         self.target = target

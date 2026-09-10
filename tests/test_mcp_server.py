@@ -43,7 +43,7 @@ def _reset_runtime_route_binding(monkeypatch):
 # ─── Pure helpers ────────────────────────────────────────────────────────────
 
 
-def test_gateway_only_environment_removes_workspace_tools() -> None:
+def test_default_server_exposes_only_governed_gateway_tools() -> None:
     script = """
 import asyncio
 import json
@@ -58,7 +58,6 @@ print(json.dumps(sorted(tool.name for tool in tools)))
     )
     env = {
         **os.environ,
-        "ANCHOR_MCP_GATEWAY_ONLY": "1",
         "PYTHONPATH": python_path,
     }
     completed = subprocess.run(
