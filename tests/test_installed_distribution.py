@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -542,24 +541,6 @@ def test_package_metadata_has_one_source_authority() -> None:
         ],
     }
 
-    setup_path = REPOSITORY_ROOT / "setup.py"
-    setup_tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-    setup_calls = [
-        node
-        for node in ast.walk(setup_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setup"
-    ]
-    assert len(setup_calls) == 1
-    assert setup_calls[0].args == []
-    assert setup_calls[0].keywords == []
-    imported_names = {
-        alias.name
-        for node in setup_tree.body
-        if isinstance(node, ast.ImportFrom) and node.module == "setuptools"
-        for alias in node.names
-    }
-    assert imported_names == {"setup"}
-
     init_source = (REPOSITORY_ROOT / "src" / "odibi_anchor" / "__init__.py").read_text(encoding="utf-8")
     assert '"0.1.0"' not in init_source
     assert '"0.7.1"' not in init_source
@@ -570,7 +551,7 @@ def _copy_package_candidate(destination: Path) -> None:
     """Copy only the files consumed by the configured Hatch build."""
     destination.mkdir()
     for name in (
-        "pyproject.toml", "setup.py", "README.md", ".assistant_instructions.md", "agent_bootstrap.py"
+        "pyproject.toml", "README.md", ".assistant_instructions.md", "agent_bootstrap.py"
     ):
         shutil.copy2(REPOSITORY_ROOT / name, destination / name)
     for name in ("src", ".assistant", "tools"):
@@ -697,19 +678,6 @@ def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     assert probe["requirements"] == EXPECTED_OPTIONAL_REQUIREMENTS
 
 
-def _qualify_setup_introspection(source: Path, python: Path, environment: dict[str, str]) -> None:
-    """Qualify only the three supported direct setup.py metadata commands."""
-    assert _run([str(python), "setup.py", "--name"], cwd=source, environment=environment).stdout.strip() == (
-        "odibi-anchor"
-    )
-    assert _run([str(python), "setup.py", "--version"], cwd=source, environment=environment).stdout.strip() == "0.1.0"
-    _run([str(python), "setup.py", "egg_info"], cwd=source, environment=environment)
-    egg_info = list(source.rglob("*.egg-info"))
-    assert len(egg_info) == 1
-    shutil.rmtree(egg_info[0])
-    assert not list(source.rglob("*.egg-info"))
-
-
 def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     """Build and inspect raw, editable, wheel, sdist, and legacy provenance."""
     candidate = audit_root / "candidate%20source"
@@ -773,7 +741,6 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     with tarfile.open(sdist, "r:gz") as sdist_archive:
         sdist_names = sdist_archive.getnames()
         pkg_info_name = next(name for name in sdist_names if name.endswith("/PKG-INFO"))
-        setup_name = next(name for name in sdist_names if name.endswith("/setup.py"))
         instructions_name = next(name for name in sdist_names if name.endswith("/.assistant_instructions.md"))
         assistant_launcher_name = next(
             name for name in sdist_names if name.endswith("/.assistant/agent_bootstrap.py")
@@ -784,17 +751,14 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             if name.endswith("/agent_bootstrap.py") and name != assistant_launcher_name
         )
         pkg_info_file = sdist_archive.extractfile(pkg_info_name)
-        setup_file = sdist_archive.extractfile(setup_name)
         instructions_file = sdist_archive.extractfile(instructions_name)
         agent_bootstrap_file = sdist_archive.extractfile(agent_bootstrap_name)
         assistant_launcher_file = sdist_archive.extractfile(assistant_launcher_name)
         assert pkg_info_file is not None
-        assert setup_file is not None
         assert instructions_file is not None
         assert agent_bootstrap_file is not None
         assert assistant_launcher_file is not None
         sdist_metadata = _metadata_contract(pkg_info_file.read())
-        assert setup_file.read() == (candidate / "setup.py").read_bytes()
         assert instructions_file.read() == (candidate / ".assistant_instructions.md").read_bytes()
         assert agent_bootstrap_file.read() == (candidate / "agent_bootstrap.py").read_bytes()
         assert assistant_launcher_file.read() == (
@@ -1223,17 +1187,6 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     assert sdist_factory == wheel_factory
     sdist_cw = audit_root / "sdist-venv" / ("Scripts/anchor.exe" if os.name == "nt" else "bin/anchor")
     _run([str(sdist_cw), "--help"], cwd=audit_root, environment=environment)
-
-    current_setup = audit_root / "setup-current"
-    shutil.copytree(candidate, current_setup)
-    _qualify_setup_introspection(current_setup, Path(sys.executable), environment)
-    # Setuptools 65 uses pkgutil.ImpImporter, which Python 3.12 removed.
-    if sys.version_info < (3, 12):
-        old_setup = audit_root / "setup-65"
-        shutil.copytree(candidate, old_setup)
-        old_setup_python = _create_venv(audit_root / "setup-65-venv", environment)
-        _run([str(old_setup_python), "-m", "pip", "install", "setuptools==65.5.1"], environment=environment)
-        _qualify_setup_introspection(old_setup, old_setup_python, environment)
 
     python_floor_probe = _run(
         [

@@ -6,8 +6,8 @@
 
 - Assurance schema version: `1.0`
 - Core catalog version: `anchor-assurance-core/1.1`
-- Canonical eleven-control core catalog SHA-256: `c6a160d8a514cf185ccf96f8a4a3da8afa9d449c24f2ce42cdff0afc6c553f8a`
-- Combined core and overlay catalog SHA-256: `db82b8c8064295f44bd5293ba44320b22935fdaa83c4b25cc745d7d766356566`
+- Canonical eleven-control core catalog SHA-256: `a64fad1c5f7fd1834daf1b087667191f4ec0a15e2e7066ce66016fba6d2c1e0e`
+- Combined core and overlay catalog SHA-256: `f58e6ca37d29134e0ace3f94b96315746aa1fd324a1cd120e5f5da3e0cba5d8c`
 - Mode: `shadow`
 
 The assurance kernel is advisory. It does not block, authorize, satisfy an existing obligation,

@@ -3,8 +3,8 @@
 - **Reference ID:** `assurance.standards-overlays`
 - **Authored-reference version:** `1.0.0`
 - **Catalog baseline:** `1.0.0`
-- **Canonical overlay catalog SHA-256:** `7bbdea003dec8ad8a36a56340d490194ca2ffb43294908a3eb6bb93e224ffb83`
-- **Combined core and overlay catalog SHA-256:** `db82b8c8064295f44bd5293ba44320b22935fdaa83c4b25cc745d7d766356566`
+- **Canonical overlay catalog SHA-256:** `0277bea95ab65a69255794fe9e4d651a3fcf95548b6b980aa63f93de7ccc473b`
+- **Combined core and overlay catalog SHA-256:** `f58e6ca37d29134e0ace3f94b96315746aa1fd324a1cd120e5f5da3e0cba5d8c`
 - **Captured and last reviewed:** 2026-08-20
 - **Verification label:** `documented`
 

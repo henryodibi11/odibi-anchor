@@ -23,6 +23,6 @@
       }
     }
   },
-  "policy_digest": "sha256:ba83ee0b372085829d7a20c74e6fa8ac278b7599585af44c6aa355204bd056f3",
+  "policy_digest": "sha256:91f01a9d279ff1355757033ce30807b0a510afc6b2cb9394889f26f78b915502",
   "policy_version": "anchor-assurance-promotion/1.0"
 }

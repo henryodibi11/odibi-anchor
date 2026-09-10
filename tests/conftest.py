@@ -22,6 +22,14 @@ os.environ.setdefault(
     "ANCHOR_MEMORY_DB", os.path.join(tempfile.gettempdir(), "anchor_test_agent_memory.db")
 )
 
+# The orb can require signed commits globally. Test repositories are disposable
+# and deliberately unsigned, so override signing only for test subprocesses.
+os.environ.setdefault("GIT_CONFIG_COUNT", "2")
+os.environ.setdefault("GIT_CONFIG_KEY_0", "commit.gpgsign")
+os.environ.setdefault("GIT_CONFIG_VALUE_0", "false")
+os.environ.setdefault("GIT_CONFIG_KEY_1", "tag.gpgsign")
+os.environ.setdefault("GIT_CONFIG_VALUE_1", "false")
+
 # Ensure src/ is on path for test discovery
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 

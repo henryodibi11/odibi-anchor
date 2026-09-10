@@ -4,6 +4,9 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .venv/
+/dist/
+/dist-a/
+/dist-b/
 
 # OS
 .DS_Store

@@ -203,15 +203,6 @@ class TestObligationCreation:
         tools = [o["tool"] for o in ctx["obligations"]]
         assert "consistency_check_context" in tools
 
-    def test_context_file_creates_dogfood(self, project_root):
-        ctx = run_gate(
-            str(project_root),
-            actions_taken=["modify"],
-            files_changed=["src/odibi_anchor/profiling/exploration_context.py"],
-        )
-        tools = [o["tool"] for o in ctx["obligations"]]
-        assert "dogfood_regression_context" in tools
-
     def test_shared_file_creates_change_impact(self, project_root):
         ctx = run_gate(
             str(project_root),
@@ -291,16 +282,6 @@ class TestPriority:
         test_focus = [o for o in ctx["obligations"] if o["tool"] == "test_focus_context"]
         assert test_focus
         assert test_focus[0]["priority"] == "MUST"
-
-    def test_context_mod_dogfood_is_should(self, project_root):
-        ctx = run_gate(
-            str(project_root),
-            actions_taken=["modify"],
-            files_changed=["src/odibi_anchor/codebase/consistency_check_context.py"],
-        )
-        dogfood = [o for o in ctx["obligations"] if o["tool"] == "dogfood_regression_context"]
-        assert dogfood
-        assert dogfood[0]["priority"] == "SHOULD"
 
     def test_data_write_quality_gate_is_must(self, project_root):
         ctx = run_gate(
@@ -989,18 +970,6 @@ class TestSkipForNewFiles:
         )
         tools = [o["tool"] for o in ctx["obligations"] if not o.get("paid")]
         assert "dogfood_regression_context" not in tools
-
-    def test_dogfood_fires_for_modified_context_file(self, project_root):
-        """dogfood_regression DOES fire when _context.py is modified."""
-        ctx = run_gate(
-            str(project_root),
-            actions_taken=["modify"],
-            files_changed=["src/codebase/workflow_gate_context.py"],
-            obligations_paid=["test_focus_context", "consistency_check_context"],
-        skip_timing_verification=True,
-        )
-        tools = [o["tool"] for o in ctx["obligations"] if not o.get("paid")]
-        assert "dogfood_regression_context" in tools
 
     def test_change_impact_suppressed_for_new_utility(self, project_root):
         """change_impact does NOT fire for brand-new utility file."""

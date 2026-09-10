@@ -2,3 +2,16 @@ Odibi Anchor
 Copyright 2025-2026 Henry Odibi
 
 This product is licensed under the Apache License, Version 2.0.
+
+The packaged assistant references include bounded source/documentation snapshots from:
+
+- Vega-Altair 6.2.2 (BSD-3-Clause)
+- Deneb 1.9.1 (MIT)
+- Pydantic 2.13.4 (MIT)
+- Vega 6.3.1 (BSD-3-Clause)
+- Vega-Lite 6.4.3 (BSD-3-Clause)
+- vl-convert 1.9.0 (BSD-3-Clause)
+
+The applicable copyright notices, license terms, and disclaimers are preserved in each
+`.assistant/references/snapshots/<project-version>/LICENSE` file. These projects are
+independent of Odibi Anchor and retain their respective ownership and licenses.
