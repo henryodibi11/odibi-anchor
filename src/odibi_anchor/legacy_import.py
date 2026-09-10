@@ -10,6 +10,17 @@ from pathlib import Path
 from typing import Any
 
 _COPY_NAMES = (".agent_memory.db", "workspace")
+_LEGACY_SCHEMA_TABLE = "cw_schema_versions"
+_ANCHOR_SCHEMA_TABLE = "anchor_schema_versions"
+_LEGACY_V0110_SCHEMAS = {
+    "task_adoption": (1, "31108b8a8d0073550228a3f7ce3b1e71ad13a486a8e8483ffb9682a32d0930f9"),
+    "memory_lifecycle": (3, "cbbb3e32bdabb280f2212368dcef6770ebb0489f749ecdc1e563b4d928bbbdd7"),
+    "memory_promotion": (4, "52d9c0f4d06372a731805225cb696f08ab363c3ec2ac815c1162d85a5863251f"),
+    "memory_verifier": (1, "4058c26e360331d60693e5541cb1bfc854e76ffb63e54fdbe495149f5a996aa0"),
+    "task_authority": (1, "f1caf8ca47c6ba2b1562630e647cdeba3fd6629ef4a1e43c0379b649dcda9970"),
+    "task_execution": (2, "20cbd3cc5d3f4b9a746de84d39321c82797623fe64e8cf1ffea15e9ead7353a7"),
+    "structured_learning": (2, "cb34c4a8295935d1fa0032c8595ab22dc4333166b7a4984c74d90539b098f561"),
+}
 
 
 def _supported_schemas() -> dict[str, tuple[int, str]]:
@@ -60,10 +71,12 @@ def _schema_versions(database: Path) -> list[dict[str, Any]]:
             tables = {row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )}
-            if "anchor_schema_versions" not in tables:
-                return []
+            if _ANCHOR_SCHEMA_TABLE in tables:
+                raise RuntimeError("selected state is already an Odibi Anchor home")
+            if _LEGACY_SCHEMA_TABLE not in tables:
+                raise RuntimeError("legacy database has no supported schema authority")
             rows = connection.execute(
-                "SELECT domain,version,schema_sha256 FROM anchor_schema_versions ORDER BY domain"
+                f"SELECT domain,version,schema_sha256 FROM {_LEGACY_SCHEMA_TABLE} ORDER BY domain"
             ).fetchall()
         finally:
             connection.close()
@@ -71,16 +84,55 @@ def _schema_versions(database: Path) -> list[dict[str, Any]]:
         raise RuntimeError("legacy database is incompatible or unreadable") from exc
     versions = [{"domain": row[0], "version": row[1], "schema_sha256": row[2]} for row in rows]
     supported = _supported_schemas()
+    if {item["domain"] for item in versions} != set(_LEGACY_V0110_SCHEMAS):
+        raise RuntimeError("legacy database does not match the complete v0.11.0 schema set")
     for item in versions:
         authority = supported.get(item["domain"])
-        version = item["version"]
-        checksum = item["schema_sha256"]
-        if (authority is None or type(version) is not int or version < 1
-                or version > authority[0] or not isinstance(checksum, str)
-                or len(checksum) != 64
-                or (version == authority[0] and checksum != authority[1])):
+        legacy_authority = _LEGACY_V0110_SCHEMAS.get(item["domain"])
+        observed = (item["version"], item["schema_sha256"])
+        if authority is None or observed != legacy_authority or authority[0] != observed[0]:
             raise RuntimeError("legacy database has a newer or incompatible schema")
     return versions
+
+
+def _backup_database(source: Path, destination: Path) -> None:
+    """Create a transactionally consistent SQLite backup and verify it."""
+    source_connection = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+    destination_connection = sqlite3.connect(destination)
+    try:
+        source_connection.backup(destination_connection)
+        if destination_connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("legacy database backup integrity check failed")
+    finally:
+        destination_connection.close()
+        source_connection.close()
+
+
+def _convert_database(database: Path) -> None:
+    """Convert the exact v0.11.0 schema authority to Anchor naming atomically."""
+    supported = _supported_schemas()
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            f"ALTER TABLE {_LEGACY_SCHEMA_TABLE} RENAME TO {_ANCHOR_SCHEMA_TABLE}"
+        )
+        for domain, (_version, legacy_checksum) in _LEGACY_V0110_SCHEMAS.items():
+            anchor_checksum = supported[domain][1]
+            if anchor_checksum != legacy_checksum:
+                connection.execute(
+                    f"UPDATE {_ANCHOR_SCHEMA_TABLE} SET schema_sha256=? "
+                    "WHERE domain=? AND schema_sha256=?",
+                    (anchor_checksum, domain, legacy_checksum),
+                )
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("converted database integrity check failed")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def plan_legacy_import(
@@ -106,6 +158,7 @@ def plan_legacy_import(
     ).encode()).hexdigest()
     return {"kind": "legacy_import_plan", "read_only": True, "source_cw_home": str(source),
             "anchor_home": str(destination), "selected": selected, "schemas": versions,
+            "legacy_version": "0.11.0", "schema_conversion": "cw_to_anchor",
             "plan_id": f"sha256:{identity}", "applicable": True}
 
 
@@ -130,7 +183,11 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
             source_path = source / name
             backup_path = backup / name
             target_path = destination / name
-            if source_path.is_dir():
+            if name == ".agent_memory.db":
+                _backup_database(source_path, backup_path)
+                shutil.copy2(backup_path, target_path)
+                _convert_database(target_path)
+            elif source_path.is_dir():
                 shutil.copytree(source_path, backup_path)
                 shutil.copytree(backup_path, target_path)
             else:
@@ -141,8 +198,11 @@ def apply_legacy_import(plan: dict[str, Any]) -> dict[str, Any]:
             path = destination / name
             shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
         raise
+    database = destination / ".agent_memory.db"
+    database_sha256 = hashlib.sha256(database.read_bytes()).hexdigest() if database.is_file() else None
     return {"kind": "legacy_import_result", "status": "applied", "backup": str(backup),
-            "copied": attempted, "plan_id": plan["plan_id"]}
+            "copied": attempted, "database_sha256": database_sha256,
+            "schema_conversion": plan["schema_conversion"], "plan_id": plan["plan_id"]}
 
 
 __all__ = ["apply_legacy_import", "plan_legacy_import"]

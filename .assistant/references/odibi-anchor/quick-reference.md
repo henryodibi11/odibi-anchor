@@ -4,14 +4,16 @@
 
 ## Code-Modifying Sequence (RuntimeError where the runtime enforces it)
 
-Project routing: `init()` remembers the logical project. `anchor("project")` reports its
-managed artifact root and optional external code/data target.
+Project routing: `odibi_anchor.launch(...)` binds one immutable managed project and exact
+target. A unique exact target match can supply the project ID; ambiguity requires an explicit
+ID. `workspace/.active_project` is not routing authority. Run `anchor doctor` before startup
+when the home, route, host, or task implications are uncertain.
 
 Substantial problem: `anchor("problem", "create", title="...")`; capture stable `I*`,
 `H*`, and `E*` entries; resume with `anchor("problem", "resume", "PRB-...")`.
 
 ```
-1. bootstrap         → run repository-root agent_bootstrap.py in-process; retain anchor and structured orientation
+1. bootstrap         → use installed `launch()` or run `.assistant/agent_bootstrap.py` in-process; retain anchor and structured orientation
 2. structured orientation → inspect returned status and prior gate evidence; task memory is deferred
 3. anchor("new_session", name="feature_name", inline=True) → initialize this logical session
 4. anchor("task", "describe intended work", goal="state intended outcome", mode="implementation",

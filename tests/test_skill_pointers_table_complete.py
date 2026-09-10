@@ -1795,7 +1795,7 @@ def test_assistant_launcher_invalid_fixed_sibling_does_not_scan(tmp_path, monkey
     _write_trampoline_target(undiscoverable, sentinel=sentinel)
     monkeypatch.delenv("ANCHOR_SOURCE_CHECKOUT", raising=False)
 
-    with pytest.raises(RuntimeError, match="no workspace scan was attempted"):
+    with pytest.raises(FileNotFoundError, match="No managed project target matches"):
         runpy.run_path(str(launcher))
 
     assert not sentinel.exists()

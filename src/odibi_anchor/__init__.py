@@ -146,6 +146,7 @@ __all__ = [
     "doctor",
     "get_human_input_request",
     "handoff_context",
+    "install_guidance",
     "launch",
     "notify_human",
     "plan_legacy_import",
@@ -161,6 +162,7 @@ __all__ = [
 _LAZY_IMPORTS = {
     "launch": ("odibi_anchor.startup", "launch"),
     "doctor": ("odibi_anchor.startup", "doctor"),
+    "install_guidance": ("odibi_anchor.startup", "install_guidance"),
     "plan_legacy_import": ("odibi_anchor.legacy_import", "plan_legacy_import"),
     "apply_legacy_import": ("odibi_anchor.legacy_import", "apply_legacy_import"),
     "task_execution_context": ("odibi_anchor.planning", "task_execution_context"),

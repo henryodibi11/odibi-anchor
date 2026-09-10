@@ -1,9 +1,12 @@
 """Explicit, installed-distribution startup and read-only diagnostics."""
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -24,7 +27,7 @@ def _absolute_directory(value: str | os.PathLike[str], name: str) -> Path:
 def launch(
     *,
     anchor_home: str | os.PathLike[str],
-    project_id: str,
+    project_id: str | None = None,
     project_root: str | os.PathLike[str],
     output_format: str = "dict",
 ) -> Callable[..., Any]:
@@ -35,28 +38,44 @@ def launch(
     """
     home = _absolute_directory(anchor_home, "ANCHOR_HOME")
     target = _absolute_directory(project_root, "ANCHOR_PROJECT_ROOT")
-    if not isinstance(project_id, str) or not project_id.strip() or project_id != project_id.strip():
+    environment_project = os.environ.get("ANCHOR_PROJECT_ID")
+    if project_id is not None and (
+        not isinstance(project_id, str) or not project_id.strip() or project_id != project_id.strip()
+    ):
         raise ValueError("ANCHOR_PROJECT_ID must be a non-empty project ID")
+    if project_id is not None and environment_project not in (None, project_id):
+        raise RuntimeError("ANCHOR_PROJECT_ID conflicts with the requested startup route")
+    requested_project = project_id or environment_project
+
+    from odibi_anchor._dispatcher._project import resolve_route_binding
+
+    route = resolve_route_binding(
+        home, project=requested_project, target_hint=target,
+        runtime_instance_id=f"startup:{os.getpid()}",
+    )
 
     bindings = {
         "ANCHOR_HOME": str(home),
-        "ANCHOR_PROJECT_ID": project_id,
-        "ANCHOR_PROJECT_ROOT": str(target),
+        "ANCHOR_PROJECT_ID": route.project_id,
+        "ANCHOR_PROJECT_ROOT": route.target_root,
     }
+    previous = {name: os.environ.get(name) for name in bindings}
     for name, value in bindings.items():
         current = os.environ.get(name)
         if current is not None and current != value:
             raise RuntimeError(f"{name} conflicts with the requested startup route")
     os.environ.update(bindings)
 
-    from odibi_anchor._dispatcher._project import resolve_route_binding
     from odibi_anchor.bootstrap import init
 
-    route = resolve_route_binding(
-        home, project=project_id, target_hint=target,
-        runtime_instance_id=f"startup:{os.getpid()}",
-    )
-    anchor, _root, _manifest = init(route_binding=route, output_format=output_format)
+    try:
+        anchor, _root, _manifest = init(route_binding=route, output_format=output_format)
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     if not callable(anchor):
         raise RuntimeError("bootstrap did not return a callable Anchor dispatcher")
     return anchor
@@ -152,4 +171,59 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     }
 
 
-__all__ = ["doctor", "launch"]
+def install_guidance(target_root: str | os.PathLike[str]) -> dict[str, Any]:
+    """Copy the packaged agent contract into one explicit repository.
+
+    Existing guidance is never overwritten. Updating an installed contract requires
+    an explicit human-reviewed replacement rather than a silent package-side mutation.
+    """
+    target = _absolute_directory(target_root, "target_root")
+    from odibi_anchor._runtime_paths import resolve_resource_root
+
+    resources = resolve_resource_root()
+    sources = {
+        ".assistant": resources / ".assistant",
+        ".assistant_instructions.md": resources / ".assistant_instructions.md",
+    }
+    missing = [name for name, path in sources.items() if not path.exists()]
+    if missing:
+        raise RuntimeError("installed distribution is missing guidance resources: " + ", ".join(missing))
+    collisions = [name for name in sources if (target / name).exists()]
+    if collisions:
+        raise RuntimeError("guidance destination collision: " + ", ".join(collisions))
+
+    digest = hashlib.sha256()
+    file_count = 0
+    for _name, source in sources.items():
+        candidates = source.rglob("*") if source.is_dir() else (source,)
+        for candidate in sorted(path for path in candidates if path.is_file()):
+            relative = candidate.relative_to(resources).as_posix()
+            digest.update(relative.encode() + b"\0" + candidate.read_bytes() + b"\0")
+            file_count += 1
+
+    staging = Path(tempfile.mkdtemp(prefix=".anchor-guidance-", dir=target))
+    installed: list[Path] = []
+    try:
+        shutil.copytree(sources[".assistant"], staging / ".assistant")
+        shutil.copy2(sources[".assistant_instructions.md"], staging / ".assistant_instructions.md")
+        for name in sources:
+            destination = target / name
+            os.replace(staging / name, destination)
+            installed.append(destination)
+    except Exception:
+        for path in reversed(installed):
+            shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "kind": "guidance_install",
+        "status": "installed",
+        "target_root": str(target),
+        "paths": [str(target / name) for name in sources],
+        "file_count": file_count,
+        "content_sha256": digest.hexdigest(),
+    }
+
+
+__all__ = ["doctor", "install_guidance", "launch"]

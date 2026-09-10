@@ -19,6 +19,13 @@ The `anchor` CLI emits deterministic JSON. One-shot execution does not preserve 
 printf '%s\n' '{"action":"status"}' '{"action":"audit_history"}' | anchor batch -
 ```
 
+Check routing before bootstrap, or install the packaged agent contract into a repository:
+
+```bash
+anchor doctor
+anchor install-guidance /absolute/path/to/repository
+```
+
 For source development, clone the repository, create a virtual environment, and run `python -m pip install -e '.[dev,mcp]'`.
 
 ## MCP quickstart (stdio)
@@ -58,7 +65,7 @@ Build a wheel on a trusted workstation or in CI, then upload `dist/odibi_anchor-
 dbutils.library.restartPython()
 ```
 
-Then bind external durable state and the exact Git folder checkout **before importing** Odibi Anchor:
+Then bind external durable state and the exact Git folder checkout. No source clone is required:
 
 ```python
 import os
@@ -67,16 +74,25 @@ os.environ["ANCHOR_HOME"] = "/Volumes/<catalog>/<schema>/<volume>/anchor-state"
 os.environ["ANCHOR_PROJECT_ID"] = "my-databricks-project"
 os.environ["ANCHOR_PROJECT_ROOT"] = "/Workspace/Users/<user>/<git-folder>"
 
-import runpy
-namespace = runpy.run_path("/Workspace/Users/<user>/<git-folder>/.assistant/agent_bootstrap.py")
-anchor = namespace["anchor"]
+from odibi_anchor import doctor, launch
+
+startup = doctor()
+anchor = launch(
+    anchor_home=os.environ["ANCHOR_HOME"],
+    project_id=os.environ["ANCHOR_PROJECT_ID"],
+    project_root=os.environ["ANCHOR_PROJECT_ROOT"],
+)
+orientation = anchor("orient", output_format="dict")
 ```
+
+Run `install_guidance(project_root)` once when that repository should receive the packaged
+`.assistant` skills and `.assistant_instructions.md`. Existing guidance is never overwritten.
 
 `ANCHOR_HOME` must be durable, writable, and outside the installed package/source checkout. The managed project must already register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md) for host limitations.
 
 ## Routing and concurrent runtimes
 
-Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
+Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. If the root matches exactly one managed project, `launch()` can derive its ID; ambiguous roots fail closed and require an explicit ID. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
 
 Concurrent runtimes may share an `ANCHOR_HOME` only when it is a **local filesystem** that provides the required locking and atomic filesystem semantics. Do not place a concurrently shared home on DBFS, object storage, an NFS-like mount, or another network/distributed filesystem. Bind every process explicitly, use distinct project IDs for distinct roots, and use a separate per-project `ANCHOR_HOME` when local-filesystem guarantees are uncertain. A shared home does not make same-project conflicting writers safe.
 

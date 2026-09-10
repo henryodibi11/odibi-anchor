@@ -189,6 +189,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
     "cryptography<50,>=44; extra == 'all'",
     "cryptography<50,>=44; extra == 'dev'",
     "cryptography<50,>=44; extra == 'governance'",
+    "fastmcp>=3.0; extra == 'all'",
     "fastmcp>=3.0; extra == 'mcp'",
     "libcst>=1.0; extra == 'all'",
     "libcst>=1.0; extra == 'dev'",
@@ -211,9 +212,9 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
 EXPECTED_DISTRIBUTION_METADATA = {
     "Name": ["odibi-anchor"],
     "Version": ["0.1.0"],
-    "Summary": ["Standalone context-generator toolkit for AI agents and data engineers."],
+    "Summary": ["Provider-neutral reliability, context, and evidence tooling for engineering agents."],
     "Requires-Python": [">=3.11"],
-    "License": ["MIT"],
+    "License-Expression": ["Apache-2.0"],
     "Author": ["Henry Odibi"],
     "Provides-Extra": ["all", "dev", "governance", "mcp", "pandas", "semantic", "spark"],
     "Requires-Dist": EXPECTED_OPTIONAL_REQUIREMENTS,
@@ -506,9 +507,9 @@ def test_package_metadata_has_one_source_authority() -> None:
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
     assert project["version"] == "0.1.0"
-    assert project["description"] == "Standalone context-generator toolkit for AI agents and data engineers."
+    assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
-    assert project["license"] == {"text": "MIT"}
+    assert project["license"] == "Apache-2.0"
     assert project["dependencies"] == []
     assert project["scripts"] == {
         "anchor": "odibi_anchor.cli:main",
@@ -527,6 +528,7 @@ def test_package_metadata_has_one_source_authority() -> None:
             "libcst>=1.0",
             "cryptography>=44,<50",
             "rfc8785==0.1.4",
+            "fastmcp>=3.0",
         ],
         "dev": [
             "pytest>=7.0",
@@ -586,7 +588,7 @@ def _create_venv(root: Path, environment: dict[str, str]) -> Path:
 def _metadata_contract(metadata_bytes: bytes) -> dict[str, list[str]]:
     """Project the distribution fields that must agree across artifacts."""
     message = BytesParser(policy=policy.default).parsebytes(metadata_bytes)
-    fields = ("Name", "Version", "Summary", "Requires-Python", "License", "Author", "Provides-Extra", "Requires-Dist")
+    fields = ("Name", "Version", "Summary", "Requires-Python", "License-Expression", "Author", "Provides-Extra", "Requires-Dist")
     return {field: sorted(message.get_all(field, [])) for field in fields}
 
 
@@ -614,7 +616,7 @@ def _runtime_probe(
             "distribution_version": installed.version,
             "summary": installed.metadata["Summary"],
             "author": installed.metadata["Author"],
-            "license": installed.metadata["License"],
+            "license": installed.metadata["License-Expression"],
             "requires_python": installed.metadata["Requires-Python"],
             "extras": sorted(installed.metadata.get_all("Provides-Extra") or []),
             "requirements": sorted(installed.requires or []),
@@ -689,7 +691,7 @@ def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     assert probe["runtime_version"] == probe["distribution_version"] == "0.1.0"
     assert probe["summary"] == EXPECTED_DISTRIBUTION_METADATA["Summary"][0]
     assert probe["author"] == "Henry Odibi"
-    assert probe["license"] == "MIT"
+    assert probe["license"] == "Apache-2.0"
     assert probe["requires_python"] == ">=3.11"
     assert probe["extras"] == EXPECTED_DISTRIBUTION_METADATA["Provides-Extra"]
     assert probe["requirements"] == EXPECTED_OPTIONAL_REQUIREMENTS
@@ -736,7 +738,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         assert "odibi_anchor/_governance_host_probe/__main__.py" in wheel_names
         assert "odibi_anchor/behavior_runner.py" in wheel_names
         assert wheel_archive.read(wheel_entry_points_name).decode("utf-8") == (
-            "[console_scripts]\ncw = odibi_anchor.cli:main\n"
+            "[console_scripts]\nanchor = odibi_anchor.cli:main\n"
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         packaged_init = wheel_archive.read("odibi_anchor/__init__.py").decode("utf-8")
@@ -1206,7 +1208,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         )
         assert _metadata_contract(sdist_wheel_archive.read(sdist_metadata_name)) == EXPECTED_DISTRIBUTION_METADATA
         assert sdist_wheel_archive.read(sdist_entry_points_name).decode("utf-8") == (
-            "[console_scripts]\ncw = odibi_anchor.cli:main\n"
+            "[console_scripts]\nanchor = odibi_anchor.cli:main\n"
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         assert sdist_wheel_archive.read(".assistant_instructions.md") == (
