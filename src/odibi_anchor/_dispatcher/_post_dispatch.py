@@ -110,6 +110,7 @@ def _persist_terminal_task_if_ready(
             _ENV["memory_db"], task_window_id=session_state.task_window_id,
             terminal_status=status,
         )
+        _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
         return
     record = build_terminal_projection(
         session_state=session_state, session_timings=session_timings,
@@ -123,6 +124,34 @@ def _persist_terminal_task_if_ready(
         _ENV["memory_db"], task_window_id=session_state.task_window_id,
         terminal_status=status,
     )
+    _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
+
+
+def _snapshot_durable_state(result, *, memory_db: str) -> None:
+    """Checkpoint configured durable state after successful authority writes."""
+    import os
+
+    durable_root = os.environ.get("ANCHOR_DURABLE_ROOT")
+    authority_id = os.environ.get("ANCHOR_AUTHORITY_ID")
+    if not durable_root:
+        return
+    if not authority_id:
+        raise RuntimeError(
+            "BLOCKED: ANCHOR_AUTHORITY_ID is required when ANCHOR_DURABLE_ROOT is configured"
+        )
+    from odibi_anchor.durability import snapshot_state
+
+    try:
+        result["durable_state"] = snapshot_state(
+            source_db=memory_db,
+            durable_root=durable_root,
+            authority_id=authority_id,
+            databricks=bool(os.environ.get("DATABRICKS_RUNTIME_VERSION")),
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimeError(
+            f"BLOCKED: active state could not be durably snapshotted: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _attach_learning_candidate_suggestions(result, *, session_timings, session_state) -> None:
@@ -772,6 +801,15 @@ def run_post_dispatch(
                         source_files_changed=tuple(sorted(session_files_changed)),
                         checkpoint_final=bool(kwargs.get("final", False)),
                     )
+            if (
+                isinstance(result, dict)
+                and action != "task"
+                and "durable_state" not in result
+                and {"governance_write", "artifact_write"}.intersection(effects)
+            ):
+                from odibi_anchor._dispatcher._boot import _ENV
+
+                _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
 
     # Tool findings are candidates, not automatically persisted evidence. This
     # makes the offer explicit while preserving human/agent judgment about materiality.

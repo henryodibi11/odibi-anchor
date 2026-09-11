@@ -584,6 +584,35 @@ def test_error_shaped_task_required_result_keeps_its_error_without_advisory():
     assert actual["risks"] == []
 
 
+def test_successful_authority_write_checkpoints_configured_active_state(tmp_path, monkeypatch):
+    import sqlite3
+
+    import odibi_anchor._dispatcher._boot as boot
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    database = tmp_path / "memory.db"
+    sqlite3.connect(database).close()
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    monkeypatch.setitem(boot._ENV, "memory_db", str(database))
+    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+
+    result = run_post_dispatch(
+        "log", {"kind": "log", "write_performed": True}, None, (), {},
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(CONTRACTS["log"], (), {}),
+    )
+
+    assert result["durable_state"]["action"] == "created"
+    assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
+
+
 def test_pre_dispatch_data_change_requires_exact_spec_evidence():
     profile = normalize_task_profile(execution_mode="data_change")
     with pytest.raises(RuntimeError, match="requires a specification"):

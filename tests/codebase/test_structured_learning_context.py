@@ -774,7 +774,7 @@ def test_capture_exact_retry_conflict_and_closed_retry_latest(ledger: Path) -> N
 
 def test_assessment_does_not_widen_workbench_observation_to_global_memory(ledger: Path) -> None:
     obligation = activate()
-    item = capture(obligation)
+    item = capture(obligation, observation_type="reusable_practice")
     assessment = learning.structured_learning_context(
         command="assess",
         _obligation_id=obligation["obligation_id"],
@@ -787,6 +787,32 @@ def test_assessment_does_not_widen_workbench_observation_to_global_memory(ledger
         assert connection.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='memory_projections'"
         ).fetchone()[0] == 0
+
+
+def test_assessment_projects_workbench_observation_inside_explicit_work_authority(
+    ledger: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "enterprise-analytics-ai")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    obligation = activate()
+    item = capture(obligation, observation_type="reusable_practice")
+
+    assessment = learning.structured_learning_context(
+        command="assess",
+        _obligation_id=obligation["obligation_id"],
+        outcome="observations_recorded",
+        observation_ids=[item["item"]["item_id"]],
+    )
+
+    assert isinstance(assessment, dict)
+    projection = assessment["semantic_candidate_projections"][0]
+    assert isinstance(projection, dict)
+    with sqlite3.connect(ledger) as connection:
+        memory = connection.execute(
+            "SELECT project,evidence FROM memories WHERE id=?", (projection["memory_id"],)
+        ).fetchone()
+    assert memory[0] == "all"
+    assert json.loads(memory[1])["authority_id"] == "enterprise-analytics-ai"
 
 
 def test_retry_latest_cannot_cross_a_new_active_obligation(ledger: Path) -> None:

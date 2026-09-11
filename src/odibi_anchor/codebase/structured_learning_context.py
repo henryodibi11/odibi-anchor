@@ -1791,11 +1791,17 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
             # structured learning and cannot poison semantic retrieval.
             continue
         project_refs = hydrated["project_refs"]
-        if hydrated["applicability_scope"] != "project_local" or len(project_refs) != 1:
-            # Automatic projection cannot infer that a workbench/cross-project claim
-            # is safe to disclose globally. Human triage owns any scope widening.
+        scope = hydrated["applicability_scope"]
+        work_authority = (
+            scope == "workbench"
+            and os.environ.get("ANCHOR_TRUST_DOMAIN") == "work"
+            and bool(os.environ.get("ANCHOR_AUTHORITY_ID"))
+        )
+        if not ((scope == "project_local" and len(project_refs) == 1) or work_authority):
+            # A workbench claim enters shared retrieval only inside one explicit
+            # work authority. Cross-project widening remains human-triaged.
             continue
-        project = project_refs[0]
+        project = project_refs[0] if scope == "project_local" else "all"
         with sqlite3.connect(path) as recurrence_connection:
             recurrence_count = recurrence_connection.execute(
                 "SELECT count(*) FROM learning_items WHERE recurrence_key=? "
@@ -1824,6 +1830,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
+                "authority_id": os.environ.get("ANCHOR_AUTHORITY_ID"),
+                "trust_domain": os.environ.get("ANCHOR_TRUST_DOMAIN"),
             },
             project=project, db_path=str(path),
         )
@@ -1839,6 +1847,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
+                "authority_id": os.environ.get("ANCHOR_AUTHORITY_ID"),
+                "trust_domain": os.environ.get("ANCHOR_TRUST_DOMAIN"),
                 "evidence_ref_sha256": sorted(
                     evidence["reference_sha256"] for evidence in evidence_refs
                 ),

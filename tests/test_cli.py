@@ -94,6 +94,72 @@ def test_doctor_and_guidance_commands_do_not_boot_dispatcher(monkeypatch, capsys
     assert json.loads(capsys.readouterr().out)["result"]["kind"] == "guidance_install"
 
 
+def test_setup_host_and_portfolio_commands_do_not_boot_dispatcher(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "_boot", lambda _root: pytest.fail("dispatcher booted"))
+    monkeypatch.setattr(
+        "odibi_anchor.host_setup.setup_host",
+        lambda target, *, adapter: {"kind": "host_guidance_setup", "target": target, "adapter": adapter},
+    )
+    assert cli.main(["setup-host", "databricks", "--target", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["adapter"] == "databricks"
+
+    assert cli.main(["portfolio", "schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)["result"]["schema"]
+    assert schema["schema_version"] == 1
+
+
+def test_portfolio_cli_scaffold_validate_resolve(tmp_path, capsys):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "project"
+    state = tmp_path / "state"
+    target.mkdir()
+    state.mkdir()
+    args = [
+        "portfolio", "scaffold", "--config", str(config), "--host", "local",
+        "--adapter", "amp", "--target-root", str(target), "--project", "alpha",
+        "--authority", "work",
+    ]
+    assert cli.main(args) == 0
+    capsys.readouterr()
+    text = config.read_text().replace('[hosts."local"]\nadapter = "amp"',
+                                      f'[hosts."local"]\nadapter = "amp"\nlocal_state_root = "{state}"')
+    text = text.replace('incomplete_fields = ["hosts.local.local_state_root"]\n', "")
+    config.write_text(text)
+
+    assert cli.main(["portfolio", "validate", "--config", str(config), "--host", "local"]) == 0
+    validation = json.loads(capsys.readouterr().out)["result"]["validation"]
+    assert validation["status"] == "valid"
+    assert cli.main([
+        "portfolio", "resolve", "--config", str(config), "--host", "local", "--project", "alpha"
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["binding_inputs"]["project_id"] == "alpha"
+    assert len(result["config_sha256"]) == 64
+
+
+def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypatch, capsys):
+    import sqlite3
+
+    monkeypatch.setattr(cli, "_boot", lambda _root: pytest.fail("dispatcher booted"))
+    database = tmp_path / "live.db"
+    durable = tmp_path / "durable"
+    restored = tmp_path / "restored.db"
+    durable.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE facts(value TEXT)")
+        connection.execute("INSERT INTO facts VALUES('kept')")
+
+    common = ["--durable-root", str(durable), "--authority", "work"]
+    assert cli.main(["state", "snapshot", *common, "--database", str(database)]) == 0
+    capsys.readouterr()
+    assert cli.main(["state", "list", *common]) == 0
+    assert len(json.loads(capsys.readouterr().out)["result"]["snapshots"]) == 1
+    assert cli.main(["state", "restore", *common, "--database", str(restored)]) == 0
+    capsys.readouterr()
+    with sqlite3.connect(restored) as connection:
+        assert connection.execute("SELECT value FROM facts").fetchone() == ("kept",)
+
+
 def test_invalid_input_is_rejected_before_bootstrap(monkeypatch, capsys):
     boots = []
     monkeypatch.setattr(cli, "_boot", lambda root: boots.append(root))

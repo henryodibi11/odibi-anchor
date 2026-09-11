@@ -80,6 +80,31 @@ def test_completed_assessment_persists_one_restart_readable_record(tmp_path, mon
     assert retry["terminal_task_record"]["record_sha256"] == retained["record_sha256"]
 
 
+def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypatch):
+    import odibi_anchor._dispatcher._boot as boot
+
+    db = tmp_path / "memory.db"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    monkeypatch.setitem(boot._ENV, "memory_db", str(db))
+    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    result = {"assessment": {
+        "assessment_id": "las-durable", "outcome": "nothing_reusable_learned",
+        "observation_ids": [], "actor_kind": "agent",
+    }}
+
+    _persist_terminal_task_if_ready(
+        result, action="learning", args=("assess",),
+        session_timings=[{"action": "gate", "passed": True}],
+        session_files_changed={"src/a.py"}, session_state=state(tmp_path),
+    )
+
+    assert result["durable_state"]["action"] == "created"
+    assert result["accepted_task_closure"]["status"] == "unavailable"
+    assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
+
+
 def test_latest_failed_gate_prevents_false_completion(tmp_path, monkeypatch):
     import odibi_anchor._dispatcher._boot as boot
 

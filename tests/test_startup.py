@@ -10,7 +10,14 @@ from pathlib import Path
 import pytest
 
 from odibi_anchor.legacy_import import apply_legacy_import, plan_legacy_import
-from odibi_anchor.startup import doctor, install_guidance, launch, register_project
+from odibi_anchor.portfolio import write_portfolio
+from odibi_anchor.startup import (
+    doctor,
+    install_guidance,
+    launch,
+    prepare_portfolio_runtime,
+    register_project,
+)
 
 
 def test_launch_binds_exact_route_and_returns_callable(tmp_path, monkeypatch):
@@ -76,6 +83,36 @@ def test_register_project_prepares_exact_first_launch(tmp_path, monkeypatch):
     assert anchor("status", output_format="dict")["runtime"]["route_binding"]["project_id"] == "alpha"
     with pytest.raises(FileExistsError):
         register_project(anchor_home=home, project_id="alpha", project_root=target)
+
+
+def test_prepare_portfolio_runtime_registers_exact_route_without_mutating_environment(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {"adapter": "amp", "local_state_root": str(state)}},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+    before = dict(os.environ)
+
+    result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+
+    assert result["status"] == "ready"
+    assert result["registration"]["status"] == "created"
+    assert result["environment"]["ANCHOR_PROJECT_ID"] == "alpha"
+    assert result["restore"]["status"] == "not_applicable"
+    assert dict(os.environ) == before
+    again = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert again["registration"]["status"] == "existing"
 
 
 def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):

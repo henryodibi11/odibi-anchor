@@ -1765,6 +1765,9 @@ def init(
                         "latest_closed_obligation_id": None,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
+                    from odibi_anchor._dispatcher._post_dispatch import _snapshot_durable_state
+
+                    _snapshot_durable_state(_final, memory_db=_DEFAULT_DB_PATH)
             except Exception:
                 if action == "task" and _prior_task_state is not None:
                     vars(_SESSION_STATE).clear()
