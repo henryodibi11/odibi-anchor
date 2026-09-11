@@ -2,6 +2,14 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-09-11
+
+### Fixed
+
+- Databricks bootstrap now accepts the exact prepared `ANCHOR_DURABLE_ROOT` environment
+  without probing Unity Catalog Volume paths through FUSE, while preserving Files API
+  qualification and fail-closed local validation on other hosts.
+
 ## [0.2.3] - 2026-09-11
 
 ### Fixed
@@ -53,3 +61,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.2.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.1
 [0.2.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.2
 [0.2.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.3
+[0.2.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.4

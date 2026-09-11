@@ -196,7 +196,8 @@ def init(
         if _durable_root is not None:
             from odibi_anchor.durability import qualify_durability
 
-            if not Path(_durable_root).is_dir():
+            _is_databricks = bool(_BOOT_ENV.get("is_databricks"))
+            if not _is_databricks and not Path(_durable_root).is_dir():
                 raise FileNotFoundError(
                     "configured durable_root is unavailable; refusing authority startup"
                 )
@@ -204,7 +205,7 @@ def init(
                 source_db=_authority_database,
                 durable_root=_durable_root,
                 authority_id=_authority_id,
-                databricks=bool(_BOOT_ENV.get("is_databricks")),
+                databricks=_is_databricks,
             )
         ensure_database_authority(
             _authority_database,

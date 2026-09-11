@@ -200,7 +200,7 @@ def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
     assert not state.exists()
 
 
-def test_prepare_databricks_runtime_restores_via_sdk_without_volume_fuse(
+def test_prepare_databricks_runtime_and_launch_use_sdk_without_volume_fuse(
     tmp_path, monkeypatch
 ):
     from odibi_anchor import durability
@@ -258,8 +258,14 @@ def test_prepare_databricks_runtime_restores_via_sdk_without_volume_fuse(
     result = prepare_portfolio_runtime(
         config_path=config, host_id="serverless", project_id="alpha"
     )
+    for name, value in result["environment"].items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
+
+    anchor = launch(anchor_home=state, project_id="alpha", project_root=target)
 
     assert result["restore"] == {"status": "restored", "snapshot_id": "one"}
+    assert callable(anchor)
     assert [name for name, _ in calls] == ["qualify", "list", "restore"]
     assert all(arguments["databricks"] is True for _, arguments in calls)
 
