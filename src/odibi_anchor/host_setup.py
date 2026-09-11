@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -81,6 +82,40 @@ def _regular_bytes(path: Path, label: str) -> bytes:
         return path.read_bytes()
     except OSError as exc:
         raise HostSetupError(f"{label} is missing or inaccessible") from exc
+
+
+def _verify_publication(target: Path, desired: dict[str, bytes], manifest_bytes: bytes) -> None:
+    """Prove every published byte before reporting host setup success."""
+    for relative, expected in desired.items():
+        actual = _regular_bytes(_destination(target, relative), f"published {relative}")
+        if actual != expected:
+            raise HostSetupError(f"published host guidance verification failed: {relative}")
+    if _regular_bytes(target / _MANIFEST, f"published {_MANIFEST}") != manifest_bytes:
+        raise HostSetupError("published host guidance verification failed: manifest")
+
+
+def _cleanup_staging(staging: Path, adapter: str) -> None:
+    """Remove local staging, using the Workspace API for Databricks FUSE residue."""
+    failures: list[str] = []
+
+    def record_failure(function: Any, path: str, _exc_info: Any) -> None:
+        failures.append(f"{getattr(function, '__name__', type(function).__name__)}:{path}")
+
+    shutil.rmtree(staging, onerror=record_failure)
+    if not failures and not staging.exists():
+        return
+    raw_path = staging.as_posix()
+    if adapter != "databricks" or not raw_path.startswith("/Workspace/"):
+        detail = ", ".join(failures) if failures else "staging path remains"
+        raise HostSetupError(f"host guidance published but staging cleanup failed: {detail}")
+    try:
+        sdk = importlib.import_module("databricks.sdk")
+        client = sdk.WorkspaceClient()
+        client.workspace.delete(path=raw_path.removeprefix("/Workspace"), recursive=True)
+    except Exception as exc:
+        raise HostSetupError(
+            f"host guidance published but Workspace staging cleanup failed: {staging}"
+        ) from exc
 
 
 def _desired_files(adapter: str) -> dict[str, bytes]:
@@ -254,6 +289,7 @@ def setup_host(
                 os.replace(destination, saved)
             published.append((destination, saved))
             os.replace(staging / "new" / relative, destination)
+        _verify_publication(target, desired, manifest_bytes)
         preserve_staging = False
     except BaseException as publication_error:
         preserve_staging = True
@@ -293,7 +329,7 @@ def setup_host(
         raise
     finally:
         if not preserve_staging:
-            shutil.rmtree(staging, ignore_errors=True)
+            _cleanup_staging(staging, adapter)
     status = "installed" if manifest is None else "upgraded"
     return _result(target, adapter, status, hashes, compatible_unmanaged)
 
@@ -315,6 +351,11 @@ def _result(
         "omitted_packaged_prefixes": list(_ADAPTER_OMITTED_PREFIXES.get(adapter, ())),
         "target_root": str(target),
         "manifest_path": str(target / _MANIFEST),
+        "verified_file_count": len(hashes),
+        "verified_skill_count": sum(
+            path.startswith(".assistant/skills/") and path.endswith("/SKILL.md")
+            for path in hashes
+        ),
         "managed_files": [
             {"path": relative, "sha256": digest} for relative, digest in sorted(hashes.items())
         ],

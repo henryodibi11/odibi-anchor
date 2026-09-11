@@ -109,6 +109,11 @@ anchor = launch(**prepared["bootstrap"]["arguments"])
 status = anchor("status", output_format="dict")
 ```
 
+Accept a task before loading its returned required skills. Load each with
+`anchor("skill_loaded", "<name>")` in that same process; attempting to register a skill before
+task acceptance is invalid. On Databricks, `launch()` automatically attaches read-only Git
+Folder identity when the Workspace API can attest the configured target.
+
 On Databricks, retain `ANCHOR_DURABLE_ROOT`; current releases qualify it through the Files
 API rather than FUSE. After compute replacement, rerun preparation. It restores an absent
 local database from the latest verified snapshot before launch.

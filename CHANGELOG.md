@@ -2,6 +2,16 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-09-11
+
+### Fixed
+
+- Databricks host setup now verifies every published guidance file and falls back to the
+  Workspace API when FUSE cannot remove its staging directory.
+- The preferred launcher now automatically supplies a Databricks Git Folder repository
+  provider so implementation tasks can attest source identity without local Git commands.
+- Startup guidance now states the required task-acceptance-before-skill-registration order.
+
 ## [0.3.0] - 2026-09-11
 
 ### Added
@@ -78,3 +88,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.2.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.3
 [0.2.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.4
 [0.3.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.0
+[0.3.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.1

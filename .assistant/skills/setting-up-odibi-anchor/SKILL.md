@@ -51,13 +51,20 @@ portfolio preparation, and bootstrap are already healthy.
    returned environment exactly, including `ANCHOR_DURABLE_ROOT`, and use its packaged
    launcher or `odibi_anchor.startup.launch()` in one persistent Python process.
 8. Verify the immutable route, orientation, and task lifecycle before substantive work.
+   Accept the task before loading task-specific skills; then load every skill named in the
+   accepted task result with `anchor("skill_loaded", "<name>")`. `skill_loaded` requires the
+   active task by design, so calling it before task acceptance is an invocation error, not a
+   circular dependency.
 
 ## Host boundaries
 
 - **Databricks/Genie:** keep live SQLite under `/tmp`; use a UC Volume only for immutable
   snapshots through the Workspace Files API. Use the Databricks extra. After compute
   replacement, rerun portfolio preparation to restore before launch. Never run concurrent
-  writers unless the actual filesystem/runtime has been qualified.
+  writers unless the actual filesystem/runtime has been qualified. The preferred launcher
+  automatically attaches read-only Git Folder identity when the Workspace API can attest the
+  target. For source changes, retain implementation mode, declare exact repository scope, and
+  explicitly acknowledge unknown local Git state; do not downgrade source work to planning.
 - **Amp:** install the MCP extra when using the stdio server. Keep the virtual environment
   and `ANCHOR_HOME` outside ephemeral build output.
 - **Claude:** install guidance at the host's instruction root and preserve user-owned

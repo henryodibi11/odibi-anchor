@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,8 @@ def test_fresh_install_and_idempotence(tmp_path, monkeypatch):
     assert first["status"] == "installed"
     assert second["status"] == "unchanged"
     assert first["managed_files"] == second["managed_files"]
+    assert first["verified_file_count"] == len(first["managed_files"])
+    assert first["verified_skill_count"] == 18
     assert (target / "AGENTS.md").is_file()
     json.dumps(first)
 
@@ -150,6 +153,8 @@ def test_databricks_installs_complete_authored_guidance_without_snapshot_cache(
     result = setup_host(target, adapter="databricks")
 
     assert result["resource_profile"] == "databricks_workspace_compact"
+    assert result["verified_skill_count"] == 18
+    assert result["verified_file_count"] == len(result["managed_files"])
     assert result["omitted_packaged_prefixes"] == [
         ".assistant/references/snapshots/"
     ]
@@ -298,6 +303,80 @@ def test_publication_interrupt_restores_original_or_preserves_backup(tmp_path, m
 
     assert managed.read_bytes() == original
     assert not list(target.glob(".anchor-host-stage-*"))
+
+
+def test_publication_verification_failure_restores_original(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    setup_host(target, adapter="amp")
+    managed = target / ".assistant" / "README.md"
+    original = managed.read_bytes()
+    (resources / ".assistant" / "README.md").write_text("new packaged content\n")
+    monkeypatch.setattr(
+        module,
+        "_verify_publication",
+        lambda *_args: (_ for _ in ()).throw(HostSetupError("verification failed")),
+    )
+
+    with pytest.raises(HostSetupError, match="verification failed"):
+        setup_host(target, adapter="amp")
+
+    assert managed.read_bytes() == original
+    assert not list(target.glob(".anchor-host-stage-*"))
+
+
+def test_databricks_staging_residue_uses_workspace_api(monkeypatch):
+    staging = Path("/Workspace/Users/test@example.invalid/.anchor-host-stage-residue")
+    calls = []
+    workspace = SimpleNamespace(
+        delete=lambda **kwargs: calls.append(kwargs),
+    )
+    def failed_rmtree(_path, *, onerror):
+        onerror(Path.rmdir, str(staging), (OSError, OSError("not empty"), None))
+
+    monkeypatch.setattr(module.shutil, "rmtree", failed_rmtree)
+    original_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: True if path == staging else original_exists(path),
+    )
+    monkeypatch.setattr(
+        module.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(WorkspaceClient=lambda: SimpleNamespace(workspace=workspace))
+        if name == "databricks.sdk"
+        else pytest.fail(f"unexpected import: {name}"),
+    )
+
+    module._cleanup_staging(staging, "databricks")
+
+    assert calls == [{
+        "path": "/Users/test@example.invalid/.anchor-host-stage-residue",
+        "recursive": True,
+    }]
+
+
+def test_databricks_staging_cleanup_failure_is_reported(monkeypatch):
+    staging = Path("/Workspace/Users/test@example.invalid/.anchor-host-stage-residue")
+    workspace = SimpleNamespace(
+        delete=lambda **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    def failed_rmtree(_path, *, onerror):
+        onerror(Path.rmdir, str(staging), (OSError, OSError("not empty"), None))
+
+    monkeypatch.setattr(module.shutil, "rmtree", failed_rmtree)
+    monkeypatch.setattr(Path, "exists", lambda path: path == staging)
+    monkeypatch.setattr(
+        module.importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(WorkspaceClient=lambda: SimpleNamespace(workspace=workspace)),
+    )
+
+    with pytest.raises(HostSetupError, match="Workspace staging cleanup failed"):
+        module._cleanup_staging(staging, "databricks")
 
 
 @pytest.mark.parametrize("retire", [False, True])

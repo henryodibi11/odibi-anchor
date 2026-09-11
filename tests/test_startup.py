@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import odibi_anchor.startup as startup_module
 from odibi_anchor.legacy_import import apply_legacy_import, plan_legacy_import
 from odibi_anchor.portfolio import write_portfolio
 from odibi_anchor.startup import (
@@ -60,6 +61,68 @@ def test_launch_derives_unique_project_from_verified_target(tmp_path, monkeypatc
     assert callable(anchor)
     status = anchor("status", output_format="dict")
     assert status["runtime"]["route_binding"]["project_id"] == "alpha"
+
+
+def test_launch_passes_auto_configured_repository_provider(tmp_path, monkeypatch):
+    import odibi_anchor.bootstrap as bootstrap_module
+
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    artifact = home / "workspace" / "projects" / "alpha"
+    target.mkdir()
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        "---\nid: alpha\nname: alpha\nstatus: active\nproject_type: referenced\n"
+        f"target_root: {target}\n---\n"
+    )
+    provider = object()
+    observed = {}
+    for name in ("ANCHOR_HOME", "ANCHOR_PROJECT_ID", "ANCHOR_PROJECT_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        startup_module,
+        "_repository_provider_for_target",
+        lambda candidate: provider if candidate == target else None,
+    )
+
+    def fake_init(**kwargs):
+        observed.update(kwargs)
+        return lambda *_args, **_kwargs: {}, str(target), {}
+
+    monkeypatch.setattr(bootstrap_module, "init", fake_init)
+
+    anchor = launch(anchor_home=home, project_id="alpha", project_root=target)
+
+    assert callable(anchor)
+    assert observed["repository_provider"] is provider
+    assert observed["route_binding"].project_id == "alpha"
+
+
+def test_local_target_does_not_attempt_databricks_repository_discovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "odibi_anchor.operational._databricks.autoconfigure_databricks_git_folder_repository",
+        lambda *_args: pytest.fail("Databricks discovery must not run for a local target"),
+    )
+
+    assert startup_module._repository_provider_for_target(tmp_path) is None
+
+
+def test_workspace_target_uses_databricks_repository_discovery(monkeypatch):
+    target = Path("/Workspace/Users/test@example.invalid/project")
+    provider = object()
+    observed = []
+
+    def autoconfigure(candidate):
+        observed.append(candidate)
+        return provider, {"acquisition_outcome": "available"}
+
+    monkeypatch.setattr(
+        "odibi_anchor.operational._databricks.autoconfigure_databricks_git_folder_repository",
+        autoconfigure,
+    )
+
+    assert startup_module._repository_provider_for_target(target) is provider
+    assert observed == [target]
 
 
 @pytest.mark.parametrize("with_durability", [False, True])
@@ -379,12 +442,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.0"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.1"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.0"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.1"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

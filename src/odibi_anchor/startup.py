@@ -64,6 +64,18 @@ def _absolute_directory(value: str | os.PathLike[str], name: str) -> Path:
     return path.resolve()
 
 
+def _repository_provider_for_target(target: Path) -> Any | None:
+    """Attach read-only Databricks Git Folder identity when the host can provide it."""
+    if not target.as_posix().startswith("/Workspace/"):
+        return None
+    from odibi_anchor.operational._databricks import (
+        autoconfigure_databricks_git_folder_repository,
+    )
+
+    provider, _evidence = autoconfigure_databricks_git_folder_repository(target)
+    return provider
+
+
 def launch(
     *,
     anchor_home: str | os.PathLike[str],
@@ -108,10 +120,17 @@ def launch(
             raise RuntimeError(f"{name} conflicts with the requested startup route")
     os.environ.update(bindings)
 
-    from odibi_anchor.bootstrap import init
-
     try:
-        anchor, _root, _manifest = init(route_binding=route, output_format=output_format)
+        from odibi_anchor.bootstrap import init
+
+        init_kwargs: dict[str, Any] = {
+            "route_binding": route,
+            "output_format": output_format,
+        }
+        repository_provider = _repository_provider_for_target(target)
+        if repository_provider is not None:
+            init_kwargs["repository_provider"] = repository_provider
+        anchor, _root, _manifest = init(**init_kwargs)
     finally:
         for name, value in previous.items():
             if value is None:
