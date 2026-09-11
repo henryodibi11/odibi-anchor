@@ -9,7 +9,7 @@ Odibi Anchor requires Python 3.11 or newer and is licensed under Apache-2.0.
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.2.1"
+python -m pip install "odibi-anchor==0.2.2"
 anchor help
 ```
 
@@ -33,7 +33,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.2.1"
+python -m pip install "odibi-anchor[mcp]==0.2.2"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -61,7 +61,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor==0.2.1"
+%pip install "odibi-anchor==0.2.2"
 dbutils.library.restartPython()
 ```
 

@@ -200,6 +200,114 @@ def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
     assert not state.exists()
 
 
+def test_prepare_databricks_runtime_restores_via_sdk_without_volume_fuse(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    durable = "/Volumes/catalog/schema/anchor"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"serverless": {
+                "adapter": "databricks", "local_state_root": str(state),
+                "durable_root": durable,
+            }},
+            "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+            "personas": {},
+        },
+    )
+    calls = []
+    monkeypatch.setattr(durability, "qualify_durability", lambda **kwargs: calls.append(("qualify", kwargs)))
+    monkeypatch.setattr(
+        durability,
+        "list_snapshots",
+        lambda **kwargs: calls.append(("list", kwargs)) or {"snapshots": [{"snapshot_id": "one"}]},
+    )
+
+    def restore(**kwargs):
+        calls.append(("restore", kwargs))
+        durability.ensure_database_authority(
+            kwargs["destination_db"], authority_id="work", trust_domain="work", initialize=True,
+        )
+        return {"status": "restored", "snapshot_id": "one"}
+
+    monkeypatch.setattr(durability, "restore_latest", restore)
+    original_is_dir = Path.is_dir
+    original_iterdir = Path.iterdir
+
+    def reject_volume_is_dir(path):
+        if str(path).startswith("/Volumes"):
+            raise AssertionError(f"FUSE access attempted: {path}")
+        return original_is_dir(path)
+
+    def reject_volume_iterdir(path):
+        if str(path).startswith("/Volumes"):
+            raise AssertionError(f"FUSE access attempted: {path}")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "is_dir", reject_volume_is_dir)
+    monkeypatch.setattr(Path, "iterdir", reject_volume_iterdir)
+
+    result = prepare_portfolio_runtime(
+        config_path=config, host_id="serverless", project_id="alpha"
+    )
+
+    assert result["restore"] == {"status": "restored", "snapshot_id": "one"}
+    assert [name for name, _ in calls] == ["qualify", "list", "restore"]
+    assert all(arguments["databricks"] is True for _, arguments in calls)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("absent"), PermissionError("denied")])
+def test_prepare_databricks_runtime_only_treats_missing_snapshot_root_as_clean_start(
+    tmp_path, monkeypatch, error
+):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"serverless": {
+                "adapter": "databricks", "local_state_root": str(state),
+                "durable_root": "/Volumes/catalog/schema/anchor",
+            }},
+            "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+            "personas": {},
+        },
+    )
+    monkeypatch.setattr(durability, "qualify_durability", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        durability, "list_snapshots", lambda **_kwargs: (_ for _ in ()).throw(error)
+    )
+
+    if isinstance(error, PermissionError):
+        with pytest.raises(PermissionError, match="denied"):
+            prepare_portfolio_runtime(
+                config_path=config, host_id="serverless", project_id="alpha"
+            )
+        assert not (state / ".agent_memory.db").exists()
+    else:
+        result = prepare_portfolio_runtime(
+            config_path=config, host_id="serverless", project_id="alpha"
+        )
+        assert result["restore"] == {
+            "status": "not_applicable", "reason": "no durable snapshot exists"
+        }
+        assert result["authority"]["status"] == "initialized"
+
+
 def test_prepare_portfolio_runtime_refuses_existing_unowned_database(tmp_path):
     config = tmp_path / "anchor.toml"
     target = tmp_path / "target"

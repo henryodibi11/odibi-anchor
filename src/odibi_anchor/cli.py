@@ -127,9 +127,9 @@ def _parser() -> argparse.ArgumentParser:
         command = state_commands.add_parser(name)
         command.add_argument("--durable-root", required=True)
         command.add_argument("--authority", required=True)
+        command.add_argument("--databricks", action="store_true")
         if name in {"snapshot", "restore"}:
             command.add_argument("--database", required=True)
-            command.add_argument("--databricks", action="store_true")
     return parser
 
 
@@ -184,7 +184,11 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
     from odibi_anchor.durability import list_snapshots, restore_latest, snapshot_state
 
     if ns.state_command == "list":
-        return list_snapshots(durable_root=ns.durable_root, authority_id=ns.authority)
+        return list_snapshots(
+            durable_root=ns.durable_root,
+            authority_id=ns.authority,
+            databricks=ns.databricks,
+        )
     if ns.state_command == "snapshot":
         return snapshot_state(
             source_db=ns.database,

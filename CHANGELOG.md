@@ -2,6 +2,15 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-09-11
+
+### Fixed
+
+- Databricks durable snapshot, listing, startup restore, and manual restore now use the
+  Workspace Files API instead of UC Volume FUSE access.
+- Remote snapshot publication remains immutable and verifies uploaded content before
+  publishing the manifest commit marker.
+
 ## [0.2.1] - 2026-09-11
 
 ### Fixed
@@ -35,3 +44,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.1.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.1.0
 [0.2.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.0
 [0.2.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.1
+[0.2.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.2
