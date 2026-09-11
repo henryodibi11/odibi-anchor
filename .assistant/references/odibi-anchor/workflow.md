@@ -6,6 +6,13 @@ Use this deterministic reference when Odibi Anchor action sequencing or signatur
 
 ## Bootstrap from a source checkout
 
+For installed operation, first prefer `anchor portfolio prepare --config <absolute-path>
+--host <host-id> --project <project-id>`. Its explicit PortfolioV1 replaces project-ID,
+host-root, and state-path rediscovery and returns copy-ready immutable route/environment
+inputs. Run `anchor setup-host <adapter> --target <instruction-root>` to install or reconcile
+this workflow and its launcher without silently replacing user edits. The source-checkout path
+below remains a development compatibility route, not a requirement for installed use.
+
 Run the source-owned `.assistant/agent_bootstrap.py` accompanying these instructions in
 the same persistent Python process that will make later `anchor()` calls. The launcher
 delegates to the repository-root `agent_bootstrap.py`, which remains the only bootstrap
@@ -104,6 +111,12 @@ Allowed outcomes are `helpful`, `not_helpful`, `harmful`, and `superseded`. Ordi
 human-attested boundary for idempotent episodic-to-semantic projection; neither exposure nor
 successful execution promotes memory automatically.
 
+Inside an explicit PortfolioV1 `work` authority, an agent-supplied, assessed, evidence-backed
+`workbench` reusable observation may be projected as an advisory `all`-project candidate.
+Exact-project candidates still rank first. This standing boundary does not cross databases,
+personal/work authorities, or infer `cross_project` scope, and it does not activate or confirm
+the candidate.
+
 Every selection needs a truthful supported disposition before closure. If bounded retrieval
 is unavailable, retain that unavailable boundary and follow the runtime's fail-closed or
 degraded result without widening scope or inventing evidence. Do not manufacture this review
@@ -120,6 +133,10 @@ package. It never executes recorded actions or reconstructs chain-of-thought. Us
 `anchor("memory", "storage", command="inspect")` for read-only profile/path/schema/backup
 diagnostics and `command="plan", destination="/absolute/path"` for a non-destructive
 migration plan. Migration execution and trust-domain transfer require separate approval.
+
+When the portfolio configures durable state, keep live SQLite on local compute. Successful
+authority writes checkpoint it. `anchor state list|snapshot|restore` provides explicit recovery;
+durable snapshot bytes are never opened as a live SQLite store.
 
 **⚠️ ALWAYS assign anchor() results to a variable.** Bare calls get blocked by Databricks safety
 guards. Use `result = anchor("status"); print(result)` instead. This applies to ALL anchor() calls.

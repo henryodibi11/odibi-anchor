@@ -7,7 +7,7 @@ import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-EXPECTED_VERSION = "0.1.0"
+EXPECTED_VERSION = "0.2.0"
 FORBIDDEN = re.compile(
     r"(^|/)(?:\.git|\.venv|\.pytest_cache|\.ruff_cache|\.context-workbench|"
     r"\.odibi-anchor|workspace|sessions|__pycache__)(?:/|$)|"

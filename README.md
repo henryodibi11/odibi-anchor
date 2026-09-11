@@ -2,14 +2,14 @@
 
 Odibi Anchor is a provider-neutral reliability and evidence layer for engineering agents. It gives an agent a bounded, auditable lifecycle for selecting context, authorizing work, checking changes, and retaining evidence without coupling the workflow to one host.
 
-> **First public release:** `0.1.0`. Odibi Anchor requires Python 3.11 or newer and is licensed under Apache-2.0.
+Odibi Anchor requires Python 3.11 or newer and is licensed under Apache-2.0.
 
 ## Install and run locally
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.1.0"
+python -m pip install "odibi-anchor==0.2.0"
 anchor help
 ```
 
@@ -23,7 +23,7 @@ Check routing before bootstrap, or install the packaged agent contract into a re
 
 ```bash
 anchor doctor
-anchor install-guidance /absolute/path/to/repository
+anchor setup-host amp --target /absolute/path/to/repository
 ```
 
 For source development, clone the repository, create a virtual environment, and run `python -m pip install -e '.[dev,mcp]'`.
@@ -33,7 +33,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.1.0"
+python -m pip install "odibi-anchor[mcp]==0.2.0"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -61,7 +61,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor==0.1.0"
+%pip install "odibi-anchor==0.2.0"
 dbutils.library.restartPython()
 ```
 
@@ -87,15 +87,18 @@ anchor = launch(
 orientation = anchor("orient", output_format="dict")
 ```
 
-Run `install_guidance(project_root)` once when that repository should receive the packaged
-`.assistant` skills and `.assistant_instructions.md`. Existing guidance is never overwritten.
+Run `anchor setup-host databricks --target /Workspace/Users/<user>` once to install and
+subsequently reconcile the packaged instructions and launcher. Create a PortfolioV1 to keep
+host-specific project roots and state locations explicit instead of rediscovering them. See
+[portfolio and durable state](docs/guides/portfolio-and-durable-state.md).
 
 `ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
-checkout. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Stop all
-Anchor processes before copying a closed backup to durable storage such as a Volume; restore it
-to qualified local storage before reuse. Do not run live SQLite state from Workspace Files,
-DBFS, Volumes, or another network/distributed filesystem. The managed project must already
-register the exact target root. See [Databricks MCP guidance](docs/guides/mcp-databricks.md).
+checkout. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Configure
+an approved durable snapshot root while keeping live SQLite local; Anchor checkpoints successful
+authority writes and restores an absent local database through verified immutable files. Do not run live
+SQLite state from Workspace Files, DBFS, Volumes, or another network/distributed filesystem.
+See [portfolio and durable state](docs/guides/portfolio-and-durable-state.md) and
+[Databricks MCP guidance](docs/guides/mcp-databricks.md).
 
 ## Import legacy v0.11.0 state
 

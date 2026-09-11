@@ -789,6 +789,50 @@ class TestSessionState:
             anchor("touched", "source.py", output_format="dict")
         assert "known-bad" not in str(exc_info.value)
 
+    def test_task_checkpoint_runs_after_memory_selection_persistence(
+        self, bootstrap_cw, clean_session_state, monkeypatch,
+    ):
+        from odibi_anchor._utils._session_state import _SESSION_TIMINGS
+
+        sequence = []
+
+        def persist_memory(*_args, **_kwargs):
+            sequence.append("memory_selection_persisted")
+            return {
+                "kind": "task_memory_context", "selections": [],
+                "selection_count": 0, "retrieval_is_application": False,
+                "authority": "advisory", "unavailable_evidence": [],
+            }
+
+        def snapshot(*_args, **_kwargs):
+            sequence.append("durable_checkpoint")
+
+        monkeypatch.setattr(
+            "odibi_anchor._dispatcher._memory_actions.build_task_memory_context",
+            persist_memory,
+        )
+        monkeypatch.setattr(
+            "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+            snapshot,
+        )
+        _SESSION_TIMINGS.extend(
+            {"action": action, "error": None, "passed": True, "elapsed_ms": 0}
+            for action in ("status", "memory", "audit_history", "new_session")
+        )
+
+        with patch(
+            "odibi_anchor._repository_snapshot.capture_task_repository_baseline",
+            side_effect=_serializable_baseline,
+        ):
+            bootstrap_cw["anchor"](
+                "task", "Persist selected task memory before checkpoint",
+                goal="Keep durable task state complete", mode="implementation",
+                acceptance_criteria=["The checkpoint includes task memory selections"],
+                output_format="dict",
+            )
+
+        assert sequence == ["memory_selection_persisted", "durable_checkpoint"]
+
     def test_accepted_task_routes_compact_engineering_references(
         self, bootstrap_cw, clean_session_state,
     ):

@@ -125,6 +125,122 @@ def register_project(
     }
 
 
+def prepare_portfolio_runtime(
+    *, config_path: str | os.PathLike[str], host_id: str, project_id: str,
+    persona_id: str | None = None,
+) -> dict[str, Any]:
+    """Prepare one exact configured route and restore absent local state when available.
+
+    This operation never selects an ambient project and never mutates process
+    environment. It creates only the configured local state directory and missing
+    managed-project registration needed by the returned immutable binding.
+    """
+    from odibi_anchor.portfolio import load_portfolio_document, resolve_project
+
+    document = load_portfolio_document(config_path)
+    resolved = resolve_project(
+        document["portfolio"], host_id=host_id, project_id=project_id,
+        persona_id=persona_id,
+    )
+    environment = resolved["environment"]
+    home = Path(environment["ANCHOR_HOME"])
+    target = _absolute_directory(environment["ANCHOR_PROJECT_ROOT"], "ANCHOR_PROJECT_ROOT")
+    if home.exists() and not home.is_dir():
+        raise ValueError("configured local_state_root must be a directory")
+
+    database = Path(environment["ANCHOR_MEMORY_DB"])
+    authority_id = environment["ANCHOR_AUTHORITY_ID"]
+    trust_domain = environment["ANCHOR_TRUST_DOMAIN"]
+    adapter = document["portfolio"]["hosts"][host_id]["adapter"]
+    durable_root = environment.get("ANCHOR_DURABLE_ROOT")
+    if durable_root is not None and not Path(durable_root).is_dir():
+        raise FileNotFoundError(
+            "configured durable_root is unavailable; refusing to initialize or reuse local state"
+        )
+    if durable_root is not None:
+        from odibi_anchor.durability import qualify_durability
+
+        qualify_durability(
+            source_db=database,
+            durable_root=durable_root,
+            authority_id=authority_id,
+            databricks=adapter == "databricks",
+        )
+    home.mkdir(parents=True, exist_ok=True)
+    restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
+    if not database.exists():
+        snapshot_root = (
+            Path(durable_root) / authority_id / "snapshots" if durable_root else None
+        )
+        if snapshot_root is not None and snapshot_root.is_dir() and any(snapshot_root.iterdir()):
+            from odibi_anchor.durability import restore_latest
+
+            assert durable_root is not None
+            restore = restore_latest(
+                durable_root=durable_root,
+                destination_db=database,
+                authority_id=authority_id,
+                databricks=adapter == "databricks",
+            )
+        else:
+            restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
+    from odibi_anchor.durability import ensure_database_authority
+
+    ownership = ensure_database_authority(
+        database, authority_id=authority_id, trust_domain=trust_domain,
+        initialize=not database.exists(),
+    )
+
+    from odibi_anchor._dispatcher._project import resolve_route_binding
+
+    registration: dict[str, Any]
+    try:
+        route = resolve_route_binding(
+            home,
+            project=project_id,
+            target_hint=target,
+            runtime_instance_id="portfolio:prepare",
+        )
+        assert route is not None
+        registration = {"status": "existing", "project_id": route.project_id}
+    except FileNotFoundError:
+        registration = register_project(
+            anchor_home=home, project_id=project_id, project_root=target
+        )
+        route = resolve_route_binding(
+            home,
+            project=project_id,
+            target_hint=target,
+            runtime_instance_id="portfolio:prepare",
+        )
+    assert route is not None
+    return {
+        "kind": "portfolio_runtime_preparation",
+        "status": "ready",
+        "config_path": document["path"],
+        "config_sha256": document["sha256"],
+        "host_id": host_id,
+        "project_id": route.project_id,
+        "target_root": route.target_root,
+        "environment": environment,
+        "persona": resolved["persona"],
+        "registration": registration,
+        "restore": restore,
+        "authority": ownership,
+        "next_operation": {
+            "operation": "bootstrap",
+            "arguments": {
+                "script": str(
+                    Path(document["portfolio"]["hosts"][host_id].get("instruction_root") or target)
+                    / ".assistant"
+                    / "agent_bootstrap.py"
+                ),
+                "environment": environment,
+            },
+        },
+    }
+
+
 def _open_tasks(database: Path, project_id: str | None, target: Path | None) -> dict[str, Any]:
     if not database.is_file():
         return {"status": "unavailable", "count": None, "implication": "no state database exists"}
@@ -296,4 +412,10 @@ def install_guidance(target_root: str | os.PathLike[str]) -> dict[str, Any]:
     }
 
 
-__all__ = ["doctor", "install_guidance", "launch", "register_project"]
+__all__ = [
+    "doctor",
+    "install_guidance",
+    "launch",
+    "prepare_portfolio_runtime",
+    "register_project",
+]

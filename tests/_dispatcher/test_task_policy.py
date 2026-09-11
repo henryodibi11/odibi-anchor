@@ -5,18 +5,27 @@ from types import SimpleNamespace
 
 import pytest
 
-from odibi_anchor.planning._task_policy import (
-    BpsKernel, EvidenceEntry, ManagedArtifactEntry, TaskPolicyContext, TaskPolicySet,
-    build_task_policy_context, effective_required_evidence, evaluate_task_policies,
-)
-from odibi_anchor.planning._task_profile import EvidenceRequest, normalize_task_profile
 from odibi_anchor._dispatcher._effects import (
-    EFFECT_PERMISSIONS, dispatch_succeeded,
+    EFFECT_PERMISSIONS,
+    dispatch_succeeded,
 )
 from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
 from odibi_anchor._utils._session_state import (
-    SessionState, is_managed_artifact_path, record_evidence,
+    SessionState,
+    is_managed_artifact_path,
+    record_evidence,
 )
+from odibi_anchor.planning._task_policy import (
+    BpsKernel,
+    EvidenceEntry,
+    ManagedArtifactEntry,
+    TaskPolicyContext,
+    TaskPolicySet,
+    build_task_policy_context,
+    effective_required_evidence,
+    evaluate_task_policies,
+)
+from odibi_anchor.planning._task_profile import EvidenceRequest, normalize_task_profile
 
 
 @pytest.mark.parametrize("rigor,problem", [("direct", "not_required"), ("compact", "not_required"), ("full", "required")])
@@ -211,6 +220,8 @@ def test_ledgers_have_distinct_typed_entries():
     ("task", {"readiness": {"score": 39}}, False),
     ("task", {"readiness": {"score": 40}}, True),
     ("problem", {"status": "blocked"}, False),
+    ("reject", {"status": "rejected", "action": "rejected"}, True),
+    ("status", {"status": "rejected"}, False),
 ])
 def test_dispatch_succeeded_action_matrix(action, result, expected):
     assert dispatch_succeeded(action, result) is expected

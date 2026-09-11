@@ -10,7 +10,14 @@ from pathlib import Path
 import pytest
 
 from odibi_anchor.legacy_import import apply_legacy_import, plan_legacy_import
-from odibi_anchor.startup import doctor, install_guidance, launch, register_project
+from odibi_anchor.portfolio import write_portfolio
+from odibi_anchor.startup import (
+    doctor,
+    install_guidance,
+    launch,
+    prepare_portfolio_runtime,
+    register_project,
+)
 
 
 def test_launch_binds_exact_route_and_returns_callable(tmp_path, monkeypatch):
@@ -55,6 +62,64 @@ def test_launch_derives_unique_project_from_verified_target(tmp_path, monkeypatc
     assert status["runtime"]["route_binding"]["project_id"] == "alpha"
 
 
+@pytest.mark.parametrize("with_durability", [False, True])
+def test_launch_refuses_database_owned_by_another_authority(
+    tmp_path, monkeypatch, with_durability
+):
+    from odibi_anchor.durability import ensure_database_authority
+
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    artifact = home / "workspace" / "projects" / "alpha"
+    target.mkdir()
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        "---\nid: alpha\nname: alpha\nstatus: active\nproject_type: referenced\n"
+        f"target_root: {target}\n---\n"
+    )
+    ensure_database_authority(
+        home / ".agent_memory.db", authority_id="authority-a",
+        trust_domain="work", initialize=True,
+    )
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / ".agent_memory.db"))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "authority-b")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    if with_durability:
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
+    else:
+        monkeypatch.delenv("ANCHOR_DURABLE_ROOT", raising=False)
+
+    with pytest.raises(RuntimeError, match="authority identity conflicts"):
+        launch(anchor_home=home, project_id="alpha", project_root=target)
+
+
+def test_launch_stops_before_database_initialization_when_durable_root_is_unavailable(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    artifact = home / "workspace" / "projects" / "alpha"
+    target.mkdir()
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        "---\nid: alpha\nname: alpha\nstatus: active\nproject_type: referenced\n"
+        f"target_root: {target}\n---\n"
+    )
+    database = home / ".agent_memory.db"
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(database))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(tmp_path / "missing-durable"))
+
+    with pytest.raises(FileNotFoundError, match="durable_root is unavailable"):
+        launch(anchor_home=home, project_id="alpha", project_root=target)
+    assert not database.exists()
+
+
 def test_register_project_prepares_exact_first_launch(tmp_path, monkeypatch):
     home = tmp_path / "new-home"
     target = tmp_path / "target"
@@ -76,6 +141,85 @@ def test_register_project_prepares_exact_first_launch(tmp_path, monkeypatch):
     assert anchor("status", output_format="dict")["runtime"]["route_binding"]["project_id"] == "alpha"
     with pytest.raises(FileExistsError):
         register_project(anchor_home=home, project_id="alpha", project_root=target)
+
+
+def test_prepare_portfolio_runtime_registers_exact_route_without_mutating_environment(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {"adapter": "amp", "local_state_root": str(state)}},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+    before = dict(os.environ)
+
+    result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+
+    assert result["status"] == "ready"
+    assert result["registration"]["status"] == "created"
+    assert result["environment"]["ANCHOR_PROJECT_ID"] == "alpha"
+    assert result["restore"]["status"] == "not_applicable"
+    assert dict(os.environ) == before
+    again = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert again["registration"]["status"] == "existing"
+
+
+def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    unavailable = tmp_path / "unavailable-durable-root"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {
+                "adapter": "amp", "local_state_root": str(state),
+                "durable_root": str(unavailable),
+            }},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    with pytest.raises(FileNotFoundError, match="durable_root is unavailable"):
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert not state.exists()
+
+
+def test_prepare_portfolio_runtime_refuses_existing_unowned_database(tmp_path):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    state.mkdir()
+    _legacy_db(state / ".agent_memory.db")
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {"adapter": "amp", "local_state_root": str(state)}},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="no authority identity"):
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
 
 
 def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):

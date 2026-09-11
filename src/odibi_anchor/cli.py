@@ -80,11 +80,126 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("shell", help="boot once; read one request JSON object per input line")
     commands.add_parser("help", help="discover core actions")
     commands.add_parser("doctor", help="inspect startup and routing without mutation")
+    setup = commands.add_parser("setup-host", help="idempotently install managed host guidance")
+    setup.add_argument("adapter", choices=("amp", "chatgpt", "claude", "databricks"))
+    setup.add_argument("--target", required=True, help="existing explicit host instruction root")
     guidance = commands.add_parser("install-guidance", help="copy packaged agent guidance into a repository")
     guidance.add_argument("target", help="existing repository root; existing guidance is never overwritten")
     verify = commands.add_parser("verify-delivery", help="verify local delivery evidence under declared policy")
     verify.add_argument("--request", required=True, help="UTF-8 JSON request file, or - for stdin")
+    portfolio = commands.add_parser("portfolio", help="manage one explicit PortfolioV1 configuration")
+    portfolio_commands = portfolio.add_subparsers(dest="portfolio_command", required=True)
+    portfolio_commands.add_parser("schema", help="show the PortfolioV1 schema")
+    show = portfolio_commands.add_parser("show", help="load a portfolio and show its digest")
+    show.add_argument("--config", required=True)
+    validate = portfolio_commands.add_parser("validate", help="validate portfolio launch readiness")
+    validate.add_argument("--config", required=True)
+    validate.add_argument("--host")
+    scaffold = portfolio_commands.add_parser("scaffold", help="create a safe incomplete portfolio")
+    scaffold.add_argument("--config", required=True)
+    scaffold.add_argument("--host", required=True)
+    scaffold.add_argument("--adapter", required=True, choices=("amp", "chatgpt", "claude", "databricks"))
+    scaffold.add_argument("--target-root", required=True)
+    scaffold.add_argument("--project")
+    scaffold.add_argument("--authority")
+    add = portfolio_commands.add_parser("add-project", help="add one exact host/project target")
+    add.add_argument("--config", required=True)
+    add.add_argument("--host", required=True)
+    add.add_argument("--project", required=True)
+    add.add_argument("--target-root", required=True)
+    add.add_argument("--repository")
+    add.add_argument("--artifact-namespace")
+    add.add_argument("--expected-sha256")
+    resolve = portfolio_commands.add_parser("resolve", help="resolve immutable route inputs")
+    resolve.add_argument("--config", required=True)
+    resolve.add_argument("--host", required=True)
+    resolve.add_argument("--project")
+    resolve.add_argument("--target-root")
+    resolve.add_argument("--persona")
+    prepare = portfolio_commands.add_parser("prepare", help="register and restore one exact runtime")
+    prepare.add_argument("--config", required=True)
+    prepare.add_argument("--host", required=True)
+    prepare.add_argument("--project", required=True)
+    prepare.add_argument("--persona")
+    state = commands.add_parser("state", help="inspect or transfer durable SQLite state")
+    state_commands = state.add_subparsers(dest="state_command", required=True)
+    for name in ("list", "snapshot", "restore"):
+        command = state_commands.add_parser(name)
+        command.add_argument("--durable-root", required=True)
+        command.add_argument("--authority", required=True)
+        if name in {"snapshot", "restore"}:
+            command.add_argument("--database", required=True)
+            command.add_argument("--databricks", action="store_true")
     return parser
+
+
+def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
+    from odibi_anchor.portfolio import (
+        add_project,
+        load_portfolio_document,
+        portfolio_schema,
+        resolve_project,
+        scaffold_portfolio,
+        validate_portfolio,
+    )
+
+    if ns.portfolio_command == "schema":
+        return {"schema": portfolio_schema(), "next_operation": {"operation": "portfolio.scaffold"}}
+    if ns.portfolio_command == "scaffold":
+        return scaffold_portfolio(
+            ns.config, host_id=ns.host, adapter=ns.adapter, target_root=ns.target_root,
+            project_id=ns.project, authority_id=ns.authority,
+        )
+    document = load_portfolio_document(ns.config)
+    if ns.portfolio_command == "show":
+        return document
+    if ns.portfolio_command == "validate":
+        return {**document, "validation": validate_portfolio(document["portfolio"], host_id=ns.host)}
+    if ns.portfolio_command == "add-project":
+        return add_project(
+            ns.config, project_id=ns.project, host_id=ns.host, target_root=ns.target_root,
+            repository=ns.repository, artifact_namespace=ns.artifact_namespace,
+            expected_sha256=ns.expected_sha256,
+        )
+    if ns.portfolio_command == "resolve":
+        return {
+            **resolve_project(
+                document["portfolio"], host_id=ns.host, project_id=ns.project,
+                target_root=ns.target_root, persona_id=ns.persona,
+            ),
+            "config_path": document["path"],
+            "config_sha256": document["sha256"],
+        }
+    if ns.portfolio_command == "prepare":
+        from odibi_anchor.startup import prepare_portfolio_runtime
+
+        return prepare_portfolio_runtime(
+            config_path=ns.config, host_id=ns.host, project_id=ns.project,
+            persona_id=ns.persona,
+        )
+    raise RequestError("unsupported portfolio command")
+
+
+def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
+    from odibi_anchor.durability import list_snapshots, restore_latest, snapshot_state
+
+    if ns.state_command == "list":
+        return list_snapshots(durable_root=ns.durable_root, authority_id=ns.authority)
+    if ns.state_command == "snapshot":
+        return snapshot_state(
+            source_db=ns.database,
+            durable_root=ns.durable_root,
+            authority_id=ns.authority,
+            databricks=ns.databricks,
+        )
+    if ns.state_command == "restore":
+        return restore_latest(
+            durable_root=ns.durable_root,
+            destination_db=ns.database,
+            authority_id=ns.authority,
+            databricks=ns.databricks,
+        )
+    raise RequestError("unsupported state command")
 
 
 def _boot(root: str | None):
@@ -220,6 +335,23 @@ def main(argv: list[str] | None = None) -> int:
             return _emit({"ok": True, "result": doctor()})
         except Exception as exc:
             return _emit({"ok": False, "error": error_information(exc)}, EXIT_BOOTSTRAP)
+    if ns.command == "setup-host":
+        try:
+            from odibi_anchor.host_setup import setup_host
+
+            return _emit({"ok": True, "result": setup_host(ns.target, adapter=ns.adapter)})
+        except (OSError, RuntimeError, ValueError) as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
+    if ns.command == "portfolio":
+        try:
+            return _emit({"ok": True, "result": _portfolio_command(ns)})
+        except (OSError, RuntimeError, ValueError) as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
+    if ns.command == "state":
+        try:
+            return _emit({"ok": True, "result": _state_command(ns)})
+        except (OSError, RuntimeError, ValueError) as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
     if ns.command == "install-guidance":
         try:
             from odibi_anchor.startup import install_guidance

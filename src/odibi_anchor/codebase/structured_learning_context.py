@@ -1791,11 +1791,21 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
             # structured learning and cannot poison semantic retrieval.
             continue
         project_refs = hydrated["project_refs"]
-        if hydrated["applicability_scope"] != "project_local" or len(project_refs) != 1:
-            # Automatic projection cannot infer that a workbench/cross-project claim
-            # is safe to disclose globally. Human triage owns any scope widening.
+        scope = hydrated["applicability_scope"]
+        from odibi_anchor._dispatcher._boot import _ENV
+
+        authority_id = _ENV.get("authority_id")
+        trust_domain = _ENV.get("trust_domain")
+        work_authority = (
+            scope == "workbench"
+            and trust_domain == "work"
+            and bool(authority_id)
+        )
+        if not ((scope == "project_local" and len(project_refs) == 1) or work_authority):
+            # A workbench claim enters shared retrieval only inside one explicit
+            # work authority. Cross-project widening remains human-triaged.
             continue
-        project = project_refs[0]
+        project = project_refs[0] if scope == "project_local" else "all"
         with sqlite3.connect(path) as recurrence_connection:
             recurrence_count = recurrence_connection.execute(
                 "SELECT count(*) FROM learning_items WHERE recurrence_key=? "
@@ -1824,6 +1834,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
+                "authority_id": authority_id,
+                "trust_domain": trust_domain,
             },
             project=project, db_path=str(path),
         )
@@ -1839,6 +1851,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
+                "authority_id": authority_id,
+                "trust_domain": trust_domain,
                 "evidence_ref_sha256": sorted(
                     evidence["reference_sha256"] for evidence in evidence_refs
                 ),

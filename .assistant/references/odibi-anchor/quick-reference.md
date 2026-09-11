@@ -9,6 +9,11 @@ target. A unique exact target match can supply the project ID; ambiguity require
 ID. `workspace/.active_project` is not routing authority. Run `anchor doctor` before startup
 when the home, route, host, or task implications are uncertain.
 
+Preferred configured startup: `anchor portfolio prepare --config <absolute-config> --host
+<host-id> --project <project-id>`. Host setup: `anchor setup-host
+<amp|claude|databricks|chatgpt> --target <instruction-root>`. Both return one exact next
+operation and never infer a global active project.
+
 Substantial problem: `anchor("problem", "create", title="...")`; capture stable `I*`,
 `H*`, and `E*` entries; resume with `anchor("problem", "resume", "PRB-...")`.
 
@@ -61,12 +66,19 @@ Authority remains in Problems, Specs, decisions, and work items. Memory cannot a
 satisfy skills, or replace verification. Human-attested `learning triage` is the only
 episodic-to-semantic publication boundary.
 
+An explicit `work` authority may share assessed evidence-backed `workbench` observations as
+advisory `all`-project candidates within that one authority database. Personal/work boundaries
+remain separate; candidates never become authority or verification.
+
 Forensics are read-only: `anchor("memory", "replay", task_window_id=...,
 view="inspect|verify|context")` restores recorded, redacted context—not execution or
 chain-of-thought. Diagnose storage with `anchor("memory", "storage", command="inspect")`; create
 a non-destructive move plan with `anchor("memory", "storage", command="plan",
 destination="/absolute/path")`. Actual migration and cross-trust-domain transfer require
 separate authority.
+
+With durable state configured, successful authority writes checkpoint local SQLite. Use
+`anchor state list|snapshot|restore`; never open the durable snapshot as live SQLite.
 
 ## Hard Limits (RuntimeError)
 

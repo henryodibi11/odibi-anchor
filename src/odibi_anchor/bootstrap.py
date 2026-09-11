@@ -175,6 +175,43 @@ def init(
         route_binding=route_binding,
     )
     ROOT = _runtime_roots.target_root or _runtime_roots.artifact_root
+
+    # Bind the live database to the resolved work authority before any memory,
+    # task, journal, or schema module can read or mutate it. Callers that do not
+    # opt into an authority retain the legacy local-only startup contract.
+    from odibi_anchor._dispatcher._boot import _ENV as _BOOT_ENV
+
+    _authority_id = _BOOT_ENV.get("authority_id")
+    _trust_domain = _BOOT_ENV.get("trust_domain")
+    _durable_root = _BOOT_ENV.get("durable_root")
+    if _authority_id is not None or _durable_root is not None:
+        if not _authority_id or _trust_domain != "work":
+            raise RuntimeError(
+                "configured authority startup requires ANCHOR_AUTHORITY_ID and "
+                "ANCHOR_TRUST_DOMAIN=work"
+            )
+        from odibi_anchor.durability import ensure_database_authority
+
+        _authority_database = Path(_BOOT_ENV["memory_db"])
+        if _durable_root is not None:
+            from odibi_anchor.durability import qualify_durability
+
+            if not Path(_durable_root).is_dir():
+                raise FileNotFoundError(
+                    "configured durable_root is unavailable; refusing authority startup"
+                )
+            qualify_durability(
+                source_db=_authority_database,
+                durable_root=_durable_root,
+                authority_id=_authority_id,
+                databricks=bool(_BOOT_ENV.get("is_databricks")),
+            )
+        ensure_database_authority(
+            _authority_database,
+            authority_id=_authority_id,
+            trust_domain=_trust_domain,
+            initialize=not _authority_database.exists(),
+        )
     _initial_registry = route_binding or resolve_active_project(ANCHOR_ROOT_LOCAL, project)
     _initial_registry_version = project_routing_fingerprint(ANCHOR_ROOT_LOCAL, _initial_registry)
     _routing_stale_reason = [None]
@@ -1935,6 +1972,9 @@ def init(
                             "recorded_after_acceptance": True,
                         },
                     )
+                    from odibi_anchor._dispatcher._post_dispatch import _snapshot_durable_state
+
+                    _snapshot_durable_state(_final, memory_db=_DEFAULT_DB_PATH)
         finally:
             if action == "task":
                 if sys.exc_info()[0] is not None and _prior_timing_count is not None:
