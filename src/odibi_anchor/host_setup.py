@@ -62,6 +62,23 @@ def _target_root(value: str | os.PathLike[str]) -> Path:
     return path.resolve()
 
 
+def _databricks_target_root(value: str | os.PathLike[str]) -> Path | None:
+    text = os.fspath(value)
+    if not text.startswith("/Workspace/"):
+        return None
+    path = PurePosixPath(text)
+    if (
+        not text
+        or "\n" in text
+        or "\r" in text
+        or text.endswith("/")
+        or path.as_posix() != text
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError("target_root must be an explicit normalized Databricks Workspace path")
+    return Path(text)
+
+
 def _safe_relative(value: object) -> str:
     if not isinstance(value, str) or not value or "\\" in value:
         raise HostSetupError("host guidance manifest is malformed: invalid managed path")
@@ -157,11 +174,7 @@ def _desired_files(adapter: str) -> dict[str, bytes]:
     return dict(sorted(desired.items()))
 
 
-def _load_manifest(target: Path) -> dict[str, Any] | None:
-    path = target / _MANIFEST
-    if not path.exists():
-        return None
-    content = _regular_bytes(path, f"managed manifest {_MANIFEST}")
+def _parse_manifest(content: bytes) -> dict[str, Any]:
     try:
         value = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -193,6 +206,13 @@ def _load_manifest(target: Path) -> dict[str, Any] | None:
     return normalized
 
 
+def _load_manifest(target: Path) -> dict[str, Any] | None:
+    path = target / _MANIFEST
+    if not path.exists():
+        return None
+    return _parse_manifest(_regular_bytes(path, f"managed manifest {_MANIFEST}"))
+
+
 def _destination(target: Path, relative: str) -> Path:
     destination = target.joinpath(*PurePosixPath(relative).parts)
     current = target
@@ -205,6 +225,182 @@ def _destination(target: Path, relative: str) -> Path:
     return destination
 
 
+def _workspace_api_path(target: Path, relative: str | None = None) -> str:
+    root = target.as_posix().removeprefix("/Workspace")
+    if relative is None:
+        return root
+    return f"{root}/{relative}"
+
+
+def _workspace_missing(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, FileNotFoundError)
+        or getattr(exc, "status_code", None) == 404
+        or str(getattr(exc, "error_code", "")).upper()
+        in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}
+    )
+
+
+def _workspace_read(workspace: Any, path: str) -> bytes | None:
+    try:
+        stream = workspace.download(path)
+    except Exception as exc:
+        if _workspace_missing(exc):
+            return None
+        raise HostSetupError(f"Workspace guidance path is inaccessible: {path}") from exc
+    try:
+        content = stream.read()
+    except Exception as exc:
+        raise HostSetupError(f"Workspace guidance path is unreadable: {path}") from exc
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+    if not isinstance(content, bytes):
+        raise HostSetupError(f"Workspace guidance path did not return bytes: {path}")
+    return content
+
+
+def _workspace_write(workspace: Any, path: str, content: bytes, import_format: Any) -> None:
+    workspace.mkdirs(PurePosixPath(path).parent.as_posix())
+    workspace.upload(path, content, format=import_format, overwrite=True)
+
+
+def _workspace_delete(workspace: Any, path: str) -> None:
+    try:
+        workspace.delete(path)
+    except Exception as exc:
+        if not _workspace_missing(exc):
+            raise
+
+
+def _verify_workspace_publication(
+    workspace: Any,
+    target: Path,
+    desired: dict[str, bytes],
+    manifest_bytes: bytes,
+) -> None:
+    for relative, expected in desired.items():
+        if _workspace_read(workspace, _workspace_api_path(target, relative)) != expected:
+            raise HostSetupError(f"published host guidance verification failed: {relative}")
+    if _workspace_read(workspace, _workspace_api_path(target, _MANIFEST)) != manifest_bytes:
+        raise HostSetupError("published host guidance verification failed: manifest")
+
+
+def _setup_databricks_workspace(
+    target: Path,
+    desired: dict[str, bytes],
+) -> dict[str, Any]:
+    try:
+        sdk = importlib.import_module("databricks.sdk")
+        workspace_types = importlib.import_module("databricks.sdk.service.workspace")
+        workspace = sdk.WorkspaceClient().workspace
+        import_format = workspace_types.ImportFormat.AUTO
+    except Exception as exc:
+        raise HostSetupError("Databricks Workspace host setup requires an authenticated SDK") from exc
+
+    target_path = _workspace_api_path(target)
+    try:
+        target_status = workspace.get_status(target_path)
+    except Exception as exc:
+        raise HostSetupError(f"Databricks Workspace target is inaccessible: {target_path}") from exc
+    raw_object_type = getattr(target_status, "object_type", None)
+    object_type = str(getattr(raw_object_type, "value", raw_object_type)).upper()
+    if object_type not in {"DIRECTORY", "REPO"}:
+        raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
+
+    manifest_path = _workspace_api_path(target, _MANIFEST)
+    manifest_content = _workspace_read(workspace, manifest_path)
+    manifest = None if manifest_content is None else _parse_manifest(manifest_content)
+    if manifest is not None and manifest["adapter"] != "databricks":
+        raise HostSetupError(
+            "host guidance manifest adapter mismatch: "
+            f"managed={manifest['adapter']}, requested=databricks"
+        )
+    previous: dict[str, str] = {} if manifest is None else manifest["files"]
+    compatible_unmanaged: list[str] = []
+    existing: dict[str, bytes | None] = {}
+    for relative in sorted(set(previous) | set(desired)):
+        content = _workspace_read(workspace, _workspace_api_path(target, relative))
+        existing[relative] = content
+        expected = previous.get(relative)
+        if content is not None:
+            actual = _sha256(content)
+            if expected is None:
+                if relative in desired and actual == _sha256(desired[relative]):
+                    continue
+                raise HostSetupError(f"unmanaged destination collision: {relative}")
+            if actual != expected:
+                raise HostSetupError(
+                    f"modified managed file: {relative} (expected {expected}, actual {actual})"
+                )
+        elif expected is not None:
+            raise HostSetupError(
+                f"modified managed file: {relative} (expected {expected}, actual missing)"
+            )
+
+    hashes = {relative: _sha256(content) for relative, content in desired.items()}
+    manifest_bytes = (json.dumps(
+        {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": hashes},
+        indent=2, sort_keys=True,
+    ) + "\n").encode()
+    if manifest is not None and previous == hashes:
+        _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+        return _result(target, "databricks", "unchanged", hashes, compatible_unmanaged)
+
+    before = {**existing, _MANIFEST: manifest_content}
+    mutation_order = [*desired, *sorted(set(previous) - set(desired)), _MANIFEST]
+    mutated: list[str] = []
+    try:
+        for relative, content in desired.items():
+            if existing.get(relative) == content:
+                continue
+            mutated.append(relative)
+            _workspace_write(
+                workspace, _workspace_api_path(target, relative), content, import_format
+            )
+        for relative in sorted(set(previous) - set(desired)):
+            mutated.append(relative)
+            _workspace_delete(workspace, _workspace_api_path(target, relative))
+        mutated.append(_MANIFEST)
+        _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
+        _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+    except BaseException as publication_error:
+        rollback_errors: list[str] = []
+        for relative in reversed(dict.fromkeys(mutated)):
+            path = _workspace_api_path(target, relative)
+            original = before.get(relative)
+            try:
+                if original is None:
+                    _workspace_delete(workspace, path)
+                else:
+                    _workspace_write(workspace, path, original, import_format)
+            except BaseException:
+                rollback_errors.append(relative)
+        for relative in dict.fromkeys(mutation_order):
+            try:
+                if _workspace_read(workspace, _workspace_api_path(target, relative)) != before.get(
+                    relative
+                ):
+                    rollback_errors.append(relative)
+            except BaseException:
+                rollback_errors.append(relative)
+        if rollback_errors:
+            failed = ", ".join(sorted(set(rollback_errors)))
+            raise HostSetupError(
+                "Databricks Workspace host guidance publication and rollback failed for: "
+                f"{failed}"
+            ) from publication_error
+        if isinstance(publication_error, Exception):
+            raise HostSetupError(
+                "Databricks Workspace host guidance publication failed; original state restored"
+            ) from publication_error
+        raise
+
+    status = "installed" if manifest is None else "upgraded"
+    return _result(target, "databricks", status, hashes, compatible_unmanaged)
+
+
 def setup_host(
     target_root: str | os.PathLike[str], *, adapter: str
 ) -> dict[str, Any]:
@@ -213,10 +409,15 @@ def setup_host(
     ``target_root`` is mandatory and never inferred.  All collisions are validated
     before publication; a manifest records the exact bytes owned by Anchor.
     """
-    target = _target_root(target_root)
     if adapter not in _ADAPTER_FILES:
         raise ValueError("adapter must be one of: amp, chatgpt, claude, databricks")
+    workspace_target = (
+        _databricks_target_root(target_root) if adapter == "databricks" else None
+    )
+    target = workspace_target or _target_root(target_root)
     desired = _desired_files(adapter)
+    if workspace_target is not None:
+        return _setup_databricks_workspace(target, desired)
     manifest = _load_manifest(target)
     if manifest is not None and manifest["adapter"] != adapter:
         raise HostSetupError(

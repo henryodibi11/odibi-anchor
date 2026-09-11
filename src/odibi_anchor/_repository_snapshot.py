@@ -402,10 +402,10 @@ def capture_databricks_git_folder_task_baseline(
 ) -> DatabricksGitFolderTaskBaseline:
     """Capture an explicit weaker source baseline without inventing local-Git facts."""
     root = Path(target_worktree).resolve(strict=True)
-    if (root / ".git").exists() or _canonical_local_git_available(root):
+    if _canonical_local_git_available(root):
         raise _databricks_block(
-            "local .git metadata or canonical local Git and an explicit Databricks provider "
-            "are both present; select exactly one repository authority"
+            "canonical local Git and an explicit Databricks provider are both available; "
+            "select exactly one repository authority"
         )
     if accept_unknown_git_state is not True:
         raise _databricks_block(

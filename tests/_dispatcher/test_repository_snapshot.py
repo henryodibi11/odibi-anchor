@@ -562,6 +562,23 @@ def test_databricks_provider_cannot_bypass_local_git_authority(repository: Path)
         capture_databricks_baseline(repository, provider, ["a.py"])
 
 
+def test_databricks_projected_git_directory_does_not_compete_with_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = StubDatabricksRepositoryProvider()
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(
+        "odibi_anchor._repository_snapshot._canonical_local_git_available",
+        lambda _root: False,
+    )
+
+    baseline = capture_databricks_baseline(tmp_path, provider, ["source.py"])
+
+    assert baseline.identity.repository_id == "42"
+    assert baseline.identity_provider is provider
+
+
 def test_databricks_baseline_preserves_exact_preimages_without_public_bytes(
     tmp_path: Path,
 ) -> None:

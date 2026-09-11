@@ -2,6 +2,16 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-09-11
+
+### Fixed
+
+- Databricks host setup now publishes and verifies Workspace guidance through the Workspace
+  API, avoiding asynchronous FUSE writes, stale nodes, atomic renames, and staging residue.
+- Databricks Git Folder tasks now treat a projected `.git` directory as part of the explicit
+  provider-backed checkout when canonical local Git is unavailable, while still rejecting two
+  genuinely usable repository authorities.
+
 ## [0.3.1] - 2026-09-11
 
 ### Fixed
@@ -89,3 +99,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.2.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.4
 [0.3.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.0
 [0.3.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.1
+[0.3.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.2

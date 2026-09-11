@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
 from pathlib import Path
@@ -377,6 +378,142 @@ def test_databricks_staging_cleanup_failure_is_reported(monkeypatch):
 
     with pytest.raises(HostSetupError, match="Workspace staging cleanup failed"):
         module._cleanup_staging(staging, "databricks")
+
+
+class WorkspaceNotFound(RuntimeError):
+    status_code = 404
+    error_code = "RESOURCE_DOES_NOT_EXIST"
+
+
+class FakeWorkspaceFiles:
+    def __init__(self, root: str) -> None:
+        self.directories = {root}
+        self.files: dict[str, bytes] = {}
+        self.calls: list[tuple[str, str]] = []
+        self.fail_upload_once: str | None = None
+
+    def get_status(self, path: str):
+        self.calls.append(("get_status", path))
+        if path not in self.directories:
+            raise WorkspaceNotFound(path)
+        return SimpleNamespace(object_type=SimpleNamespace(value="DIRECTORY"))
+
+    def download(self, path: str):
+        self.calls.append(("download", path))
+        if path not in self.files:
+            raise WorkspaceNotFound(path)
+        return io.BytesIO(self.files[path])
+
+    def mkdirs(self, path: str) -> None:
+        self.calls.append(("mkdirs", path))
+        current = Path(path)
+        for parent in reversed((current, *current.parents)):
+            if parent.as_posix() != ".":
+                self.directories.add(parent.as_posix())
+
+    def upload(self, path: str, content: bytes, *, format, overwrite: bool) -> None:
+        self.calls.append(("upload", path))
+        assert format == "AUTO"
+        assert overwrite is True
+        if self.fail_upload_once == path:
+            self.fail_upload_once = None
+            raise OSError("simulated Workspace API write failure")
+        if Path(path).parent.as_posix() not in self.directories:
+            raise WorkspaceNotFound(f"missing parent for {path}")
+        self.files[path] = bytes(content)
+
+    def delete(self, path: str, *, recursive: bool = False) -> None:
+        self.calls.append(("delete", path))
+        if path in self.files:
+            del self.files[path]
+            return
+        if recursive and path in self.directories:
+            self.files = {
+                name: content
+                for name, content in self.files.items()
+                if not name.startswith(path + "/")
+            }
+            self.directories = {
+                name for name in self.directories if not name.startswith(path + "/")
+            }
+            return
+        raise WorkspaceNotFound(path)
+
+
+def _workspace_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, FakeWorkspaceFiles]:
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    workspace = FakeWorkspaceFiles("/Users/test@example.invalid/anchor-host")
+
+    def import_module(name: str):
+        if name == "databricks.sdk":
+            return SimpleNamespace(
+                WorkspaceClient=lambda: SimpleNamespace(workspace=workspace)
+            )
+        if name == "databricks.sdk.service.workspace":
+            return SimpleNamespace(ImportFormat=SimpleNamespace(AUTO="AUTO"))
+        pytest.fail(f"unexpected import: {name}")
+
+    monkeypatch.setattr(module.importlib, "import_module", import_module)
+    return resources, workspace
+
+
+def test_databricks_workspace_install_uses_api_without_staging(tmp_path, monkeypatch):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        module.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: pytest.fail("Workspace setup must not create FUSE staging"),
+    )
+
+    first = setup_host(
+        "/Workspace/Users/test@example.invalid/anchor-host", adapter="databricks"
+    )
+    repeated = setup_host(
+        "/Workspace/Users/test@example.invalid/anchor-host", adapter="databricks"
+    )
+
+    assert first["status"] == "installed"
+    assert repeated["status"] == "unchanged"
+    assert first["verified_skill_count"] == 18
+    assert first["verified_file_count"] == len(first["managed_files"])
+    assert not any(".anchor-host-stage-" in path for _operation, path in workspace.calls)
+    assert not any("__pycache__" in path or path.endswith(".pyc") for path in workspace.files)
+
+
+def test_databricks_workspace_api_upgrade_restores_original_on_failure(
+    tmp_path, monkeypatch
+):
+    resources, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    setup_host(target, adapter="databricks")
+    original = dict(workspace.files)
+    (resources / ".assistant" / "README.md").write_text("updated guidance\n")
+    (resources / "agent_bootstrap.py").write_text("# updated bootstrap\n")
+    failing_path = "/Users/test@example.invalid/anchor-host/agent_bootstrap.py"
+    workspace.fail_upload_once = failing_path
+
+    with pytest.raises(HostSetupError, match="publication failed; original state restored"):
+        setup_host(target, adapter="databricks")
+
+    assert workspace.files == original
+    assert not any(".anchor-host-stage-" in path for _operation, path in workspace.calls)
+
+
+def test_databricks_workspace_api_refuses_modified_managed_file(tmp_path, monkeypatch):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    setup_host(target, adapter="databricks")
+    managed = "/Users/test@example.invalid/anchor-host/.assistant/README.md"
+    workspace.files[managed] = b"user edit\n"
+    before = dict(workspace.files)
+
+    with pytest.raises(HostSetupError, match="modified managed file"):
+        setup_host(target, adapter="databricks")
+
+    assert workspace.files == before
 
 
 @pytest.mark.parametrize("retire", [False, True])

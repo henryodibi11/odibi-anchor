@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.1"
+python -m pip install "odibi-anchor==0.3.2"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.1"
+python -m pip install "odibi-anchor[mcp]==0.3.2"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.1"
+%pip install "odibi-anchor[databricks]==0.3.2"
 dbutils.library.restartPython()
 ```
 
@@ -92,8 +92,9 @@ orientation = anchor("orient", output_format="dict")
 ```
 
 Run `anchor setup-host databricks --target /Workspace/Users/<user>` once to install and
-subsequently reconcile the packaged instructions and launcher. Create a PortfolioV1 to keep
-host-specific project roots and state locations explicit instead of rediscovering them. See
+subsequently reconcile the packaged instructions and launcher. Workspace targets are published
+and byte-verified through the Databricks Workspace API rather than the FUSE mount. Create a
+PortfolioV1 to keep host-specific project roots and state locations explicit instead of rediscovering them. See
 [getting started](docs/guides/getting-started.md) and
 [portfolio and durable state](docs/guides/portfolio-and-durable-state.md).
 
