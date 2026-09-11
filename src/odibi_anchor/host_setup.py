@@ -18,6 +18,13 @@ _ADAPTER_FILES = {
     "databricks": "agent_bootstrap.py",
     "chatgpt": "AGENTS.md",
 }
+_ADAPTER_OMITTED_PREFIXES = {
+    # Workspace Files cannot reliably materialize the deeply nested third-party
+    # snapshot cache. The installed package retains it for runtime reference
+    # lookup; host guidance needs the canonical contract, skills, and authored
+    # references only.
+    "databricks": (".assistant/references/snapshots/",),
+}
 _POINTERS = {
     "AGENTS.md": (
         b"# Odibi Anchor guidance\n\n"
@@ -96,6 +103,8 @@ def _desired_files(adapter: str) -> dict[str, bytes]:
             )
         if candidate.is_file():
             relative = candidate.relative_to(resources).as_posix()
+            if relative.startswith(_ADAPTER_OMITTED_PREFIXES.get(adapter, ())):
+                continue
             desired[relative] = _regular_bytes(candidate, f"packaged {relative}")
     host_file = _ADAPTER_FILES[adapter]
     if host_file == "agent_bootstrap.py":
@@ -294,6 +303,10 @@ def _result(
         "kind": "host_guidance_setup",
         "status": status,
         "adapter": adapter,
+        "resource_profile": (
+            "databricks_workspace_compact" if adapter == "databricks" else "complete"
+        ),
+        "omitted_packaged_prefixes": list(_ADAPTER_OMITTED_PREFIXES.get(adapter, ())),
         "target_root": str(target),
         "manifest_path": str(target / _MANIFEST),
         "managed_files": [
