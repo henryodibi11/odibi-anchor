@@ -103,6 +103,9 @@ def _desired_files(adapter: str) -> dict[str, bytes]:
             )
         if candidate.is_file():
             relative = candidate.relative_to(resources).as_posix()
+            relative_parts = PurePosixPath(relative).parts
+            if "__pycache__" in relative_parts or relative.endswith((".pyc", ".pyo")):
+                continue
             if relative.startswith(_ADAPTER_OMITTED_PREFIXES.get(adapter, ())):
                 continue
             desired[relative] = _regular_bytes(candidate, f"packaged {relative}")
