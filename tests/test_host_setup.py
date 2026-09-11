@@ -223,3 +223,36 @@ def test_publication_interrupt_restores_original_or_preserves_backup(tmp_path, m
 
     assert managed.read_bytes() == original
     assert not list(target.glob(".anchor-host-stage-*"))
+
+
+@pytest.mark.parametrize("retire", [False, True])
+def test_interrupt_immediately_after_backup_move_cannot_delete_original(
+    tmp_path, monkeypatch, retire
+):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    setup_host(target, adapter="amp")
+    managed = target / ".assistant" / "README.md"
+    original = managed.read_bytes()
+    if retire:
+        (resources / ".assistant" / "README.md").unlink()
+    else:
+        (resources / ".assistant" / "README.md").write_text("new packaged content\n")
+    real_replace = module.os.replace
+
+    def interrupt_after_move(source, destination):
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if source_path == managed and "backup" in destination_path.parts:
+            real_replace(source, destination)
+            raise KeyboardInterrupt("interrupted after backup move")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", interrupt_after_move)
+    with pytest.raises(KeyboardInterrupt, match="interrupted after backup move"):
+        setup_host(target, adapter="amp")
+
+    assert managed.read_bytes() == original
+    assert not list(target.glob(".anchor-host-stage-*"))

@@ -242,6 +242,15 @@ def setup_host(
         preserve_staging = False
     except BaseException as publication_error:
         preserve_staging = True
+        tracked_backups = {
+            saved for _destination_path, saved in published if saved is not None
+        }
+        if backup.is_dir():
+            for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
+                if saved not in tracked_backups:
+                    published.append(
+                        (_destination(target, saved.relative_to(backup).as_posix()), saved)
+                    )
         rollback_errors: list[str] = []
         for destination, saved in reversed(published):
             try:
@@ -251,6 +260,15 @@ def setup_host(
                     os.replace(saved, destination)
             except BaseException as exc:
                 rollback_errors.append(f"{destination}: {type(exc).__name__}")
+        remaining_backups = (
+            sorted(path for path in backup.rglob("*") if path.is_file())
+            if backup.is_dir()
+            else []
+        )
+        if remaining_backups:
+            rollback_errors.append(
+                f"{len(remaining_backups)} recovery backup(s) remain"
+            )
         if rollback_errors:
             raise HostSetupError(
                 "host setup publication and rollback failed; backups preserved at "
