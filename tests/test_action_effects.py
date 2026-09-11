@@ -595,8 +595,10 @@ def test_successful_authority_write_checkpoints_configured_active_state(tmp_path
     durable = tmp_path / "durable"
     durable.mkdir()
     monkeypatch.setitem(boot._ENV, "memory_db", str(database))
-    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
-    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(boot._ENV, "authority_id", "work")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "is_databricks", False)
     state = SimpleNamespace(
         active_problem=None, active_task_profile=None, prior_learn_debt=False,
         skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
@@ -611,6 +613,55 @@ def test_successful_authority_write_checkpoints_configured_active_state(tmp_path
 
     assert result["durable_state"]["action"] == "created"
     assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
+
+
+def test_successful_memory_rejection_is_preserved_in_durable_restore(tmp_path, monkeypatch):
+    import sqlite3
+
+    import odibi_anchor._dispatcher._boot as boot
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+    from odibi_anchor.codebase._memory_db import (
+        close_db,
+        insert_memory,
+        reject_memory_entry,
+    )
+    from odibi_anchor.durability import restore_latest
+
+    database = tmp_path / "memory.db"
+    durable = tmp_path / "durable"
+    restored = tmp_path / "restored.db"
+    durable.mkdir()
+    memory = insert_memory(
+        str(database), project="alpha", type="gotcha", content="Rejected candidate"
+    )
+    rejection = reject_memory_entry(str(database), entry_id=memory["id"])
+    monkeypatch.setitem(boot._ENV, "memory_db", str(database))
+    monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(boot._ENV, "authority_id", "work")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "is_databricks", False)
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+
+    result = run_post_dispatch(
+        "reject", rejection, None, (), {},
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(CONTRACTS["reject"], (), {}),
+    )
+    close_db(str(database))
+    restore_latest(
+        durable_root=durable, destination_db=restored, authority_id="work"
+    )
+
+    assert result["durable_state"]["action"] == "created"
+    with sqlite3.connect(restored) as connection:
+        status = connection.execute(
+            "SELECT status FROM memories WHERE id=?", (memory["id"],)
+        ).fetchone()[0]
+    assert status == "rejected"
 
 
 def test_pre_dispatch_data_change_requires_exact_spec_evidence():

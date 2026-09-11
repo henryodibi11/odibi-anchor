@@ -42,7 +42,10 @@ def _absolute_path(value: str | os.PathLike[str], label: str) -> Path:
     if not path.is_absolute():
         raise ValueError(f"{label} must be an absolute path")
     _reject_symlinks(path, label)
-    return Path(os.path.abspath(path))
+    canonical = os.path.abspath(path)
+    if os.name != "nt" and canonical.startswith("//"):
+        canonical = "/" + canonical.lstrip("/")
+    return Path(canonical)
 
 
 def _authority_id(value: str) -> str:

@@ -197,3 +197,29 @@ def test_publication_and_rollback_failure_preserves_recovery_backups(
     staging = list(target.glob(".anchor-host-stage-*"))
     assert len(staging) == 1
     assert any((staging[0] / "backup").rglob("*"))
+
+
+def test_publication_interrupt_restores_original_or_preserves_backup(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    setup_host(target, adapter="amp")
+    managed = target / ".assistant" / "README.md"
+    original = managed.read_bytes()
+    (resources / ".assistant" / "README.md").write_text("new packaged content\n")
+    real_replace = module.os.replace
+
+    def interrupted_replace(source, destination):
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if "new" in source_path.parts and destination_path == managed:
+            raise KeyboardInterrupt("publication interrupted")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", interrupted_replace)
+    with pytest.raises(KeyboardInterrupt, match="publication interrupted"):
+        setup_host(target, adapter="amp")
+
+    assert managed.read_bytes() == original
+    assert not list(target.glob(".anchor-host-stage-*"))

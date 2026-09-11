@@ -62,6 +62,64 @@ def test_launch_derives_unique_project_from_verified_target(tmp_path, monkeypatc
     assert status["runtime"]["route_binding"]["project_id"] == "alpha"
 
 
+@pytest.mark.parametrize("with_durability", [False, True])
+def test_launch_refuses_database_owned_by_another_authority(
+    tmp_path, monkeypatch, with_durability
+):
+    from odibi_anchor.durability import ensure_database_authority
+
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    artifact = home / "workspace" / "projects" / "alpha"
+    target.mkdir()
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        "---\nid: alpha\nname: alpha\nstatus: active\nproject_type: referenced\n"
+        f"target_root: {target}\n---\n"
+    )
+    ensure_database_authority(
+        home / ".agent_memory.db", authority_id="authority-a",
+        trust_domain="work", initialize=True,
+    )
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / ".agent_memory.db"))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "authority-b")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    if with_durability:
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
+    else:
+        monkeypatch.delenv("ANCHOR_DURABLE_ROOT", raising=False)
+
+    with pytest.raises(RuntimeError, match="authority identity conflicts"):
+        launch(anchor_home=home, project_id="alpha", project_root=target)
+
+
+def test_launch_stops_before_database_initialization_when_durable_root_is_unavailable(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    artifact = home / "workspace" / "projects" / "alpha"
+    target.mkdir()
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        "---\nid: alpha\nname: alpha\nstatus: active\nproject_type: referenced\n"
+        f"target_root: {target}\n---\n"
+    )
+    database = home / ".agent_memory.db"
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(database))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(tmp_path / "missing-durable"))
+
+    with pytest.raises(FileNotFoundError, match="durable_root is unavailable"):
+        launch(anchor_home=home, project_id="alpha", project_root=target)
+    assert not database.exists()
+
+
 def test_register_project_prepares_exact_first_launch(tmp_path, monkeypatch):
     home = tmp_path / "new-home"
     target = tmp_path / "target"

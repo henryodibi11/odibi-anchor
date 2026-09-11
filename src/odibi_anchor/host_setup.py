@@ -225,6 +225,7 @@ def setup_host(
             destination = _destination(target, relative)
             saved = backup / relative
             saved.parent.mkdir(parents=True, exist_ok=True)
+            preserve_staging = True
             os.replace(destination, saved)
             published.append((destination, saved))
         for relative in [*desired, _MANIFEST]:
@@ -234,10 +235,13 @@ def setup_host(
             if destination.exists():
                 saved = backup / relative
                 saved.parent.mkdir(parents=True, exist_ok=True)
+                preserve_staging = True
                 os.replace(destination, saved)
             published.append((destination, saved))
             os.replace(staging / "new" / relative, destination)
-    except Exception as publication_error:
+        preserve_staging = False
+    except BaseException as publication_error:
+        preserve_staging = True
         rollback_errors: list[str] = []
         for destination, saved in reversed(published):
             try:
@@ -245,14 +249,14 @@ def setup_host(
                 if saved is not None and saved.exists():
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(saved, destination)
-            except OSError as exc:
+            except BaseException as exc:
                 rollback_errors.append(f"{destination}: {type(exc).__name__}")
         if rollback_errors:
-            preserve_staging = True
             raise HostSetupError(
                 "host setup publication and rollback failed; backups preserved at "
                 f"{staging}: {', '.join(rollback_errors)}"
             ) from publication_error
+        preserve_staging = False
         raise
     finally:
         if not preserve_staging:

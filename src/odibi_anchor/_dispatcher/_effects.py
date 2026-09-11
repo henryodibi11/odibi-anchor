@@ -55,6 +55,8 @@ def dispatch_succeeded(action: str, result: Any, err: BaseException | None = Non
         if isinstance(readiness, Mapping) and readiness.get("score", 100) < 40:
             return False
     failed = {"fail", "failed", "error", "blocked", "rejected"}
+    if action == "reject":
+        failed.remove("rejected")
     for container in (result, result.get("metrics")):
         if isinstance(container, Mapping):
             for key in ("status", "outcome", "result"):

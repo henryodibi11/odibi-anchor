@@ -162,6 +162,16 @@ def test_unsafe_paths_are_rejected(tmp_path: Path) -> None:
             destination_db="/tmp/../Workspace/Users/owner/live.db",
             durable_root=str(durable), databricks=True, authority_id="work",
         )
+    with pytest.raises(ValueError, match="local compute"):
+        durability.qualify_paths(
+            source_db="//Volumes/catalog/schema/live.db",
+            durable_root=str(durable), databricks=True, authority_id="work",
+        )
+    with pytest.raises(ValueError, match="local compute"):
+        durability.qualify_paths(
+            destination_db="//Workspace/Users/owner/live.db",
+            durable_root=str(durable), databricks=True, authority_id="work",
+        )
 
 
 def test_changed_checkpoint_advances_past_equal_or_rolled_back_clock(
