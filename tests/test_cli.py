@@ -160,6 +160,27 @@ def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypat
         assert connection.execute("SELECT value FROM facts").fetchone() == ("kept",)
 
 
+def test_state_list_cli_selects_databricks_transport(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "_boot", lambda _root: pytest.fail("dispatcher booted"))
+    monkeypatch.setattr(
+        "odibi_anchor.durability.list_snapshots",
+        lambda **kwargs: calls.append(kwargs) or {"snapshots": []},
+    )
+
+    assert cli.main([
+        "state", "list", "--durable-root", "/Volumes/catalog/schema/anchor",
+        "--authority", "work", "--databricks",
+    ]) == 0
+
+    assert calls == [{
+        "durable_root": "/Volumes/catalog/schema/anchor",
+        "authority_id": "work",
+        "databricks": True,
+    }]
+    assert json.loads(capsys.readouterr().out)["result"] == {"snapshots": []}
+
+
 def test_invalid_input_is_rejected_before_bootstrap(monkeypatch, capsys):
     boots = []
     monkeypatch.setattr(cli, "_boot", lambda root: boots.append(root))

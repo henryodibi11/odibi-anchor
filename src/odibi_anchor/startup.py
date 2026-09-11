@@ -153,7 +153,8 @@ def prepare_portfolio_runtime(
     trust_domain = environment["ANCHOR_TRUST_DOMAIN"]
     adapter = document["portfolio"]["hosts"][host_id]["adapter"]
     durable_root = environment.get("ANCHOR_DURABLE_ROOT")
-    if durable_root is not None and not Path(durable_root).is_dir():
+    is_databricks = adapter == "databricks"
+    if durable_root is not None and not is_databricks and not Path(durable_root).is_dir():
         raise FileNotFoundError(
             "configured durable_root is unavailable; refusing to initialize or reuse local state"
         )
@@ -164,23 +165,30 @@ def prepare_portfolio_runtime(
             source_db=database,
             durable_root=durable_root,
             authority_id=authority_id,
-            databricks=adapter == "databricks",
+            databricks=is_databricks,
         )
     home.mkdir(parents=True, exist_ok=True)
     restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
     if not database.exists():
-        snapshot_root = (
-            Path(durable_root) / authority_id / "snapshots" if durable_root else None
-        )
-        if snapshot_root is not None and snapshot_root.is_dir() and any(snapshot_root.iterdir()):
-            from odibi_anchor.durability import restore_latest
+        snapshots: list[dict[str, Any]] = []
+        if durable_root is not None:
+            from odibi_anchor.durability import list_snapshots, restore_latest
 
+            try:
+                snapshots = list_snapshots(
+                    durable_root=durable_root,
+                    authority_id=authority_id,
+                    databricks=is_databricks,
+                )["snapshots"]
+            except FileNotFoundError:
+                snapshots = []
+        if snapshots:
             assert durable_root is not None
             restore = restore_latest(
                 durable_root=durable_root,
                 destination_db=database,
                 authority_id=authority_id,
-                databricks=adapter == "databricks",
+                databricks=is_databricks,
             )
         else:
             restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}

@@ -74,7 +74,8 @@ Manual inspection and recovery are available without opening SQLite on durable
 storage:
 
 ```bash
-anchor state list --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai
+anchor state list --durable-root /Volumes/catalog/schema/anchor \
+  --authority enterprise-analytics-ai --databricks
 anchor state snapshot --database /tmp/odibi-anchor/.agent_memory.db \
   --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 anchor state restore --database /tmp/odibi-anchor/.agent_memory.db \

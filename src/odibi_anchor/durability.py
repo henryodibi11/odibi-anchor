@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import importlib
 import json
 import os
 import re
 import shutil
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -32,7 +35,12 @@ def _next(operation: str, **arguments: Any) -> dict[str, Any]:
     return {"operation": operation, "arguments": arguments}
 
 
-def _absolute_path(value: str | os.PathLike[str], label: str) -> Path:
+def _absolute_path(
+    value: str | os.PathLike[str],
+    label: str,
+    *,
+    inspect_filesystem: bool = True,
+) -> Path:
     text = os.fspath(value)
     if not isinstance(text, str) or not text:
         raise ValueError(f"{label} must be a non-empty path string")
@@ -41,7 +49,8 @@ def _absolute_path(value: str | os.PathLike[str], label: str) -> Path:
     path = Path(text)
     if not path.is_absolute():
         raise ValueError(f"{label} must be an absolute path")
-    _reject_symlinks(path, label)
+    if inspect_filesystem:
+        _reject_symlinks(path, label)
     canonical = os.path.abspath(path)
     if os.name != "nt" and canonical.startswith("//"):
         canonical = "/" + canonical.lstrip("/")
@@ -86,7 +95,11 @@ def qualify_paths(
     databricks: bool = False,
 ) -> dict[str, Any]:
     """Secret-free, read-only qualification of explicit snapshot/restore paths."""
-    root = _absolute_path(durable_root, "durable_root")
+    root = _absolute_path(
+        durable_root,
+        "durable_root",
+        inspect_filesystem=not databricks,
+    )
     authority = _authority_id(authority_id)
     source = _absolute_path(source_db, "source_db") if source_db is not None else None
     destination = _absolute_path(destination_db, "destination_db") if destination_db is not None else None
@@ -96,6 +109,8 @@ def qualify_paths(
         if path is not None:
             _reject_overlap(path, root, f"{label} and durable_root")
     if databricks:
+        if not _is_within(root, Path("/Volumes")):
+            raise ValueError("durable_root must be a Unity Catalog Volume when databricks=True")
         for path, label in ((source, "source_db"), (destination, "destination_db")):
             if path is not None and any(_is_within(path, prefix) for prefix in _DURABLE_LIVE_PREFIXES):
                 raise ValueError(f"{label} must be on local compute when databricks=True")
@@ -104,9 +119,9 @@ def qualify_paths(
     arguments["authority_id"] = authority
     if source is not None:
         arguments["source_db"] = str(source)
-        arguments["databricks"] = databricks
     else:
         arguments["destination_db"] = str(destination)
+    arguments["databricks"] = databricks
     return {
         "kind": "durability_qualification",
         "qualified": True,
@@ -138,7 +153,10 @@ def qualify_durability(
 
 
 def ensure_database_authority(
-    database: str | os.PathLike[str], *, authority_id: str, trust_domain: str,
+    database: str | os.PathLike[str],
+    *,
+    authority_id: str,
+    trust_domain: str,
     initialize: bool = False,
 ) -> dict[str, Any]:
     """Bind or verify the one authority that owns a live SQLite store."""
@@ -313,17 +331,104 @@ def _validated_manifests(root: Path) -> list[dict[str, Any]]:
     return validated
 
 
-def list_snapshots(*, durable_root: str | os.PathLike[str], authority_id: str) -> dict[str, Any]:
-    """Deterministically list only complete, valid canonical publications."""
-    root = _absolute_path(durable_root, "durable_root")
-    authority = _authority_id(authority_id)
-    _reject_symlinks(root, "durable_root")
-    if not root.is_dir():
-        raise FileNotFoundError(f"durable_root is not a directory: {root}")
+def _databricks_files_api() -> Any:
+    try:
+        sdk = importlib.import_module("databricks.sdk")
+    except ImportError as exc:
+        raise RuntimeError("Databricks durability requires the Databricks SDK available in the runtime") from exc
+    return sdk.WorkspaceClient().files
+
+
+def _is_databricks_not_found(error: Exception) -> bool:
+    try:
+        errors = importlib.import_module("databricks.sdk.errors")
+    except ImportError:
+        return False
+    return isinstance(error, errors.NotFound)
+
+
+def _remote_child(parent: str, name: str) -> str:
+    return f"{parent.rstrip('/')}/{name}"
+
+
+def _download_remote_snapshot_files(files: Any, remote_root: str, local_root: Path) -> None:
+    local_root.mkdir(exist_ok=True)
+    for entry in files.list_directory_contents(remote_root):
+        remote_path = str(entry.path)
+        name = remote_path.rsplit("/", 1)[-1]
+        if remote_path != _remote_child(remote_root, name):
+            raise RuntimeError("invalid Databricks snapshot entry")
+        if not name.endswith((_MANIFEST_SUFFIX, _SNAPSHOT_SUFFIX)):
+            continue
+        if not name or "/" in name or "\\" in name:
+            raise RuntimeError("invalid Databricks snapshot entry")
+        files.download_to(remote_path, str(local_root / name), overwrite=False, use_parallel=False)
+
+
+@contextmanager
+def _snapshot_view(
+    root: Path,
+    authority: str,
+    *,
+    databricks: bool,
+    create: bool = False,
+) -> Iterator[tuple[Path, Any | None, str]]:
     snapshot_root = root / authority / "snapshots"
-    if not snapshot_root.is_dir():
-        raise FileNotFoundError(f"authority snapshot root is not a directory: {snapshot_root}")
-    manifests = _validated_manifests(snapshot_root)
+    if not databricks:
+        if create:
+            snapshot_root.mkdir(parents=True, exist_ok=True)
+            _reject_symlinks(snapshot_root, "authority snapshot root")
+        yield snapshot_root, None, str(snapshot_root)
+        return
+
+    files = _databricks_files_api()
+    remote_root = _remote_child(_remote_child(str(root), authority), "snapshots")
+    if create:
+        files.create_directory(remote_root)
+    with tempfile.TemporaryDirectory(prefix="odibi-anchor-durable-view-") as temporary_directory:
+        local_root = Path(temporary_directory)
+        try:
+            _download_remote_snapshot_files(files, remote_root, local_root)
+        except Exception as exc:
+            if _is_databricks_not_found(exc):
+                raise FileNotFoundError(f"authority snapshot root is not a directory: {remote_root}") from exc
+            raise
+        yield local_root, files, remote_root
+
+
+def _publish_remote_file(files: Any, source: Path, destination: str) -> None:
+    files.upload_from(destination, str(source), overwrite=False, use_parallel=False)
+    with tempfile.TemporaryDirectory(prefix="odibi-anchor-upload-check-") as temporary_directory:
+        verified = Path(temporary_directory) / source.name
+        files.download_to(destination, str(verified), overwrite=False, use_parallel=False)
+        if _sha256(verified) != _sha256(source):
+            raise RuntimeError(f"Databricks upload verification failed: {source.name}")
+
+
+def list_snapshots(
+    *,
+    durable_root: str | os.PathLike[str],
+    authority_id: str,
+    databricks: bool = False,
+) -> dict[str, Any]:
+    """Deterministically list only complete, valid canonical publications."""
+    root = _absolute_path(
+        durable_root,
+        "durable_root",
+        inspect_filesystem=not databricks,
+    )
+    authority = _authority_id(authority_id)
+    if databricks and not _is_within(root, Path("/Volumes")):
+        raise ValueError("durable_root must be a Unity Catalog Volume when databricks=True")
+    if not databricks:
+        _reject_symlinks(root, "durable_root")
+        if not root.is_dir():
+            raise FileNotFoundError(f"durable_root is not a directory: {root}")
+        snapshot_root = root / authority / "snapshots"
+        if not snapshot_root.is_dir():
+            raise FileNotFoundError(f"authority snapshot root is not a directory: {snapshot_root}")
+    with _snapshot_view(root, authority, databricks=databricks) as (snapshot_root, _, _):
+        manifests = _validated_manifests(snapshot_root)
     entries = [
         {
             "created_at": item["created_at"],
@@ -345,6 +450,7 @@ def list_snapshots(*, durable_root: str | os.PathLike[str], authority_id: str) -
             durable_root=str(root),
             authority_id=authority,
             destination_db="<absolute-local-path>",
+            databricks=databricks,
         ),
     }
 
@@ -365,16 +471,16 @@ def snapshot_state(
     )
     source = Path(qualified["source_db"])
     root = Path(qualified["durable_root"])
-    snapshot_root = root / qualified["authority_id"] / "snapshots"
     if not source.is_file():
         raise FileNotFoundError(f"source_db is not a file: {source}")
-    if not root.is_dir():
+    if not databricks and not root.is_dir():
         raise FileNotFoundError(f"durable_root is not a directory: {root}")
     authority = ensure_database_authority(
-        source, authority_id=qualified["authority_id"], trust_domain="work", initialize=True,
+        source,
+        authority_id=qualified["authority_id"],
+        trust_domain="work",
+        initialize=True,
     )
-    snapshot_root.mkdir(parents=True, exist_ok=True)
-    _reject_symlinks(snapshot_root, "authority snapshot root")
     with tempfile.TemporaryDirectory(prefix="odibi-anchor-snapshot-") as temporary_directory:
         staged = Path(temporary_directory) / "snapshot.sqlite3"
         source_connection = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)
@@ -388,84 +494,109 @@ def snapshot_state(
         if inspection["integrity_check"] != "ok":
             raise RuntimeError("staged snapshot failed SQLite integrity check")
         snapshot_sha256 = _sha256(staged)
-        snapshot_path = snapshot_root / f"{snapshot_sha256}{_SNAPSHOT_SUFFIX}"
-        manifests = _validated_manifests(snapshot_root)
-        if manifests:
-            latest_created = max(str(item["created_at"]) for item in manifests)
-            latest = [item for item in manifests if item["created_at"] == latest_created]
-            if len(latest) != 1:
-                raise RuntimeError("ambiguous latest durable snapshot")
-            existing = latest[0]
-        else:
-            existing = None
-        if existing is not None and existing["sha256"] == snapshot_sha256:
-            manifest_path = snapshot_root / f"{existing['snapshot_id']}{_MANIFEST_SUFFIX}"
+        with _snapshot_view(
+            root,
+            qualified["authority_id"],
+            databricks=databricks,
+            create=True,
+        ) as (snapshot_root, files, publication_root):
+            if databricks:
+                assert files is not None
+            snapshot_path = snapshot_root / f"{snapshot_sha256}{_SNAPSHOT_SUFFIX}"
+            published_snapshot_path = _remote_child(publication_root, snapshot_path.name)
+            manifests = _validated_manifests(snapshot_root)
+            if manifests:
+                latest_created = max(str(item["created_at"]) for item in manifests)
+                latest = [item for item in manifests if item["created_at"] == latest_created]
+                if len(latest) != 1:
+                    raise RuntimeError("ambiguous latest durable snapshot")
+                existing = latest[0]
+            else:
+                existing = None
+            if existing is not None and existing["sha256"] == snapshot_sha256:
+                manifest_path = snapshot_root / f"{existing['snapshot_id']}{_MANIFEST_SUFFIX}"
+                published_manifest_path = _remote_child(publication_root, manifest_path.name)
+                return {
+                    "kind": "durable_snapshot",
+                    "action": "reused",
+                    "manifest": existing,
+                    "manifest_path": published_manifest_path,
+                    "snapshot_path": published_snapshot_path,
+                    "authority": authority,
+                    "transport": "databricks_files_api" if databricks else "local_filesystem",
+                    "next_operation": _next(
+                        "restore_latest",
+                        durable_root=str(root),
+                        authority_id=qualified["authority_id"],
+                        destination_db="<absolute-local-path>",
+                        databricks=databricks,
+                    ),
+                }
+            created = datetime.now(UTC)
+            if existing is not None:
+                latest = datetime.fromisoformat(existing["created_at"].replace("Z", "+00:00"))
+                if created <= latest:
+                    created = latest + timedelta(microseconds=1)
+            created_at = created.isoformat(timespec="microseconds").replace("+00:00", "Z")
+            checkpoint = re.sub(r"[^0-9TZ]", "", created_at)
+            snapshot_id = f"{checkpoint}-{snapshot_sha256[:16]}"
+            manifest_path = snapshot_root / f"{snapshot_id}{_MANIFEST_SUFFIX}"
+            published_manifest_path = _remote_child(publication_root, manifest_path.name)
+            body = {
+                "created_at": created_at,
+                "authority_id": qualified["authority_id"],
+                "format": _FORMAT,
+                "integrity_check": "ok",
+                "logical_digest": inspection["logical_digest"],
+                "schema": inspection["schema"],
+                "sha256": snapshot_sha256,
+                "size_bytes": staged.stat().st_size,
+                "snapshot_file": snapshot_path.name,
+                "snapshot_id": snapshot_id,
+            }
+            manifest = dict(body)
+            manifest["manifest_sha256"] = hashlib.sha256(_canonical_bytes(body)).hexdigest()
+            staged_manifest = Path(temporary_directory) / "manifest.json"
+            staged_manifest.write_bytes(_canonical_bytes(manifest))
+            snapshot_created = not snapshot_path.exists()
+            if snapshot_created:
+                if databricks:
+                    _publish_remote_file(files, staged, published_snapshot_path)
+                else:
+                    _publish_file_exclusive(staged, snapshot_path)
+            elif _sha256(snapshot_path) != snapshot_sha256:
+                raise RuntimeError("durable snapshot content collision")
+            try:
+                # The canonical manifest is the commit marker. Roll back this
+                # attempt's uncommitted snapshot if marker publication fails.
+                if databricks:
+                    _publish_remote_file(files, staged_manifest, published_manifest_path)
+                else:
+                    _publish_file_exclusive(staged_manifest, manifest_path)
+            except Exception:
+                if snapshot_created:
+                    if databricks:
+                        assert files is not None
+                        files.delete(published_snapshot_path)
+                    else:
+                        snapshot_path.unlink(missing_ok=True)
+                raise
             return {
                 "kind": "durable_snapshot",
-                "action": "reused",
-                "manifest": existing,
-                "manifest_path": str(manifest_path),
-                "snapshot_path": str(snapshot_path),
+                "action": "created",
+                "manifest": manifest,
+                "manifest_path": published_manifest_path,
+                "snapshot_path": published_snapshot_path,
                 "authority": authority,
+                "transport": "databricks_files_api" if databricks else "local_filesystem",
                 "next_operation": _next(
                     "restore_latest",
                     durable_root=str(root),
                     authority_id=qualified["authority_id"],
                     destination_db="<absolute-local-path>",
+                    databricks=databricks,
                 ),
             }
-        created = datetime.now(UTC)
-        if existing is not None:
-            latest = datetime.fromisoformat(existing["created_at"].replace("Z", "+00:00"))
-            if created <= latest:
-                created = latest + timedelta(microseconds=1)
-        created_at = created.isoformat(timespec="microseconds").replace("+00:00", "Z")
-        checkpoint = re.sub(r"[^0-9TZ]", "", created_at)
-        snapshot_id = f"{checkpoint}-{snapshot_sha256[:16]}"
-        manifest_path = snapshot_root / f"{snapshot_id}{_MANIFEST_SUFFIX}"
-        body = {
-            "created_at": created_at,
-            "authority_id": qualified["authority_id"],
-            "format": _FORMAT,
-            "integrity_check": "ok",
-            "logical_digest": inspection["logical_digest"],
-            "schema": inspection["schema"],
-            "sha256": snapshot_sha256,
-            "size_bytes": staged.stat().st_size,
-            "snapshot_file": snapshot_path.name,
-            "snapshot_id": snapshot_id,
-        }
-        manifest = dict(body)
-        manifest["manifest_sha256"] = hashlib.sha256(_canonical_bytes(body)).hexdigest()
-        staged_manifest = Path(temporary_directory) / "manifest.json"
-        staged_manifest.write_bytes(_canonical_bytes(manifest))
-        snapshot_created = not snapshot_path.exists()
-        if snapshot_created:
-            _publish_file_exclusive(staged, snapshot_path)
-        elif _sha256(snapshot_path) != snapshot_sha256:
-            raise RuntimeError("durable snapshot content collision")
-        try:
-            # The canonical manifest is the commit marker. Roll back this
-            # attempt's uncommitted snapshot if marker publication fails.
-            _publish_file_exclusive(staged_manifest, manifest_path)
-        except Exception:
-            if snapshot_created:
-                snapshot_path.unlink(missing_ok=True)
-            raise
-    return {
-        "kind": "durable_snapshot",
-        "action": "created",
-        "manifest": manifest,
-        "manifest_path": str(manifest_path),
-        "snapshot_path": str(snapshot_path),
-        "authority": authority,
-        "next_operation": _next(
-            "restore_latest",
-            durable_root=str(root),
-            authority_id=qualified["authority_id"],
-            destination_db="<absolute-local-path>",
-        ),
-    }
 
 
 def restore_latest(
@@ -480,49 +611,61 @@ def restore_latest(
     if overwrite:
         raise ValueError("destructive overwrite is not supported")
     qualified = qualify_paths(
-        durable_root=durable_root, destination_db=destination_db,
-        authority_id=authority_id, databricks=databricks,
+        durable_root=durable_root,
+        destination_db=destination_db,
+        authority_id=authority_id,
+        databricks=databricks,
     )
     root = Path(qualified["durable_root"])
     destination = Path(qualified["destination_db"])
-    snapshot_root = root / qualified["authority_id"] / "snapshots"
-    if not root.is_dir():
+    if not databricks and not root.is_dir():
         raise FileNotFoundError(f"durable_root is not a directory: {root}")
     if destination.exists():
         raise FileExistsError(f"destination_db already exists: {destination}")
     if not destination.parent.is_dir():
         raise FileNotFoundError(f"destination parent is not a directory: {destination.parent}")
-    if not snapshot_root.is_dir():
-        raise RuntimeError("no valid durable snapshots")
-    manifests = _validated_manifests(snapshot_root)
-    if not manifests:
-        raise RuntimeError("no valid durable snapshots")
-    latest_created = max(str(item["created_at"]) for item in manifests)
-    latest = [item for item in manifests if item["created_at"] == latest_created]
-    if len(latest) != 1:
-        raise RuntimeError("ambiguous latest durable snapshot")
-    manifest = latest[0]
-    if manifest.get("authority_id") != qualified["authority_id"]:
-        raise RuntimeError("durable snapshot authority mismatch")
-    durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
-    # Stage on the destination filesystem so hard-link publication is an atomic,
-    # no-overwrite directory-entry operation rather than the partial-copy fallback.
-    with tempfile.TemporaryDirectory(prefix=".odibi-anchor-restore-", dir=destination.parent) as temporary_directory:
-        staged = Path(temporary_directory) / "restore.sqlite3"
-        shutil.copyfile(durable_snapshot, staged)
-        if _sha256(staged) != manifest["sha256"]:
-            raise RuntimeError("staged restore hash mismatch")
-        inspection = _inspect_local_database(staged)
-        if inspection["integrity_check"] != "ok":
-            raise RuntimeError("staged restore failed SQLite integrity check")
-        if inspection["logical_digest"] != manifest["logical_digest"]:
-            raise RuntimeError("staged restore logical digest mismatch")
-        ensure_database_authority(
-            staged, authority_id=qualified["authority_id"], trust_domain="work",
-        )
-        _publish_file_exclusive(staged, destination)
+    with _snapshot_view(root, qualified["authority_id"], databricks=databricks) as (
+        snapshot_root,
+        _,
+        _,
+    ):
+        if not snapshot_root.is_dir():
+            raise RuntimeError("no valid durable snapshots")
+        manifests = _validated_manifests(snapshot_root)
+        if not manifests:
+            raise RuntimeError("no valid durable snapshots")
+        latest_created = max(str(item["created_at"]) for item in manifests)
+        latest = [item for item in manifests if item["created_at"] == latest_created]
+        if len(latest) != 1:
+            raise RuntimeError("ambiguous latest durable snapshot")
+        manifest = latest[0]
+        if manifest.get("authority_id") != qualified["authority_id"]:
+            raise RuntimeError("durable snapshot authority mismatch")
+        durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
+        # Stage on the destination filesystem so hard-link publication is an atomic,
+        # no-overwrite directory-entry operation rather than the partial-copy fallback.
+        with tempfile.TemporaryDirectory(
+            prefix=".odibi-anchor-restore-", dir=destination.parent
+        ) as temporary_directory:
+            staged = Path(temporary_directory) / "restore.sqlite3"
+            shutil.copyfile(durable_snapshot, staged)
+            if _sha256(staged) != manifest["sha256"]:
+                raise RuntimeError("staged restore hash mismatch")
+            inspection = _inspect_local_database(staged)
+            if inspection["integrity_check"] != "ok":
+                raise RuntimeError("staged restore failed SQLite integrity check")
+            if inspection["logical_digest"] != manifest["logical_digest"]:
+                raise RuntimeError("staged restore logical digest mismatch")
+            ensure_database_authority(
+                staged,
+                authority_id=qualified["authority_id"],
+                trust_domain="work",
+            )
+            _publish_file_exclusive(staged, destination)
     authority = ensure_database_authority(
-        destination, authority_id=qualified["authority_id"], trust_domain="work",
+        destination,
+        authority_id=qualified["authority_id"],
+        trust_domain="work",
     )
     return {
         "kind": "durable_restore",
@@ -533,5 +676,6 @@ def restore_latest(
         "logical_digest": manifest["logical_digest"],
         "integrity_check": "ok",
         "authority": authority,
+        "transport": "databricks_files_api" if databricks else "local_filesystem",
         "next_operation": _next("inspect_restored_state", destination_db=str(destination)),
     }
