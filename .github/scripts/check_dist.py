@@ -4,10 +4,10 @@ from __future__ import annotations
 import re
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
 
-EXPECTED_VERSION = "0.2.3"
 FORBIDDEN = re.compile(
     r"(^|/)(?:\.git|\.venv|\.pytest_cache|\.ruff_cache|\.context-workbench|"
     r"\.odibi-anchor|workspace|sessions|__pycache__)(?:/|$)|"
@@ -33,10 +33,12 @@ def check_path(name: str) -> None:
 
 def main() -> None:
     dist = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
     artifacts = sorted([*dist.glob("*.whl"), *dist.glob("*.tar.gz")])
     expected = {
-        f"odibi_anchor-{EXPECTED_VERSION}-py3-none-any.whl",
-        f"odibi_anchor-{EXPECTED_VERSION}.tar.gz",
+        f"odibi_anchor-{version}-py3-none-any.whl",
+        f"odibi_anchor-{version}.tar.gz",
     }
     if {path.name for path in artifacts} != expected:
         raise SystemExit(f"expected exactly {sorted(expected)}, found {[p.name for p in artifacts]}")
