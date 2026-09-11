@@ -2,6 +2,13 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-09-11
+
+### Fixed
+
+- Host guidance setup now excludes generated Python bytecode for every adapter, preventing
+  `__pycache__` staging failures on constrained filesystems such as Databricks Workspace Files.
+
 ## [0.2.2] - 2026-09-11
 
 ### Fixed
@@ -45,3 +52,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.2.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.0
 [0.2.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.1
 [0.2.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.2
+[0.2.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.3
