@@ -184,7 +184,7 @@ def init(
     _authority_id = _BOOT_ENV.get("authority_id")
     _trust_domain = _BOOT_ENV.get("trust_domain")
     _durable_root = _BOOT_ENV.get("durable_root")
-    if any(value is not None for value in (_authority_id, _trust_domain, _durable_root)):
+    if _authority_id is not None or _durable_root is not None:
         if not _authority_id or _trust_domain != "work":
             raise RuntimeError(
                 "configured authority startup requires ANCHOR_AUTHORITY_ID and "
