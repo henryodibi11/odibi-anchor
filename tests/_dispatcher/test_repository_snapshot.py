@@ -579,6 +579,22 @@ def test_databricks_projected_git_directory_does_not_compete_with_provider(
     assert baseline.identity_provider is provider
 
 
+def test_databricks_baseline_accepts_explicitly_unavailable_git_provider(tmp_path: Path) -> None:
+    provider = StubDatabricksRepositoryProvider()
+    provider.identity = DatabricksGitFolderIdentity(
+        repository_id="42",
+        workspace_path="/Users/test@example.invalid/odibi_anchor",
+        branch="main",
+        head_sha="a" * 40,
+        remote_url="https://example.invalid/repository.git",
+        git_provider=None,
+    )
+
+    baseline = capture_databricks_baseline(tmp_path, provider, ["source.py"])
+
+    assert baseline.identity.git_provider is None
+
+
 def test_databricks_baseline_preserves_exact_preimages_without_public_bytes(
     tmp_path: Path,
 ) -> None:

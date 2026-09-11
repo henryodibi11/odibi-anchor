@@ -87,17 +87,20 @@ class DatabricksGitFolderRepositoryProvider:
             raise ContractError("target worktree does not match the configured Databricks Git Folder")
         expected_path = self.workspace_path or _canonical_workspace_path(target_worktree)
         status = self._api("workspace_get_status", {"path": expected_path})
-        if str(status.get("object_type", "")).upper() != "REPO":
-            raise ContractError("workspace path is not a Databricks REPO object")
+        object_type = str(status.get("object_type", "")).upper()
+        if object_type != "REPO" and not (
+            object_type == "DIRECTORY" and status.get("is_git_folder") is True
+        ):
+            raise ContractError("workspace path is not a Databricks Git Folder")
         repository_id = status.get("object_id")
         if isinstance(repository_id, bool) or not isinstance(repository_id, (int, str)):
-            raise ContractError("workspace REPO status is missing object_id")
+            raise ContractError("workspace Git Folder status is missing object_id")
         repository_id = str(repository_id).strip()
         if not repository_id:
-            raise ContractError("workspace REPO status has an empty object_id")
+            raise ContractError("workspace Git Folder status has an empty object_id")
         status_path = status.get("path")
         if not isinstance(status_path, str) or _canonical_workspace_path(status_path) != expected_path:
-            raise ContractError("workspace REPO status path does not match the requested Git Folder")
+            raise ContractError("workspace status path does not match the requested Git Folder")
 
         repo = self._api("repos_get", {"repo_id": repository_id})
         repo_id = repo.get("id")
@@ -112,10 +115,13 @@ class DatabricksGitFolderRepositoryProvider:
             "branch": repo.get("branch"),
             "head_sha": repo.get("head_commit_id"),
             "remote_url": repo.get("url"),
-            "git_provider": repo.get("provider"),
         }
         if any(not isinstance(value, str) or not value.strip() for value in fields.values()):
-            raise ContractError("Repos response is missing branch, HEAD, URL, or provider")
+            raise ContractError("Repos response is missing branch, HEAD, or URL")
+        git_provider = repo.get("provider")
+        if git_provider is not None and not isinstance(git_provider, str):
+            raise ContractError("Repos provider must be a string when available")
+        normalized_git_provider = None if git_provider is None else git_provider.strip() or None
         head_sha = str(fields["head_sha"]).strip().lower()
         if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
             raise ContractError("Repos head_commit_id must be an exact 40-character commit SHA")
@@ -125,7 +131,7 @@ class DatabricksGitFolderRepositoryProvider:
             branch=str(fields["branch"]).strip(),
             head_sha=head_sha,
             remote_url=str(fields["remote_url"]).strip(),
-            git_provider=str(fields["git_provider"]).strip(),
+            git_provider=normalized_git_provider,
         )
 
 
@@ -167,10 +173,12 @@ class _DatabricksSDKReadExecutor:
             if set(parameters) != {"path"} or not isinstance(parameters["path"], str):
                 raise ContractError("workspace_get_status requires exactly one path")
             result = self.workspace_client.workspace.get_status(path=parameters["path"])
+            directory_info = _sdk_field(result, "directory_info")
             return {
                 "object_type": _sdk_field(result, "object_type"),
                 "object_id": _sdk_field(result, "object_id"),
                 "path": _sdk_field(result, "path"),
+                "is_git_folder": _sdk_field(directory_info, "is_git_folder"),
             }
         if operation == "repos_get":
             if set(parameters) != {"repo_id"}:

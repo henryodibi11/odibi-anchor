@@ -68,17 +68,34 @@ def test_repository_provider_uses_only_read_operations_and_normalizes_workspace_
     assert identity.git_provider == "gitHub"
 
 
-def test_repository_provider_requires_repo_object_type() -> None:
+def test_repository_provider_rejects_plain_workspace_directory() -> None:
     responses = valid_responses()
     responses["workspace_get_status"]["object_type"] = "DIRECTORY"
+    responses["workspace_get_status"]["is_git_folder"] = False
     api = SimulatedAPI(responses)
 
-    with pytest.raises(ContractError, match="not a Databricks REPO object"):
+    with pytest.raises(ContractError, match="not a Databricks Git Folder"):
         DatabricksGitFolderRepositoryProvider(api).capture_identity(
             "/Users/test@example.invalid/odibi_anchor",
         )
 
     assert [operation for operation, _ in api.calls] == ["workspace_get_status"]
+
+
+def test_repository_provider_accepts_git_folder_directory_without_provider_label() -> None:
+    responses = valid_responses()
+    responses["workspace_get_status"].update({
+        "object_type": "DIRECTORY",
+        "is_git_folder": True,
+    })
+    responses["repos_get"]["provider"] = ""
+
+    identity = DatabricksGitFolderRepositoryProvider(
+        SimulatedAPI(responses)
+    ).capture_identity("/Users/test@example.invalid/odibi_anchor")
+
+    assert identity.repository_id == "42"
+    assert identity.git_provider is None
 
 
 @pytest.mark.parametrize(
@@ -87,7 +104,8 @@ def test_repository_provider_requires_repo_object_type() -> None:
         ("workspace_get_status", "object_id", None, "missing object_id"),
         ("repos_get", "id", 99, "object IDs do not match"),
         ("repos_get", "path", "/Users/other/repo", "path does not match"),
-        ("repos_get", "branch", "", "missing branch, HEAD, URL, or provider"),
+        ("repos_get", "branch", "", "missing branch, HEAD, or URL"),
+        ("repos_get", "provider", object(), "provider must be a string"),
         ("repos_get", "head_commit_id", "short", "exact 40-character commit SHA"),
     ],
 )
@@ -153,6 +171,7 @@ class FakeWorkspaceService:
             object_type=SimpleNamespace(value="REPO"),
             object_id=42,
             path="/Users/test@example.invalid/odibi_anchor",
+            directory_info=None,
         )
 
     def delete(self, *_args: Any, **_kwargs: Any) -> None:
@@ -182,6 +201,33 @@ class FakeWorkspaceClient:
     def __init__(self, *, workspace_error: Exception | None = None) -> None:
         self.workspace = FakeWorkspaceService(error=workspace_error)
         self.repos = FakeReposService()
+
+
+def test_sdk_factory_normalizes_current_git_folder_workspace_shape() -> None:
+    client = FakeWorkspaceClient()
+    client.workspace.get_status = lambda **_kwargs: SimpleNamespace(
+        object_type=SimpleNamespace(value="DIRECTORY"),
+        object_id=42,
+        path="/Users/test@example.invalid/odibi_anchor",
+        directory_info=SimpleNamespace(is_git_folder=True),
+    )
+    client.repos.get = lambda **_kwargs: SimpleNamespace(
+        id=42,
+        path="/Users/test@example.invalid/odibi_anchor",
+        branch="main",
+        head_commit_id="A" * 40,
+        url="https://example.invalid/repository.git",
+        provider="",
+    )
+
+    provider, evidence = autoconfigure_databricks_git_folder_repository(
+        "/Workspace/Users/test@example.invalid/odibi_anchor",
+        workspace_client=client,
+    )
+
+    assert provider is not None
+    assert evidence["acquisition_outcome"] == "available"
+    assert evidence["identity"]["git_provider"] is None
 
 
 def test_sdk_factory_attests_with_exactly_two_read_methods_and_pins_target() -> None:

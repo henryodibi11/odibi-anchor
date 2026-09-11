@@ -106,7 +106,7 @@ class DatabricksGitFolderIdentity:
     branch: str
     head_sha: str
     remote_url: str
-    git_provider: str
+    git_provider: str | None
     evidence_kind: Literal["databricks_git_folder"] = _DATABRICKS_EVIDENCE_KIND
 
 
@@ -119,6 +119,7 @@ class DatabricksGitFolderProvider(Protocol):
         self, target_worktree: str | os.PathLike[str],
     ) -> DatabricksGitFolderIdentity:
         """Return the current host repository identity or raise."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -209,8 +210,9 @@ def _databricks_block(reason: str) -> RuntimeError:
     return RuntimeError(
         "BLOCKED: Databricks Git Folder source evidence is insufficient: "
         f"{reason}. Known host identity fields are limited to repository ID/path, branch, "
-        "HEAD, remote URL, and provider. Local Git cleanliness, staged/unstaged/untracked "
-        "state, conflicts, merge-base, history, and PR readiness remain unavailable. "
+        "HEAD, remote URL, and provider when reported. Local Git cleanliness, "
+        "staged/unstaged/untracked state, conflicts, merge-base, history, and PR readiness "
+        "remain unavailable. "
         "Operations that do not consume task-source evidence may remain available under their "
         "normal task policy."
     )
@@ -250,9 +252,8 @@ def _provider_identity(
         raw = capture(target_worktree)
     except Exception as exc:
         raise _databricks_block("read-only host identity acquisition failed") from exc
-    names = (
-        "repository_id", "workspace_path", "branch", "head_sha", "remote_url", "git_provider",
-    )
+    required_names = ("repository_id", "workspace_path", "branch", "head_sha", "remote_url")
+    names = (*required_names, "git_provider")
     if isinstance(raw, Mapping):
         values = {name: raw.get(name) for name in names}
         evidence_kind = raw.get("evidence_kind")
@@ -260,16 +261,28 @@ def _provider_identity(
         values = {name: getattr(raw, name, None) for name in names}
         evidence_kind = getattr(raw, "evidence_kind", None)
     if evidence_kind != _DATABRICKS_EVIDENCE_KIND or any(
-        not isinstance(values[name], str) or not values[name].strip() for name in names
+        not isinstance(values[name], str) or not str(values[name]).strip()
+        for name in required_names
     ):
         raise _databricks_block("the provider returned incomplete or non-Databricks identity")
-    normalized = {name: values[name].strip() for name in names}
+    git_provider = values["git_provider"]
+    if git_provider is not None and not isinstance(git_provider, str):
+        raise _databricks_block("the provider returned an invalid Git provider")
+    normalized = {name: str(values[name]).strip() for name in required_names}
+    normalized_git_provider = None if git_provider is None else git_provider.strip() or None
     normalized["head_sha"] = normalized["head_sha"].lower()
     if re.fullmatch(r"[0-9a-f]{40}", normalized["head_sha"]) is None:
         raise _databricks_block("the provider returned a non-exact HEAD commit SHA")
     if not normalized["workspace_path"].startswith("/"):
         raise _databricks_block("the provider returned a non-absolute workspace path")
-    return DatabricksGitFolderIdentity(**normalized)
+    return DatabricksGitFolderIdentity(
+        repository_id=normalized["repository_id"],
+        workspace_path=normalized["workspace_path"],
+        branch=normalized["branch"],
+        head_sha=normalized["head_sha"],
+        remote_url=normalized["remote_url"],
+        git_provider=normalized_git_provider,
+    )
 
 
 def _scoped_candidate(root: Path, name: str, *, during_capture: bool) -> Path:
