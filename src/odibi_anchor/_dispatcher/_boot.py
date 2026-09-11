@@ -139,6 +139,10 @@ def _resolve_environment(
         "tools_dir": str(runtime_paths.tools_dir),
         "enforcement": profile.get("enforcement", "standard"),
         "memory_db": memory_db,
+        "authority_id": active_environment.get("ANCHOR_AUTHORITY_ID"),
+        "trust_domain": active_environment.get("ANCHOR_TRUST_DOMAIN"),
+        "durable_root": active_environment.get("ANCHOR_DURABLE_ROOT"),
+        "is_databricks": bool(active_environment.get("DATABRICKS_RUNTIME_VERSION")),
         "runtime_paths": runtime_paths,
     }
 
@@ -178,6 +182,10 @@ def _installed_boot_authority(environment: Mapping[str, Any]) -> tuple[tuple[str
         "tools_dir",
         "enforcement",
         "memory_db",
+        "authority_id",
+        "trust_domain",
+        "durable_root",
+        "is_databricks",
     )
     authority = [(key, environment.get(key)) for key in keys]
     authority.append(("project_roots", tuple(environment.get("project_roots") or ())))

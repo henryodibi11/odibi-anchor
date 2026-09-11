@@ -792,8 +792,10 @@ def test_assessment_does_not_widen_workbench_observation_to_global_memory(ledger
 def test_assessment_projects_workbench_observation_inside_explicit_work_authority(
     ledger: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "enterprise-analytics-ai")
-    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "work")
+    from odibi_anchor._dispatcher import _boot
+
+    monkeypatch.setitem(_boot._ENV, "authority_id", "enterprise-analytics-ai")
+    monkeypatch.setitem(_boot._ENV, "trust_domain", "work")
     obligation = activate()
     item = capture(obligation, observation_type="reusable_practice")
 
@@ -813,6 +815,35 @@ def test_assessment_projects_workbench_observation_inside_explicit_work_authorit
         ).fetchone()
     assert memory[0] == "all"
     assert json.loads(memory[1])["authority_id"] == "enterprise-analytics-ai"
+
+
+def test_work_authority_projection_ignores_environment_mutation_after_boot(
+    ledger: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from odibi_anchor._dispatcher import _boot
+
+    monkeypatch.setitem(_boot._ENV, "authority_id", "bound-authority")
+    monkeypatch.setitem(_boot._ENV, "trust_domain", "work")
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "redirected-authority")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    obligation = activate()
+    item = capture(obligation, observation_type="reusable_practice")
+
+    assessment = learning.structured_learning_context(
+        command="assess",
+        _obligation_id=obligation["obligation_id"],
+        outcome="observations_recorded",
+        observation_ids=[item["item"]["item_id"]],
+    )
+
+    assert isinstance(assessment, dict)
+    projection = assessment["semantic_candidate_projections"][0]
+    assert isinstance(projection, dict)
+    with sqlite3.connect(ledger) as connection:
+        evidence = connection.execute(
+            "SELECT evidence FROM memories WHERE id=?", (projection["memory_id"],)
+        ).fetchone()[0]
+    assert json.loads(evidence)["authority_id"] == "bound-authority"
 
 
 def test_retry_latest_cannot_cross_a_new_active_obligation(ledger: Path) -> None:

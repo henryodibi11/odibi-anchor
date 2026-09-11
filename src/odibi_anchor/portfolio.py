@@ -20,8 +20,10 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 _MAX_BYTES = 1024 * 1024
+_IS_WINDOWS = os.name == "nt"
 _ADAPTERS = frozenset({"amp", "claude", "databricks", "chatgpt"})
 _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
+_PROJECT_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _SECRET = re.compile(r"(?:^|_)(?:secret|token|password|passwd|credential|api_key|private_key)(?:$|_)", re.I)
 _PERSONA_FORBIDDEN = frozenset(
     {
@@ -94,6 +96,12 @@ def _safe_id(value: Any, label: str, *, allow_empty: bool = False) -> str:
     return value
 
 
+def _safe_project_id(value: Any, label: str = "project ID") -> str:
+    if not isinstance(value, str) or len(value) > 128 or not _PROJECT_ID.fullmatch(value):
+        raise ValueError(f"{label} must be a canonical lowercase hyphenated project ID")
+    return value
+
+
 def _absolute(value: Any, label: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{label} must be a string")
@@ -160,7 +168,7 @@ def _structural(portfolio: Any) -> dict[str, Any]:
     projects = _table(root.get("projects", {}), "projects")
     roots_by_host: dict[str, dict[str, str]] = {}
     for project_id, project_value in projects.items():
-        _safe_id(project_id, "project ID")
+        _safe_project_id(project_id)
         project = _table(project_value, f"projects.{project_id}")
         _check_keys(project, {"repository", "artifact_namespace", "targets"}, f"projects.{project_id}")
         for key in ("repository", "artifact_namespace"):
@@ -421,11 +429,12 @@ def _atomic_write(path: Path, data: bytes, expected_sha256: str | None) -> str:
         if path.is_symlink():
             raise ValueError("config path became a symlink during write")
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if not _IS_WINDOWS:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     except BaseException:
         with suppress(FileNotFoundError):
             os.unlink(temporary)
@@ -478,7 +487,7 @@ def scaffold_portfolio(
     if project_id is None:
         portfolio["incomplete_fields"] += [f"hosts.{host}.local_state_root", "projects.id"]
     else:
-        project = _safe_id(project_id, "project_id")
+        project = _safe_project_id(project_id, "project_id")
         portfolio["projects"][project] = {"targets": {host: target}}
         portfolio["incomplete_fields"].append(f"hosts.{host}.local_state_root")
     validation = validate_portfolio(portfolio, host_id=host)
@@ -511,7 +520,7 @@ def add_project(
     if expected_sha256 is not None and expected_sha256 != actual:
         raise ValueError(f"base digest changed: expected {expected_sha256}, found {actual}")
     portfolio = load_portfolio(config)
-    project = _safe_id(project_id, "project_id")
+    project = _safe_project_id(project_id, "project_id")
     host = _safe_id(host_id, "host_id")
     if host not in portfolio.get("hosts", {}):
         raise ValueError(f"host is not configured: {host}")
@@ -562,7 +571,7 @@ def resolve_project(
     projects = portfolio["projects"]
     target = _absolute(target_root, "target_root") if target_root is not None else None
     if project_id is not None:
-        project = _safe_id(project_id, "project_id")
+        project = _safe_project_id(project_id, "project_id")
         if project not in projects:
             raise ValueError(f"project is not configured: {project}")
         configured = projects[project].get("targets", {}).get(host)

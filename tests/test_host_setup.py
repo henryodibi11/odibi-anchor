@@ -168,3 +168,32 @@ def test_symlink_target_and_destination_are_refused(tmp_path, monkeypatch):
     with pytest.raises(HostSetupError, match="symlink"):
         setup_host(target, adapter="amp")
     assert not any(outside.iterdir())
+
+
+def test_publication_and_rollback_failure_preserves_recovery_backups(
+    tmp_path, monkeypatch
+):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    setup_host(target, adapter="amp")
+    (resources / ".assistant" / "README.md").write_text("new packaged content\n")
+    real_replace = module.os.replace
+
+    def failing_replace(source, destination):
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if "new" in source_path.parts and destination_path.name == "README.md":
+            raise OSError("publication failed")
+        if "backup" in source_path.parts:
+            raise OSError("rollback failed")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", failing_replace)
+    with pytest.raises(HostSetupError, match="backups preserved at"):
+        setup_host(target, adapter="amp")
+
+    staging = list(target.glob(".anchor-host-stage-*"))
+    assert len(staging) == 1
+    assert any((staging[0] / "backup").rglob("*"))

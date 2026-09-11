@@ -14,7 +14,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ _SNAPSHOT_SUFFIX = ".sqlite3"
 _FORMAT = "odibi-anchor-durable-snapshot-v1"
 _DURABLE_LIVE_PREFIXES = (Path("/Workspace"), Path("/Volumes"), Path("/dbfs"))
 _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
+_OWNER_TABLE = "anchor_authority_identity"
 
 
 def _next(operation: str, **arguments: Any) -> dict[str, Any]:
@@ -40,7 +41,8 @@ def _absolute_path(value: str | os.PathLike[str], label: str) -> Path:
     path = Path(text)
     if not path.is_absolute():
         raise ValueError(f"{label} must be an absolute path")
-    return path
+    _reject_symlinks(path, label)
+    return Path(os.path.abspath(path))
 
 
 def _authority_id(value: str) -> str:
@@ -83,17 +85,17 @@ def qualify_paths(
     """Secret-free, read-only qualification of explicit snapshot/restore paths."""
     root = _absolute_path(durable_root, "durable_root")
     authority = _authority_id(authority_id)
-    _reject_symlinks(root, "durable_root")
     source = _absolute_path(source_db, "source_db") if source_db is not None else None
     destination = _absolute_path(destination_db, "destination_db") if destination_db is not None else None
     if source is None and destination is None:
         raise ValueError("source_db or destination_db is required")
     for path, label in ((source, "source_db"), (destination, "destination_db")):
         if path is not None:
-            _reject_symlinks(path, label)
             _reject_overlap(path, root, f"{label} and durable_root")
-    if databricks and source is not None and any(_is_within(source, prefix) for prefix in _DURABLE_LIVE_PREFIXES):
-        raise ValueError("source_db must be on local compute when databricks=True")
+    if databricks:
+        for path, label in ((source, "source_db"), (destination, "destination_db")):
+            if path is not None and any(_is_within(path, prefix) for prefix in _DURABLE_LIVE_PREFIXES):
+                raise ValueError(f"{label} must be on local compute when databricks=True")
     operation = "snapshot_state" if source is not None else "restore_latest"
     arguments: dict[str, Any] = {"durable_root": str(root)}
     arguments["authority_id"] = authority
@@ -130,6 +132,58 @@ def qualify_durability(
         authority_id=authority_id,
         databricks=databricks,
     )
+
+
+def ensure_database_authority(
+    database: str | os.PathLike[str], *, authority_id: str, trust_domain: str,
+    initialize: bool = False,
+) -> dict[str, Any]:
+    """Bind or verify the one authority that owns a live SQLite store."""
+    path = _absolute_path(database, "database")
+    authority = _authority_id(authority_id)
+    if trust_domain != "work":
+        raise ValueError("trust_domain must be 'work'")
+    if not path.exists() and not initialize:
+        raise FileNotFoundError(f"database is not a file: {path}")
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"database parent is not a directory: {path.parent}")
+    connection = sqlite3.connect(path)
+    try:
+        exists = connection.execute(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=?",
+            (_OWNER_TABLE,),
+        ).fetchone()[0]
+        if not exists:
+            if not initialize:
+                raise RuntimeError(
+                    "live database has no authority identity; back it up and explicitly adopt it "
+                    "with ensure_database_authority(..., initialize=True) before preparation"
+                )
+            connection.execute(
+                f"CREATE TABLE {_OWNER_TABLE} (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+                "authority_id TEXT NOT NULL,trust_domain TEXT NOT NULL,created_at TEXT NOT NULL)"
+            )
+            connection.execute(
+                f"INSERT INTO {_OWNER_TABLE} VALUES (1,?,?,?)",
+                (authority, trust_domain, datetime.now(UTC).isoformat().replace("+00:00", "Z")),
+            )
+            connection.commit()
+            status = "initialized"
+        else:
+            row = connection.execute(
+                f"SELECT authority_id,trust_domain FROM {_OWNER_TABLE} WHERE singleton=1"
+            ).fetchone()
+            if row != (authority, trust_domain):
+                raise RuntimeError("live database authority identity conflicts with requested authority")
+            status = "verified"
+    finally:
+        connection.close()
+    return {
+        "status": status,
+        "database": str(path),
+        "authority_id": authority,
+        "trust_domain": trust_domain,
+    }
 
 
 def _canonical_bytes(value: dict[str, Any]) -> bytes:
@@ -313,6 +367,9 @@ def snapshot_state(
         raise FileNotFoundError(f"source_db is not a file: {source}")
     if not root.is_dir():
         raise FileNotFoundError(f"durable_root is not a directory: {root}")
+    authority = ensure_database_authority(
+        source, authority_id=qualified["authority_id"], trust_domain="work", initialize=True,
+    )
     snapshot_root.mkdir(parents=True, exist_ok=True)
     _reject_symlinks(snapshot_root, "authority snapshot root")
     with tempfile.TemporaryDirectory(prefix="odibi-anchor-snapshot-") as temporary_directory:
@@ -346,6 +403,7 @@ def snapshot_state(
                 "manifest": existing,
                 "manifest_path": str(manifest_path),
                 "snapshot_path": str(snapshot_path),
+                "authority": authority,
                 "next_operation": _next(
                     "restore_latest",
                     durable_root=str(root),
@@ -353,7 +411,12 @@ def snapshot_state(
                     destination_db="<absolute-local-path>",
                 ),
             }
-        created_at = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        created = datetime.now(UTC)
+        if existing is not None:
+            latest = datetime.fromisoformat(existing["created_at"].replace("Z", "+00:00"))
+            if created <= latest:
+                created = latest + timedelta(microseconds=1)
+        created_at = created.isoformat(timespec="microseconds").replace("+00:00", "Z")
         checkpoint = re.sub(r"[^0-9TZ]", "", created_at)
         snapshot_id = f"{checkpoint}-{snapshot_sha256[:16]}"
         manifest_path = snapshot_root / f"{snapshot_id}{_MANIFEST_SUFFIX}"
@@ -392,6 +455,7 @@ def snapshot_state(
         "manifest": manifest,
         "manifest_path": str(manifest_path),
         "snapshot_path": str(snapshot_path),
+        "authority": authority,
         "next_operation": _next(
             "restore_latest",
             durable_root=str(root),
@@ -407,11 +471,15 @@ def restore_latest(
     destination_db: str | os.PathLike[str],
     authority_id: str,
     overwrite: bool = False,
+    databricks: bool = False,
 ) -> dict[str, Any]:
     """Verify the latest durable snapshot locally and publish only to an absent path."""
     if overwrite:
         raise ValueError("destructive overwrite is not supported")
-    qualified = qualify_paths(durable_root=durable_root, destination_db=destination_db, authority_id=authority_id)
+    qualified = qualify_paths(
+        durable_root=durable_root, destination_db=destination_db,
+        authority_id=authority_id, databricks=databricks,
+    )
     root = Path(qualified["durable_root"])
     destination = Path(qualified["destination_db"])
     snapshot_root = root / qualified["authority_id"] / "snapshots"
@@ -446,7 +514,13 @@ def restore_latest(
             raise RuntimeError("staged restore failed SQLite integrity check")
         if inspection["logical_digest"] != manifest["logical_digest"]:
             raise RuntimeError("staged restore logical digest mismatch")
+        ensure_database_authority(
+            staged, authority_id=qualified["authority_id"], trust_domain="work",
+        )
         _publish_file_exclusive(staged, destination)
+    authority = ensure_database_authority(
+        destination, authority_id=qualified["authority_id"], trust_domain="work",
+    )
     return {
         "kind": "durable_restore",
         "action": "created",
@@ -455,5 +529,6 @@ def restore_latest(
         "sha256": manifest["sha256"],
         "logical_digest": manifest["logical_digest"],
         "integrity_check": "ok",
+        "authority": authority,
         "next_operation": _next("inspect_restored_state", destination_db=str(destination)),
     }

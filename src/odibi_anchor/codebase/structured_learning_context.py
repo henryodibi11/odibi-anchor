@@ -1792,10 +1792,14 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
             continue
         project_refs = hydrated["project_refs"]
         scope = hydrated["applicability_scope"]
+        from odibi_anchor._dispatcher._boot import _ENV
+
+        authority_id = _ENV.get("authority_id")
+        trust_domain = _ENV.get("trust_domain")
         work_authority = (
             scope == "workbench"
-            and os.environ.get("ANCHOR_TRUST_DOMAIN") == "work"
-            and bool(os.environ.get("ANCHOR_AUTHORITY_ID"))
+            and trust_domain == "work"
+            and bool(authority_id)
         )
         if not ((scope == "project_local" and len(project_refs) == 1) or work_authority):
             # A workbench claim enters shared retrieval only inside one explicit
@@ -1830,8 +1834,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
-                "authority_id": os.environ.get("ANCHOR_AUTHORITY_ID"),
-                "trust_domain": os.environ.get("ANCHOR_TRUST_DOMAIN"),
+                "authority_id": authority_id,
+                "trust_domain": trust_domain,
             },
             project=project, db_path=str(path),
         )
@@ -1847,8 +1851,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 "recurrence_count": recurrence_count,
                 "task_window_id": hydrated["provenance"]["task_window_id"],
                 "project_refs": project_refs,
-                "authority_id": os.environ.get("ANCHOR_AUTHORITY_ID"),
-                "trust_domain": os.environ.get("ANCHOR_TRUST_DOMAIN"),
+                "authority_id": authority_id,
+                "trust_domain": trust_domain,
                 "evidence_ref_sha256": sorted(
                     evidence["reference_sha256"] for evidence in evidence_refs
                 ),

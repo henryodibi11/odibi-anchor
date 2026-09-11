@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import pytest
 
+from odibi_anchor import portfolio as portfolio_module
 from odibi_anchor.portfolio import (
     add_project,
     load_portfolio,
@@ -206,11 +207,33 @@ def test_persona_defaults_are_advisory_and_do_not_change_binding(tmp_path):
     assert result["binding_inputs"]["project_id"] == "alpha"
 
 
-def test_ids_must_be_normalized_before_add(tmp_path):
+@pytest.mark.parametrize("project_id", [" beta ", "Beta", "beta_project", "beta.project"])
+def test_project_ids_must_be_canonical_before_add(tmp_path, project_id):
     path = tmp_path / "anchor.toml"
     write_portfolio(path, _portfolio(tmp_path))
-    with pytest.raises(ValueError, match="safe ID"):
-        add_project(path, project_id=" beta ", host_id="amp-host", target_root=str(tmp_path / "beta"))
+    with pytest.raises(ValueError, match="canonical lowercase hyphenated"):
+        add_project(
+            path, project_id=project_id, host_id="amp-host",
+            target_root=str(tmp_path / "beta"),
+        )
+
+
+def test_windows_config_publication_skips_directory_descriptor_fsync(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "anchor.toml"
+    real_open = portfolio_module.os.open
+
+    def guarded_open(candidate, flags, *args, **kwargs):
+        if candidate == path.parent and flags == os.O_RDONLY:
+            raise AssertionError("Windows must not open a directory descriptor")
+        return real_open(candidate, flags, *args, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(portfolio_module.os, "open", guarded_open)
+
+    result = write_portfolio(path, _portfolio(tmp_path))
+    assert result["status"] == "written"
 
 
 def test_only_requested_host_paths_are_probed(tmp_path, monkeypatch):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,30 @@ def test_restore_never_overwrites(tmp_path: Path) -> None:
         )
 
 
+def test_database_authority_cannot_be_reused_across_work_authorities(tmp_path: Path) -> None:
+    database = tmp_path / "live.db"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    _database(database)
+    initialized = durability.ensure_database_authority(
+        database, authority_id="authority-a", trust_domain="work", initialize=True
+    )
+
+    assert initialized["status"] == "initialized"
+    assert durability.ensure_database_authority(
+        database, authority_id="authority-a", trust_domain="work"
+    )["status"] == "verified"
+    with pytest.raises(RuntimeError, match="authority identity conflicts"):
+        durability.ensure_database_authority(
+            database, authority_id="authority-b", trust_domain="work"
+        )
+    with pytest.raises(RuntimeError, match="authority identity conflicts"):
+        durability.snapshot_state(
+            source_db=database, durable_root=durable,
+            authority_id="authority-b",
+        )
+
+
 def test_unsafe_paths_are_rejected(tmp_path: Path) -> None:
     durable = tmp_path / "durable"
     durable.mkdir()
@@ -127,6 +152,46 @@ def test_unsafe_paths_are_rejected(tmp_path: Path) -> None:
         durability.qualify_paths(source_db=str(tmp_path / "bad\n.db"), durable_root=str(durable), authority_id="work")
     with pytest.raises(ValueError, match="absolute"):
         durability.qualify_paths(source_db="relative.db", durable_root=str(durable), authority_id="work")
+    with pytest.raises(ValueError, match="local compute"):
+        durability.qualify_paths(
+            source_db="/tmp/../Volumes/catalog/schema/live.db",
+            durable_root=str(durable), databricks=True, authority_id="work",
+        )
+    with pytest.raises(ValueError, match="local compute"):
+        durability.qualify_paths(
+            destination_db="/tmp/../Workspace/Users/owner/live.db",
+            durable_root=str(durable), databricks=True, authority_id="work",
+        )
+
+
+def test_changed_checkpoint_advances_past_equal_or_rolled_back_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, durable = tmp_path / "live.db", tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+    first = durability.snapshot_state(
+        source_db=source, durable_root=durable, authority_id="work"
+    )
+    with sqlite3.connect(source) as connection:
+        connection.execute("INSERT INTO example(value) VALUES ('changed')")
+    frozen = datetime.fromisoformat(first["manifest"]["created_at"].replace("Z", "+00:00"))
+
+    class RolledBackDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(durability, "datetime", RolledBackDateTime)
+    second = durability.snapshot_state(
+        source_db=source, durable_root=durable, authority_id="work"
+    )
+
+    assert second["action"] == "created"
+    assert second["manifest"]["created_at"] > first["manifest"]["created_at"]
+    assert durability.list_snapshots(
+        durable_root=durable, authority_id="work"
+    )["snapshots"][-1]["snapshot_id"] == second["manifest"]["snapshot_id"]
 
 
 def test_symlink_path_is_rejected(tmp_path: Path) -> None:

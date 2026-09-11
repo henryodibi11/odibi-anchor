@@ -87,8 +87,9 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     durable = tmp_path / "durable"
     durable.mkdir()
     monkeypatch.setitem(boot._ENV, "memory_db", str(db))
-    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(durable))
-    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "work")
+    monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(boot._ENV, "authority_id", "work")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
     result = {"assessment": {
         "assessment_id": "las-durable", "outcome": "nothing_reusable_learned",
         "observation_ids": [], "actor_kind": "agent",
@@ -103,6 +104,34 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     assert result["durable_state"]["action"] == "created"
     assert result["accepted_task_closure"]["status"] == "unavailable"
     assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
+
+
+def test_durable_checkpoint_ignores_environment_redirection_after_boot(tmp_path, monkeypatch):
+    import sqlite3
+
+    import odibi_anchor._dispatcher._boot as boot
+    from odibi_anchor._dispatcher._post_dispatch import _snapshot_durable_state
+
+    database = tmp_path / "memory.db"
+    bound = tmp_path / "bound-durable"
+    redirected = tmp_path / "redirected-durable"
+    bound.mkdir()
+    redirected.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE evidence(value TEXT)")
+    monkeypatch.setitem(boot._ENV, "durable_root", str(bound))
+    monkeypatch.setitem(boot._ENV, "authority_id", "bound-authority")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "is_databricks", False)
+    monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(redirected))
+    monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "redirected-authority")
+    result = {}
+
+    _snapshot_durable_state(result, memory_db=str(database))
+
+    assert result["durable_state"]["authority"]["authority_id"] == "bound-authority"
+    assert list((bound / "bound-authority" / "snapshots").glob("*.manifest.json"))
+    assert not any(redirected.iterdir())
 
 
 def test_latest_failed_gate_prevents_false_completion(tmp_path, monkeypatch):

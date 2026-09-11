@@ -127,11 +127,9 @@ def _parser() -> argparse.ArgumentParser:
         command = state_commands.add_parser(name)
         command.add_argument("--durable-root", required=True)
         command.add_argument("--authority", required=True)
-        if name == "snapshot":
+        if name in {"snapshot", "restore"}:
             command.add_argument("--database", required=True)
             command.add_argument("--databricks", action="store_true")
-        elif name == "restore":
-            command.add_argument("--database", required=True)
     return parser
 
 
@@ -199,6 +197,7 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
             durable_root=ns.durable_root,
             destination_db=ns.database,
             authority_id=ns.authority,
+            databricks=ns.databricks,
         )
     raise RequestError("unsupported state command")
 

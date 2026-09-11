@@ -115,6 +115,55 @@ def test_prepare_portfolio_runtime_registers_exact_route_without_mutating_enviro
     assert again["registration"]["status"] == "existing"
 
 
+def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    unavailable = tmp_path / "unavailable-durable-root"
+    target.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {
+                "adapter": "amp", "local_state_root": str(state),
+                "durable_root": str(unavailable),
+            }},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    with pytest.raises(FileNotFoundError, match="durable_root is unavailable"):
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert not state.exists()
+
+
+def test_prepare_portfolio_runtime_refuses_existing_unowned_database(tmp_path):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    state.mkdir()
+    _legacy_db(state / ".agent_memory.db")
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {"adapter": "amp", "local_state_root": str(state)}},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="no authority identity"):
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+
+
 def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     home = tmp_path / "missing-home"
     target = tmp_path / "target"

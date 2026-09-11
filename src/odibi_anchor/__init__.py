@@ -145,6 +145,7 @@ __all__ = [
     "HumanInputTimeout",
     "apply_legacy_import",
     "doctor",
+    "ensure_database_authority",
     "get_human_input_request",
     "handoff_context",
     "install_guidance",
@@ -175,6 +176,7 @@ __all__ = [
 _LAZY_IMPORTS = {
     "launch": ("odibi_anchor.startup", "launch"),
     "doctor": ("odibi_anchor.startup", "doctor"),
+    "ensure_database_authority": ("odibi_anchor.durability", "ensure_database_authority"),
     "install_guidance": ("odibi_anchor.startup", "install_guidance"),
     "register_project": ("odibi_anchor.startup", "register_project"),
     "prepare_portfolio_runtime": ("odibi_anchor.startup", "prepare_portfolio_runtime"),

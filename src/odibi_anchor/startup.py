@@ -147,26 +147,49 @@ def prepare_portfolio_runtime(
     target = _absolute_directory(environment["ANCHOR_PROJECT_ROOT"], "ANCHOR_PROJECT_ROOT")
     if home.exists() and not home.is_dir():
         raise ValueError("configured local_state_root must be a directory")
-    home.mkdir(parents=True, exist_ok=True)
 
     database = Path(environment["ANCHOR_MEMORY_DB"])
+    authority_id = environment["ANCHOR_AUTHORITY_ID"]
+    trust_domain = environment["ANCHOR_TRUST_DOMAIN"]
+    adapter = document["portfolio"]["hosts"][host_id]["adapter"]
+    durable_root = environment.get("ANCHOR_DURABLE_ROOT")
+    if durable_root is not None and not Path(durable_root).is_dir():
+        raise FileNotFoundError(
+            "configured durable_root is unavailable; refusing to initialize or reuse local state"
+        )
+    if durable_root is not None:
+        from odibi_anchor.durability import qualify_durability
+
+        qualify_durability(
+            source_db=database,
+            durable_root=durable_root,
+            authority_id=authority_id,
+            databricks=adapter == "databricks",
+        )
+    home.mkdir(parents=True, exist_ok=True)
     restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
     if not database.exists():
-        durable_root = environment.get("ANCHOR_DURABLE_ROOT")
-        authority_id = environment["ANCHOR_AUTHORITY_ID"]
         snapshot_root = (
             Path(durable_root) / authority_id / "snapshots" if durable_root else None
         )
         if snapshot_root is not None and snapshot_root.is_dir() and any(snapshot_root.iterdir()):
             from odibi_anchor.durability import restore_latest
 
+            assert durable_root is not None
             restore = restore_latest(
                 durable_root=durable_root,
                 destination_db=database,
                 authority_id=authority_id,
+                databricks=adapter == "databricks",
             )
         else:
             restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
+    from odibi_anchor.durability import ensure_database_authority
+
+    ownership = ensure_database_authority(
+        database, authority_id=authority_id, trust_domain=trust_domain,
+        initialize=not database.exists(),
+    )
 
     from odibi_anchor._dispatcher._project import resolve_route_binding
 
@@ -203,6 +226,7 @@ def prepare_portfolio_runtime(
         "persona": resolved["persona"],
         "registration": registration,
         "restore": restore,
+        "authority": ownership,
         "next_operation": {
             "operation": "bootstrap",
             "arguments": {

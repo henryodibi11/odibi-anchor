@@ -57,6 +57,13 @@ is published last. Restore copies durable bytes to local staging, verifies SHA-2
 logical content, and SQLite integrity locally, then publishes only to an absent local
 destination.
 
+Each live database is bound to one configured work authority. Preparation refuses an
+existing unowned database or a database owned by another authority. After making an
+independent backup and confirming the intended owner, explicitly adopt legacy local state
+with `ensure_database_authority(database, authority_id=..., trust_domain="work",
+initialize=True)`; an explicit manual `state snapshot` also records that identity before
+copying the database. Automatic preparation never guesses ownership.
+
 Manual inspection and recovery are available without opening SQLite on durable
 storage:
 
@@ -65,7 +72,7 @@ anchor state list --durable-root /Volumes/catalog/schema/anchor --authority ente
 anchor state snapshot --database /tmp/odibi-anchor/.agent_memory.db \
   --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 anchor state restore --database /tmp/odibi-anchor/.agent_memory.db \
-  --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai
+  --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 ```
 
 Initial authority is one active compute replica at a time. Immutable route isolation

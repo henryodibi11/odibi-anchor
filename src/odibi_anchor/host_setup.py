@@ -213,6 +213,7 @@ def setup_host(
     staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
     backup = staging / "backup"
     published: list[tuple[Path, Path | None]] = []
+    preserve_staging = False
     try:
         for relative, content in desired.items():
             staged = staging / "new" / relative
@@ -236,15 +237,26 @@ def setup_host(
                 os.replace(destination, saved)
             published.append((destination, saved))
             os.replace(staging / "new" / relative, destination)
-    except Exception:
+    except Exception as publication_error:
+        rollback_errors: list[str] = []
         for destination, saved in reversed(published):
-            destination.unlink(missing_ok=True)
-            if saved is not None and saved.exists():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(saved, destination)
+            try:
+                destination.unlink(missing_ok=True)
+                if saved is not None and saved.exists():
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(saved, destination)
+            except OSError as exc:
+                rollback_errors.append(f"{destination}: {type(exc).__name__}")
+        if rollback_errors:
+            preserve_staging = True
+            raise HostSetupError(
+                "host setup publication and rollback failed; backups preserved at "
+                f"{staging}: {', '.join(rollback_errors)}"
+            ) from publication_error
         raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not preserve_staging:
+            shutil.rmtree(staging, ignore_errors=True)
     status = "installed" if manifest is None else "upgraded"
     return _result(target, adapter, status, hashes, compatible_unmanaged)
 

@@ -129,15 +129,19 @@ def _persist_terminal_task_if_ready(
 
 def _snapshot_durable_state(result, *, memory_db: str) -> None:
     """Checkpoint configured durable state after successful authority writes."""
-    import os
+    from odibi_anchor._dispatcher._boot import _ENV
 
-    durable_root = os.environ.get("ANCHOR_DURABLE_ROOT")
-    authority_id = os.environ.get("ANCHOR_AUTHORITY_ID")
+    durable_root = _ENV.get("durable_root")
+    authority_id = _ENV.get("authority_id")
     if not durable_root:
         return
     if not authority_id:
         raise RuntimeError(
             "BLOCKED: ANCHOR_AUTHORITY_ID is required when ANCHOR_DURABLE_ROOT is configured"
+        )
+    if _ENV.get("trust_domain") != "work":
+        raise RuntimeError(
+            "BLOCKED: ANCHOR_TRUST_DOMAIN=work is required when ANCHOR_DURABLE_ROOT is configured"
         )
     from odibi_anchor.durability import snapshot_state
 
@@ -146,7 +150,7 @@ def _snapshot_durable_state(result, *, memory_db: str) -> None:
             source_db=memory_db,
             durable_root=durable_root,
             authority_id=authority_id,
-            databricks=bool(os.environ.get("DATABRICKS_RUNTIME_VERSION")),
+            databricks=bool(_ENV.get("is_databricks")),
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError(
