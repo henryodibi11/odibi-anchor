@@ -28,6 +28,12 @@ anchor setup-host databricks --target /Workspace/Users/name
 anchor setup-host amp --target /absolute/path/to/repository
 ```
 
+The Databricks adapter uses a Workspace Files-compatible resource profile: it installs the
+complete mandatory contract, skills, and authored references, but leaves the deeply nested
+third-party snapshot cache in the installed wheel. Anchor's runtime reference APIs continue
+to read that cache from the package. Other adapters install the complete packaged resource
+tree.
+
 Anchor owns only files listed with hashes in
 `.odibi-anchor-host-guidance.json`. Identical reruns are no-ops and unchanged managed
 files can be upgraded. User edits and unknown collisions fail closed. A pre-existing

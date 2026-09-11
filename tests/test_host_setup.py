@@ -122,6 +122,44 @@ def test_adapter_specific_installation(tmp_path, monkeypatch, adapter, host_file
     assert (target / host_file).is_file()
 
 
+def test_databricks_installs_complete_authored_guidance_without_snapshot_cache(
+    tmp_path, monkeypatch
+):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "databricks"
+    target.mkdir()
+
+    result = setup_host(target, adapter="databricks")
+
+    assert result["resource_profile"] == "databricks_workspace_compact"
+    assert result["omitted_packaged_prefixes"] == [
+        ".assistant/references/snapshots/"
+    ]
+    assert (target / ".assistant" / "skills" / "debugging" / "SKILL.md").is_file()
+    assert (
+        target / ".assistant" / "references" / "odibi-anchor" / "workflow.md"
+    ).is_file()
+    assert not (target / ".assistant" / "references" / "snapshots").exists()
+    assert all(
+        not item["path"].startswith(".assistant/references/snapshots/")
+        for item in result["managed_files"]
+    )
+
+
+def test_other_adapters_retain_snapshot_cache(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "amp"
+    target.mkdir()
+
+    result = setup_host(target, adapter="amp")
+
+    assert result["resource_profile"] == "complete"
+    assert result["omitted_packaged_prefixes"] == []
+    assert (target / ".assistant" / "references" / "snapshots" / "manifest.json").is_file()
+
+
 @pytest.mark.parametrize("content", ["not json", '{"version": 99, "adapter": "amp", "files": {}}'])
 def test_malformed_manifest_is_refused(tmp_path, monkeypatch, content):
     resources = _resources(tmp_path)
