@@ -108,7 +108,10 @@ def _desired_files(adapter: str) -> dict[str, bytes]:
                 continue
             if relative.startswith(_ADAPTER_OMITTED_PREFIXES.get(adapter, ())):
                 continue
-            desired[relative] = _regular_bytes(candidate, f"packaged {relative}")
+            content = _regular_bytes(candidate, f"packaged {relative}")
+            desired[relative] = content
+            if adapter == "claude" and relative.startswith(".assistant/skills/"):
+                desired[".claude/skills/" + relative.removeprefix(".assistant/skills/")] = content
     host_file = _ADAPTER_FILES[adapter]
     if host_file == "agent_bootstrap.py":
         desired[host_file] = _regular_bytes(

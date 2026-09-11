@@ -102,6 +102,9 @@ def _parser() -> argparse.ArgumentParser:
     scaffold.add_argument("--target-root", required=True)
     scaffold.add_argument("--project")
     scaffold.add_argument("--authority")
+    scaffold.add_argument("--local-state-root")
+    scaffold.add_argument("--instruction-root")
+    scaffold.add_argument("--durable-root")
     add = portfolio_commands.add_parser("add-project", help="add one exact host/project target")
     add.add_argument("--config", required=True)
     add.add_argument("--host", required=True)
@@ -149,6 +152,8 @@ def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
         return scaffold_portfolio(
             ns.config, host_id=ns.host, adapter=ns.adapter, target_root=ns.target_root,
             project_id=ns.project, authority_id=ns.authority,
+            local_state_root=ns.local_state_root, instruction_root=ns.instruction_root,
+            durable_root=ns.durable_root,
         )
     document = load_portfolio_document(ns.config)
     if ns.portfolio_command == "show":

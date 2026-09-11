@@ -487,10 +487,10 @@ class TestSkillsRegistry:
 
         assert isinstance(result, dict)
         assert result["kind"] == "skills_registry"
-        assert result["metrics"]["total_skills"] == 17
+        assert result["metrics"]["total_skills"] == 18
         assert result["metrics"]["loaded_count"] == 2
         assert result["metrics"]["loaded_skills"] == ["code-comprehension", "writing-specs"]
-        assert len(result["skills"]) == 17
+        assert len(result["skills"]) == 18
 
     def test_empty_directory(self, tmp_path):
         from odibi_anchor._dispatcher._compliance import _skills_registry
@@ -530,5 +530,5 @@ class TestSkillsRegistry:
 
         assert isinstance(result, str)
         assert "# Available Skills" in result
-        assert "17 skills available, 1 loaded" in result
+        assert "18 skills available, 1 loaded" in result
         assert "| writing-specs |" in result and "loaded" in result

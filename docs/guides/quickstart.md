@@ -35,12 +35,18 @@ pip install -e ".[all,dev]"
 
 ### Databricks Free Edition
 
-Use the pulled source checkout directly. Editable installs create a `.pth` file that is
-not reliably processed after `dbutils.library.restartPython()` in this environment.
-Genie automatically loads `.assistant_instructions.md` and runs the accompanying
-`.assistant/agent_bootstrap.py`, which delegates to the one fixed Odibi Anchor checkout.
-Normal user prompts do not mention bootstrap: provide only outcome, target/project intent,
-constraints, and authority.
+Install the exact public release and its qualified Databricks SDK dependency, then restart
+Python. No Anchor source checkout is required:
+
+```python
+%pip install "odibi-anchor[databricks]==<version>"
+dbutils.library.restartPython()
+```
+
+Run doctor, scaffold or validate the private PortfolioV1, install host guidance, and call
+`prepare_portfolio_runtime()` before launch. Apply its returned environment exactly. See
+[Getting started](getting-started.md) for the copy-ready sequence. Normal user prompts then
+contain only outcome, target/project intent, constraints, and authority.
 
 The explicit entrypoint is a host troubleshooting/fallback equivalent, not user-prompt
 boilerplate:
@@ -63,17 +69,13 @@ root. No per-process executor/provider snippet is needed. An unavailable or deni
 does not break orientation, but its structured acquisition outcome must not be treated as clean
 Git evidence.
 
-The launcher obtains one exact checkout from its containing source tree, the fixed
-sibling `odibi_anchor`, or one exact explicit `ANCHOR_SOURCE_CHECKOUT`. It does not
-derive it from cwd, scan a user tree, or run a
-state-losing shell subprocess. If none of those locations validates, it asks for one
-exact checkout path. A later Git pull becomes active in a fresh Python process.
+The packaged launcher uses the installed distribution. Explicit source checkout discovery
+is a development-only fallback; it never derives authority from cwd or scans a user tree.
 
 ## 3. Bootstrap and orient
 
-For an installed package, call `odibi_anchor.bootstrap.init()` directly. For a
-source checkout, the entrypoint above already returns bounded structured
-status/audit orientation; bounded memory arrives with an accepted task. Retain its namespace and create a session or task only
+For an installed package, prefer PortfolioV1 preparation and `odibi_anchor.startup.launch()`.
+The packaged entrypoint above returns bounded structured status/audit orientation; bounded memory arrives with an accepted task. Retain its namespace and create a session or task only
 when the requested work requires that lifecycle. In notebooks, always assign `anchor()`
 results to variables.
 

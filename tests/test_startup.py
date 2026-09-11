@@ -356,6 +356,60 @@ def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     assert set(tmp_path.rglob("*")) == before
 
 
+def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(
+        "odibi_anchor.startup.importlib.metadata.version",
+        lambda _name: "0.137.0",
+    )
+
+    result = doctor(environment={
+        "ANCHOR_HOME": str(home),
+        "ANCHOR_PROJECT_ID": "alpha",
+        "ANCHOR_PROJECT_ROOT": str(target),
+        "DATABRICKS_RUNTIME_VERSION": "serverless",
+    })
+
+    capability = result["capabilities"]["databricks_sdk"]
+    assert capability == {
+        "status": "outdated",
+        "required": True,
+        "minimum_version": "0.138.0",
+        "installed_version": "0.137.0",
+        "qualified": False,
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.0"',
+        "restart_required_after_install": True,
+    }
+    assert result["next_operation"] == {
+        "operation": "install_dependency",
+        "command": '%pip install "odibi-anchor[databricks]==0.3.0"',
+        "restart_python": True,
+        "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
+    }
+
+
+def test_doctor_accepts_semantically_equivalent_databricks_sdk_version(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(
+        "odibi_anchor.startup.importlib.metadata.version",
+        lambda _name: "0.138",
+    )
+
+    result = doctor(environment={
+        "ANCHOR_HOME": str(tmp_path / "home"),
+        "ANCHOR_PROJECT_ID": "alpha",
+        "ANCHOR_PROJECT_ROOT": str(target),
+        "DATABRICKS_RUNTIME_VERSION": "serverless",
+    })
+
+    assert result["capabilities"]["databricks_sdk"]["qualified"] is True
+    assert result["capabilities"]["databricks_sdk"]["install_command"] is None
+    assert result["next_operation"]["operation"] == "register_project"
+
+
 def test_install_guidance_copies_packaged_contract_and_rejects_collision(tmp_path):
     target = tmp_path / "target"
     target.mkdir()

@@ -2,7 +2,7 @@
 
 ## Runtime order and compatibility
 
-Assistant guidance uses 17 ordinary native packages under
+Assistant guidance uses 18 ordinary native packages under
 `.assistant/skills/<skill>/SKILL.md`. Hosts configured for this Agent Skills root discover
 these files directly. Odibi Anchor exposes the same names through `skills` and records a direct name through
 `skill_loaded`; nested references and removed names are not accepted. Loaded names are
@@ -182,7 +182,7 @@ not read `agent_init.py` from the home or target.
 
 ## Guidance compatibility
 
-The current discovery and runtime surface contains exactly 17 native skills. Each is a
+The current discovery and runtime surface contains exactly 18 native skills. Each is a
 direct directory under `.assistant/skills`; there is no alias registry, redirect, or
 pack/recipe resolution. `skill_loaded` records only one current direct name and remains
 bookkeeping rather than attestation.
@@ -193,9 +193,8 @@ owners or non-discoverable references. Calls using those removed identities now 
 must be changed to the applicable current owner; no external deprecation period is implied.
 
 Official Claude Code discovery uses `.claude/skills`, not the canonical `.assistant`
-source root. A separately approved Claude qualification must copy all 17 complete
-canonical skill directories byte-for-byte into `.claude/skills`; it may not curate,
-diverge, or create a second taxonomy or behavior authority.
+source root. `setup-host claude` installs a managed byte-for-byte discovery mirror of all
+18 canonical skills there; `.assistant/skills` remains the single packaged behavior authority.
 
 ## Local PR readiness
 

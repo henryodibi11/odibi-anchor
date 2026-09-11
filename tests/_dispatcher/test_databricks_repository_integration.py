@@ -68,7 +68,9 @@ def restore_source_runtime_after_bootstrap(
     """Keep bootstrap's deliberate module reload from retaining a temporary ANCHOR_HOME."""
     yield
     reset_current_session()
-    monkeypatch.delenv("ANCHOR_HOME", raising=False)
+    source_home = tmp_path / "source-anchor-home"
+    monkeypatch.setenv("ANCHOR_HOME", str(source_home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(source_home / ".agent_memory.db"))
     init(root=tmp_path, output_format="dict")
     reset_current_session()
 

@@ -438,7 +438,7 @@ def test_instruction_routing_matrix_covers_and_traces_native_ownership():
     assert match, "bounded native routing section is missing"
     section = match.group(1)
     table_lines = [line for line in section.splitlines() if line.startswith("|")]
-    assert len(table_lines) == 19
+    assert len(table_lines) == 20
     assert table_lines[0] == "| Native skill | Apply for this material intent | Do not apply for |"
     assert re.fullmatch(r"\|(?:\s*---\s*\|){3}", table_lines[1])
 
@@ -459,7 +459,7 @@ def test_instruction_routing_matrix_covers_and_traces_native_ownership():
         )
         skill_descriptions[fields["name"].strip()] = fields["description"].strip()
     assert set(rows) == set(skill_descriptions)
-    assert len(rows) == 17
+    assert len(rows) == 18
 
     stopwords = {
         "a", "an", "and", "as", "at", "be", "do", "for", "from", "in",
@@ -518,7 +518,7 @@ def test_independent_pr_review_uses_host_adapter_or_portable_reference():
     assert "prepare an explicit pr" in cross_functional
     assert "do not use for independent pr review" in cross_functional
     assert not (ROOT / ".assistant" / "skills" / "reviewing-pull-requests").exists()
-    assert len(list((ROOT / ".assistant" / "skills").glob("*/SKILL.md"))) == 17
+    assert len(list((ROOT / ".assistant" / "skills").glob("*/SKILL.md"))) == 18
 
 
 def test_asana_task_authoring_is_a_bounded_work_item_reference_not_a_new_skill():
@@ -566,7 +566,7 @@ def test_asana_task_authoring_is_a_bounded_work_item_reference_not_a_new_skill()
     ):
         row = next(line for line in matrix.splitlines() if action in line)
         assert "Blocked" in row
-    assert len(list((ROOT / ".assistant" / "skills").glob("*/SKILL.md"))) == 17
+    assert len(list((ROOT / ".assistant" / "skills").glob("*/SKILL.md"))) == 18
 
 
 def test_memory_governance_owner_is_narrow_complete_and_packaged():

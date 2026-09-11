@@ -30,6 +30,7 @@ NATIVE_SKILLS = (
     "incident-response",
     "performance-investigation",
     "schema-design",
+    "setting-up-odibi-anchor",
     "work-item-management",
     "writing-specs",
     "writing-tests",

@@ -64,6 +64,30 @@ def test_scaffold_is_commented_and_truthfully_incomplete(tmp_path):
     assert result["next_operation"]["operation"] == "supply_field"
 
 
+def test_scaffold_can_create_launch_ready_databricks_portfolio(tmp_path):
+    path = tmp_path / "anchor.toml"
+    result = scaffold_portfolio(
+        path,
+        host_id="databricks-work",
+        adapter="databricks",
+        target_root="/Workspace/Users/name/project",
+        project_id="project",
+        authority_id="enterprise-analytics",
+        local_state_root="/tmp/odibi-anchor",
+        instruction_root="/Workspace/Users/name",
+        durable_root="/Volumes/catalog/schema/odibi-anchor",
+    )
+
+    assert result["validation"]["status"] == "valid"
+    assert result["portfolio"]["incomplete_fields"] == []
+    assert result["portfolio"]["hosts"]["databricks-work"] == {
+        "adapter": "databricks",
+        "local_state_root": "/tmp/odibi-anchor",
+        "instruction_root": "/Workspace/Users/name",
+        "durable_root": "/Volumes/catalog/schema/odibi-anchor",
+    }
+
+
 def test_exact_resolution_and_explicit_mismatch(tmp_path):
     portfolio = _portfolio(tmp_path)
     target = str(tmp_path / "alpha")

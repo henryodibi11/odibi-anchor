@@ -27,7 +27,7 @@ EXPECTED = (
     "code-comprehension", "cross-functional-pr", "data-onboarding",
     "data-operations", "data-reconciliation", "debugging",
     "dependency-management", "documentation", "incident-response",
-    "performance-investigation", "schema-design", "work-item-management",
+    "performance-investigation", "schema-design", "setting-up-odibi-anchor", "work-item-management",
     "writing-specs", "writing-tests",
 )
 

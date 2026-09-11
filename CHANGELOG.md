@@ -2,6 +2,21 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-11
+
+### Added
+
+- A qualified Databricks installation extra and doctor diagnostics with exact remediation
+  when the Workspace Files API SDK is missing or outdated.
+- Launch-ready PortfolioV1 scaffolding for local state, instruction, and durable roots.
+- A native startup skill and end-to-end getting-started guide for local, MCP, Claude,
+  ChatGPT, and Databricks hosts.
+
+### Changed
+
+- Claude host setup now installs a managed native skill-discovery mirror while retaining
+  `.assistant/skills` as the packaged authority.
+
 ## [0.2.4] - 2026-09-11
 
 ### Fixed
@@ -62,3 +77,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.2.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.2
 [0.2.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.3
 [0.2.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.2.4
+[0.3.0]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.0

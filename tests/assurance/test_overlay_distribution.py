@@ -51,9 +51,9 @@ def test_compact_reference_routes_only_from_structured_selection():
     assert "content" not in guidance[0]
 
 
-def test_native_skill_set_remains_exactly_seventeen_and_existing_pointers_are_narrow():
+def test_native_skill_set_remains_exactly_eighteen_and_existing_pointers_are_narrow():
     skills = sorted((ROOT / ".assistant/skills").glob("*/SKILL.md"))
-    assert len(skills) == 17
+    assert len(skills) == 18
     pointer_paths = {
         ".assistant/skills/data-onboarding/references/quality.md",
         ".assistant/skills/data-operations/references/backbone.md",

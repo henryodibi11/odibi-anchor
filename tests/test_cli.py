@@ -117,14 +117,11 @@ def test_portfolio_cli_scaffold_validate_resolve(tmp_path, capsys):
     args = [
         "portfolio", "scaffold", "--config", str(config), "--host", "local",
         "--adapter", "amp", "--target-root", str(target), "--project", "alpha",
-        "--authority", "work",
+        "--authority", "work", "--local-state-root", str(state),
+        "--instruction-root", str(tmp_path),
     ]
     assert cli.main(args) == 0
     capsys.readouterr()
-    text = config.read_text().replace('[hosts."local"]\nadapter = "amp"',
-                                      f'[hosts."local"]\nadapter = "amp"\nlocal_state_root = "{state}"')
-    text = text.replace('incomplete_fields = ["hosts.local.local_state_root"]\n', "")
-    config.write_text(text)
 
     assert cli.main(["portfolio", "validate", "--config", str(config), "--host", "local"]) == 0
     validation = json.loads(capsys.readouterr().out)["result"]["validation"]

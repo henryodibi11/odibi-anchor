@@ -466,6 +466,9 @@ def scaffold_portfolio(
     target_root: str,
     project_id: str | None = None,
     authority_id: str | None = None,
+    local_state_root: str | None = None,
+    instruction_root: str | None = None,
+    durable_root: str | None = None,
 ) -> dict[str, Any]:
     """Create a commented portfolio containing only caller-supplied facts."""
     config = _config_path(path)
@@ -476,20 +479,31 @@ def scaffold_portfolio(
         raise ValueError("adapter is unsupported")
     target = _absolute(target_root, "target_root")
     authority = "" if authority_id is None else _safe_id(authority_id, "authority_id")
+    host_config: dict[str, str] = {"adapter": adapter}
+    for field, value in (
+        ("local_state_root", local_state_root),
+        ("instruction_root", instruction_root),
+        ("durable_root", durable_root),
+    ):
+        if value is not None:
+            host_config[field] = _absolute(value, field)
     portfolio: dict[str, Any] = {
         "schema_version": 1,
         "incomplete_fields": ([] if authority else ["authority.id"]),
         "authority": {"id": authority, "trust_domain": "work"},
-        "hosts": {host: {"adapter": adapter}},
+        "hosts": {host: host_config},
         "projects": {},
         "personas": {},
     }
     if project_id is None:
-        portfolio["incomplete_fields"] += [f"hosts.{host}.local_state_root", "projects.id"]
+        if local_state_root is None:
+            portfolio["incomplete_fields"].append(f"hosts.{host}.local_state_root")
+        portfolio["incomplete_fields"].append("projects.id")
     else:
         project = _safe_project_id(project_id, "project_id")
         portfolio["projects"][project] = {"targets": {host: target}}
-        portfolio["incomplete_fields"].append(f"hosts.{host}.local_state_root")
+        if local_state_root is None:
+            portfolio["incomplete_fields"].append(f"hosts.{host}.local_state_root")
     validation = validate_portfolio(portfolio, host_id=host)
     data = _render(portfolio, comments=True)
     digest = _atomic_write(config, data, None)

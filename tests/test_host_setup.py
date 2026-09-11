@@ -122,6 +122,23 @@ def test_adapter_specific_installation(tmp_path, monkeypatch, adapter, host_file
     assert (target / host_file).is_file()
 
 
+def test_claude_receives_native_skill_discovery_mirror(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "claude"
+    target.mkdir()
+
+    result = setup_host(target, adapter="claude")
+
+    canonical = target / ".assistant" / "skills" / "setting-up-odibi-anchor" / "SKILL.md"
+    discovered = target / ".claude" / "skills" / "setting-up-odibi-anchor" / "SKILL.md"
+    assert discovered.read_bytes() == canonical.read_bytes()
+    assert any(
+        item["path"] == ".claude/skills/setting-up-odibi-anchor/SKILL.md"
+        for item in result["managed_files"]
+    )
+
+
 def test_databricks_installs_complete_authored_guidance_without_snapshot_cache(
     tmp_path, monkeypatch
 ):

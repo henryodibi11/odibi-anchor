@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -12,6 +14,44 @@ from pathlib import Path
 from typing import Any
 
 from odibi_anchor import __version__
+
+_DATABRICKS_SDK_MINIMUM = "0.138.0"
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    """Return a conservative numeric prefix for capability qualification."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)*)", value)
+    if not match:
+        return ()
+    parts = tuple(int(part) for part in match.group(1).split("."))
+    return (*parts, 0, 0, 0)[:3]
+
+
+def _databricks_capability(*, required: bool) -> dict[str, Any]:
+    try:
+        installed = importlib.metadata.version("databricks-sdk")
+    except importlib.metadata.PackageNotFoundError:
+        installed = None
+    qualified = bool(
+        installed
+        and _version_tuple(installed) >= _version_tuple(_DATABRICKS_SDK_MINIMUM)
+    )
+    status = "ready" if qualified else ("missing" if installed is None else "outdated")
+    if not required:
+        status = "available" if qualified else "not_required"
+    return {
+        "status": status,
+        "required": required,
+        "minimum_version": _DATABRICKS_SDK_MINIMUM,
+        "installed_version": installed,
+        "qualified": qualified,
+        "install_command": (
+            None
+            if qualified or not required
+            else f'%pip install "odibi-anchor[databricks]=={__version__}"'
+        ),
+        "restart_required_after_install": required and not qualified,
+    }
 
 
 def _absolute_directory(value: str | os.PathLike[str], name: str) -> Path:
@@ -316,7 +356,9 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         "ANCHOR_PROJECT_ID": raw_project,
         "ANCHOR_PROJECT_ROOT": raw_target,
     }
-    next_operation = (
+    is_databricks = bool(env.get("DATABRICKS_RUNTIME_VERSION"))
+    databricks_capability = _databricks_capability(required=is_databricks)
+    route_operation = (
         {
             "operation": "launch",
             "arguments": {
@@ -341,13 +383,26 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
             },
         }
     )
+    next_operation = (
+        {
+            "operation": "install_dependency",
+            "command": databricks_capability["install_command"],
+            "restart_python": True,
+            "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
+        }
+        if is_databricks and not databricks_capability["qualified"]
+        else route_operation
+    )
     return {
         "kind": "startup_doctor",
         "read_only": True,
         "package": {"name": "odibi-anchor", "version": __version__},
         "home": {"path": str(paths.anchor_home), "exists": paths.anchor_home.is_dir()},
         "database": {"path": str(database), "exists": database.is_file()},
-        "host": {"platform": sys.platform, "databricks": bool(env.get("DATABRICKS_RUNTIME_VERSION"))},
+        "host": {"platform": sys.platform, "databricks": is_databricks},
+        "capabilities": {
+            "databricks_sdk": databricks_capability,
+        },
         "filesystem": {"resource_root": str(paths.resource_root),
                        "source_checkout": paths.source_checkout,
                        "concurrency_capability": "not_qualified"},
