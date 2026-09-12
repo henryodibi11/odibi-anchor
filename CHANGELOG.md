@@ -2,7 +2,7 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [0.3.8] - 2026-09-12
 
 ### Added
 
@@ -186,3 +186,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.5]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.5
 [0.3.6]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.6
 [0.3.7]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.7
+[0.3.8]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.8

@@ -903,12 +903,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.7"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.8"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.7"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.8"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -998,7 +998,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
     shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
     payload = {
         "releases": {
-            "0.3.7": [{"yanked": False}],
+            "0.3.8": [{"yanked": False}],
             "0.4.0rc1": [{"yanked": False}],
             "9.9.9": [{"yanked": True}],
         }
@@ -1015,7 +1015,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
         runpy.run_path(str(launcher))
 
     message = str(raised.value)
-    assert '%pip install "odibi-anchor[databricks]==0.3.7"' in message
+    assert '%pip install "odibi-anchor[databricks]==0.3.8"' in message
     assert "dbutils.library.restartPython()" in message
     assert "0.4.0rc1" not in message
     assert "9.9.9" not in message

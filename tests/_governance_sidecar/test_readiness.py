@@ -412,7 +412,7 @@ def test_cw_version_measurement_ignores_higher_precedence_unowned_metadata(
 
     assert importlib.metadata.version("odibi-anchor") == "9.9.9"
     measured = measure_local(LocalMeasurementInputs(tmp_path, plugin, {"kind": "non_git_read_only"}))
-    assert measured.anchor_version == "0.3.7"
+    assert measured.anchor_version == "0.3.8"
 
 
 def test_unknown_cw_version_provenance_fails_closed(
