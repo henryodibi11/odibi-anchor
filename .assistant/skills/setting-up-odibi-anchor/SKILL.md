@@ -57,10 +57,28 @@ portfolio preparation, and bootstrap are already healthy.
 5. Run `anchor portfolio validate`, then `anchor setup-host <adapter> --target
    <instruction-root>`. Setup is manifest-managed and must refuse modified managed files
    or incompatible user-owned collisions.
-6. Run `anchor portfolio prepare --config <path> --host <id> --project <id>` before doctor
-   whenever the portfolio exists. Do not set `ANCHOR_HOME` manually. Apply the
-   returned environment exactly, including `ANCHOR_DURABLE_ROOT`, and use its packaged
-   launcher or `odibi_anchor.startup.launch()` in one persistent Python process.
+6. Prepare before doctor whenever the portfolio exists. On Databricks/Genie, use the direct
+   Python API in the persistent notebook process; do not substitute a prohibited CLI subprocess:
+
+   ```python
+   import os
+   import runpy
+   from odibi_anchor import prepare_portfolio_runtime
+
+   prepared = prepare_portfolio_runtime(
+       config_path="<absolute-portfolio-path>",
+       host_id="<host-id>",
+       project_id="<project-id>",
+   )
+   os.environ.update(prepared["environment"])
+   namespace = runpy.run_path(prepared["next_operation"]["arguments"]["script"])
+   anchor = namespace["anchor"]
+   ```
+
+   Do not set `ANCHOR_HOME` manually, map `ANCHOR_DURABLE_ROOT` to it, or probe the durable
+   Volume through FUSE. Preparation keeps live state on local compute and restores immutable
+   snapshots through the Databricks Files API. Apply every returned environment field exactly.
+   Other hosts may use `anchor portfolio prepare --config <path> --host <id> --project <id>`.
    The `anchor` callable comes from the launcher namespace or `launch()` return value; never
    attempt `from odibi_anchor import anchor`.
 7. Run doctor after applying the prepared environment and follow any remediation. If doctor

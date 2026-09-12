@@ -8,7 +8,9 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 
 - Managed host instructions and the setup skill now require an explicit, pinned installation
   check before the first Anchor import, including the Databricks Python restart and post-restart
-  distribution, runtime-version, and module-origin verification.
+  distribution, runtime-version, and module-origin verification. They also provide the exact
+  direct-Python portfolio preparation sequence for notebook hosts and prohibit substituting the
+  durable Volume for local `ANCHOR_HOME` or probing snapshots through FUSE.
 
 ## [0.3.4] - 2026-09-12
 

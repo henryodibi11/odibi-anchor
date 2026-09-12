@@ -40,3 +40,9 @@ def test_managed_startup_guidance_has_exact_databricks_install_preflight():
     assert "Do not assume the package is installed" in setup_skill
     assert "dbutils.library.restartPython()" in instructions
     assert "dbutils.library.restartPython()" in setup_skill
+    for text in (instructions, setup_skill):
+        normalized = " ".join(text.split())
+        assert "from odibi_anchor import prepare_portfolio_runtime" in text
+        assert 'os.environ.update(prepared["environment"])' in text
+        assert 'prepared["next_operation"]["arguments"]["script"]' in text
+        assert "durable Volume through FUSE" in normalized
