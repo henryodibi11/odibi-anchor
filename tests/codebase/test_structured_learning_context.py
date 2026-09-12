@@ -783,6 +783,15 @@ def test_assessment_does_not_widen_workbench_observation_to_global_memory(ledger
     )
     assert isinstance(assessment, dict)
     assert assessment["semantic_candidate_projections"] == []
+    decision = assessment["semantic_projection_decisions"][0]
+    assert decision["outcome"] == "human_triage_required"
+    assert decision["next_operation"]["operation"] == "learning.triage"
+    assert decision["next_operation"]["suggested_arguments"]["expected_source_versions"] == {
+        item["item"]["item_id"]: 1,
+    }
+    assert assessment["memory_scope_semantics"]["all"].endswith(
+        "not injected into every task"
+    )
     with sqlite3.connect(ledger) as connection:
         assert connection.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='memory_projections'"
@@ -809,6 +818,17 @@ def test_assessment_projects_workbench_observation_inside_explicit_work_authorit
     assert isinstance(assessment, dict)
     projection = assessment["semantic_candidate_projections"][0]
     assert isinstance(projection, dict)
+    assert assessment["semantic_projection_decisions"] == [{
+        "observation_id": item["item"]["item_id"],
+        "outcome": "candidate_created",
+        "reason": "eligible evidence-backed observation projected as advisory memory",
+        "memory_id": projection["memory_id"],
+        "next_operation": {
+            "operation": "memory.promotion.request_owner_activation",
+            "arguments": {"memory_id": projection["memory_id"]},
+            "reason": "Owner activation is required before the candidate becomes active.",
+        },
+    }]
     with sqlite3.connect(ledger) as connection:
         memory = connection.execute(
             "SELECT project,evidence FROM memories WHERE id=?", (projection["memory_id"],)

@@ -2,6 +2,23 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.9] - 2026-09-12
+
+### Added
+
+- Learning assessment now explains each observation's semantic projection decision and returns
+  the exact next operation for human triage or owner activation.
+- Startup, task-memory, and help responses distinguish project-local memories from shared
+  `project="all"` memories, which remain relevance-ranked rather than universally injected.
+
+### Fixed
+
+- Owner-governed activation, confirmation, and withdrawal now support shared memories under the
+  boot-verified portfolio work authority without weakening managed-project trust boundaries.
+- Host setup can cryptographically recognize and upgrade released legacy Anchor guidance when
+  its ownership manifest is absent, while preserving customized operating instructions and
+  continuing to reject unknown file bytes.
+
 ## [0.3.8] - 2026-09-12
 
 ### Added
@@ -187,3 +204,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.6]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.6
 [0.3.7]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.7
 [0.3.8]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.8
+[0.3.9]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.9

@@ -53,6 +53,11 @@ files can be upgraded. User edits and unknown collisions fail closed. A pre-exis
 `AGENTS.md` or `CLAUDE.md` that already points to `.assistant_instructions.md` is
 preserved as compatible user-owned guidance.
 
+If a legacy Anchor installation is missing that manifest, setup adopts only files whose
+SHA-256 matches a known released Anchor artifact. Recognized files are upgraded, customized
+Anchor operating instructions are preserved as compatible user-owned guidance, and any other
+differing byte still stops setup before publication.
+
 Prepare one exact runtime after validation:
 
 ```bash

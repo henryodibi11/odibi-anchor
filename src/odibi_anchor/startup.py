@@ -552,6 +552,10 @@ def bootstrap_managed_project(
             else None
         ),
         "managed_artifact_actions": orientation.get("managed_artifact_actions", []),
+        "memory_scope_semantics": {
+            "project_local": "eligible only inside its exact managed project",
+            "all": "eligible across projects when relevant; not selected for every task",
+        },
         "next_required_action": (orientation.get("metrics") or {}).get(
             "next_required_action"
         ),

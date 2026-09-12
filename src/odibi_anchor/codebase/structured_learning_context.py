@@ -1777,18 +1777,36 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
     from odibi_anchor.codebase.memory_context import append_memory
 
     projections = []
+    decisions = []
     for item_id in assessment.get("observation_ids", []):
         existing = get_projection(path, learning_item_id=item_id)
         if existing is not None:
             projections.append(existing)
+            decisions.append({
+                "observation_id": item_id,
+                "outcome": "candidate_available",
+                "reason": "semantic candidate was already projected",
+                "memory_id": existing["memory_id"],
+                "next_operation": {
+                    "operation": "memory.promotion.request_owner_activation",
+                    "arguments": {"memory_id": existing["memory_id"]},
+                },
+            })
             continue
         hydrated = _read("show", {"item_id": item_id, "include_history": True})["item"]
         evidence_refs = hydrated["evidence_refs"]
-        if hydrated.get("observation_type") not in {
-            "reusable_practice", "near_miss", "evidence_gap",
-        } or not evidence_refs:
+        if not evidence_refs:
             # Capture permits bounded observations without evidence; they remain in
             # structured learning and cannot poison semantic retrieval.
+            decisions.append({
+                "observation_id": item_id,
+                "outcome": "learning_only",
+                "reason": "semantic candidates require at least one evidence reference",
+                "next_operation": {
+                    "operation": "gather_evidence",
+                    "reason": "Add truthful evidence before human lesson/watch derivation.",
+                },
+            })
             continue
         project_refs = hydrated["project_refs"]
         scope = hydrated["applicability_scope"]
@@ -1801,9 +1819,51 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
             and trust_domain == "work"
             and bool(authority_id)
         )
-        if not ((scope == "project_local" and len(project_refs) == 1) or work_authority):
+        automatic_claim_class = hydrated.get("observation_type") in {
+            "reusable_practice", "near_miss", "evidence_gap",
+        }
+        if not (
+            automatic_claim_class
+            and ((scope == "project_local" and len(project_refs) == 1) or work_authority)
+        ):
             # A workbench claim enters shared retrieval only inside one explicit
             # work authority. Cross-project widening remains human-triaged.
+            suggested_evidence = [
+                {
+                    key: evidence[key]
+                    for key in ("reference_type", "reference", "summary", "observed_at")
+                }
+                for evidence in evidence_refs
+            ]
+            decisions.append({
+                "observation_id": item_id,
+                "outcome": "human_triage_required",
+                "reason": (
+                    "cross-project widening requires an explicit human decision"
+                    if scope == "cross_project"
+                    else "this observation is not eligible for automatic semantic projection"
+                ),
+                "next_operation": {
+                    "operation": "learning.triage",
+                    "decision_options": ["derive_lesson", "derive_watch"],
+                    "required_owner_fields": ["actor_ref", "decision_source", "rationale"],
+                    "suggested_arguments": {
+                        "source_item_ids": [item_id],
+                        "expected_source_versions": {item_id: hydrated["version"]},
+                        "summary": hydrated["summary"],
+                        "impact": hydrated["impact"],
+                        "applicability_scope": scope,
+                        "project_refs": project_refs,
+                        "work_package_refs": hydrated["work_package_refs"],
+                        "environment_refs": hydrated["environment_refs"],
+                        "evidence": suggested_evidence,
+                        "provenance": {
+                            "source_action": "learning.assess",
+                            "source_version": "v1",
+                        },
+                    },
+                },
+            })
             continue
         project = project_refs[0] if scope == "project_local" else "all"
         with sqlite3.connect(path) as recurrence_connection:
@@ -1863,7 +1923,29 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
             },
         )
         projections.append(projection)
-    return {**result, "semantic_candidate_projections": projections}
+        decisions.append({
+            "observation_id": item_id,
+            "outcome": "candidate_created",
+            "reason": "eligible evidence-backed observation projected as advisory memory",
+            "memory_id": memory["id"],
+            "next_operation": {
+                "operation": "memory.promotion.request_owner_activation",
+                "arguments": {"memory_id": memory["id"]},
+                "reason": "Owner activation is required before the candidate becomes active.",
+            },
+        })
+    return {
+        **result,
+        "semantic_candidate_projections": projections,
+        "semantic_projection_decisions": decisions,
+        "memory_scope_semantics": {
+            "project_local": "eligible only inside its exact managed project",
+            "all": (
+                "eligible for relevance-ranked retrieval across projects; not injected into "
+                "every task"
+            ),
+        },
+    }
 
 
 def _structured_learning_dispatch(

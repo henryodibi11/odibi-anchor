@@ -39,6 +39,7 @@ from odibi_anchor.codebase._memory_promotion import (
 )
 from odibi_anchor.codebase._task_execution import FORMAT, UNOBSERVED, persist_terminal_record
 from odibi_anchor.codebase.memory_context import append_memory
+from odibi_anchor.durability import ensure_database_authority
 
 
 def _state(project: str | None = "project:test") -> SimpleNamespace:
@@ -643,6 +644,77 @@ def test_explicit_databricks_provider_prepares_with_complete_slack(tmp_path, mon
 
     assert activated["status"] == "recorded"
     assert activated["receipt"]["transport"] == "databricks-in-session-owner-assertion"
+
+
+def test_owner_promotes_shared_memory_only_with_matching_work_authority(tmp_path, monkeypatch):
+    db = tmp_path / "memory.db"
+    memory = append_memory(
+        tmp_path, entry_type="convention", content="Use equivalence tests across projects.",
+        project="all", db_path=str(db),
+    )
+    ensure_database_authority(
+        db, authority_id="enterprise-analytics", trust_domain="work", initialize=True,
+    )
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
+    monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: False)
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+
+    with pytest.raises(ValueError, match="boot-verified work authority"):
+        request_owner_promotion(
+            db, memory_id=memory["id"], project_id="project:one", transition="activation",
+            provider="databricks_in_session",
+        )
+    with pytest.raises(RuntimeError, match="authority identity conflicts"):
+        request_owner_promotion(
+            db, memory_id=memory["id"], project_id="project:one", transition="activation",
+            authority_id="another-authority", trust_domain="work",
+            provider="databricks_in_session",
+        )
+
+    prepared = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:one", transition="activation",
+        authority_id="enterprise-analytics", trust_domain="work",
+        provider="databricks_in_session",
+    )
+    assert prepared["status"] == "approval_required"
+    assert prepared["approval_prompt"].startswith("Odibi Anchor memory authority request.")
+
+    activated = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:one", transition="activation",
+        authority_id="enterprise-analytics", trust_domain="work",
+        provider="databricks_in_session", in_session_approval=prepared["approval_response"],
+    )
+    assert activated["receipt"]["project_id"] == "all"
+    assert activated["receipt"]["trust_domain"] == "work"
+    assert activated["receipt"]["authority_id"] == "enterprise-analytics"
+    assert activated["receipt"]["subject"]["active_project_id"] == "project:one"
+    assert activated["event"]["project_id"] == "all"
+    assert activated["event"]["trust_domain"] == "work"
+    assert activated["event"]["authority_id"] == "enterprise-analytics"
+
+    confirmation = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:two", transition="confirmation",
+        authority_id="enterprise-analytics", trust_domain="work",
+        provider="databricks_in_session",
+    )
+    confirmed = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:two", transition="confirmation",
+        authority_id="enterprise-analytics", trust_domain="work",
+        provider="databricks_in_session", in_session_approval=confirmation["approval_response"],
+    )
+    assert confirmed["receipt"]["subject"]["active_project_id"] == "project:two"
+    assert confirmed["receipt"]["prior_event_id"] == activated["event"]["event_id"]
+    withdrawn = promotion_module.withdraw_candidate_activation(
+        db, memory_id=memory["id"], project_id="project:one",
+        authority_id="enterprise-analytics", trust_domain="work",
+    )
+    assert withdrawn["event"]["project_id"] == "all"
+    assert withdrawn["event"]["trust_domain"] == "work"
+    assert withdrawn["event"]["authority_id"] == "enterprise-analytics"
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT status FROM memories WHERE id=?", (memory["id"],),
+        ).fetchone()[0] == "candidate"
 
 
 def test_databricks_in_session_stale_challenge_grants_no_authority(tmp_path, monkeypatch):

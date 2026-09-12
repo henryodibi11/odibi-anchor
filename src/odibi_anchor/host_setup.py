@@ -38,6 +38,31 @@ _POINTERS = {
         b"companion `.assistant/` resources before substantive work.\n"
     ),
 }
+_CUSTOM_INSTRUCTIONS = ".assistant_instructions.md"
+_LEGACY_MANAGED_HASHES = {
+    ".assistant/agent_bootstrap.py": {
+        "8dfc8b467e29df34c5a48c8d9b3357c5ccd67c5ad93aad42297bd2d3adb536ad",
+        "8ed4de2f506731bb583e37c0d7e917f982eb31715f40ce5eaa66f1a6ebb11245",
+    },
+    ".assistant/references/odibi-anchor/quick-reference.md": {
+        "d482abaabf9d17dd33b94cfd76b939aff7cebf82ac37d2b14a04c2128a0782d7",
+        "14dc0b1398ad9d921e1d8af262ba664db8f5ead2674fe3d89fb5caa14fd51175",
+    },
+    ".assistant/references/odibi-anchor/workflow.md": {
+        "55c70b2e684073928147c2b34668fe1e51d0bac558f9a764c43390aa1756f01a",
+        "fe89de603ffa3d4b0a2a36ac54c8f21d366053d8dd5e60dcb0266d209487a0ae",
+    },
+    ".assistant/skills/setting-up-odibi-anchor/SKILL.md": {
+        "4df690526e5e99389e3a8d3c7343f428d4bc134015f226bb5c82827ea7c5efb9",
+        "7060ddeaff3d6dd1d584959516e434a157fc3f7baf7eab625d0bb568980a8674",
+        "fa6347999fd21cf2438854700e6d64da849682802f088c135ee19c3da3a229df",
+    },
+    _CUSTOM_INSTRUCTIONS: {
+        "ee43a7cb557143b34d804ff7d147495396d07e6e2b3d12f50efdc377abe03743",
+        "1762931aa39bc3c79368100eebb16b1041826d3e802753343bb2c53acdc5cf55",
+        "45b35fc067069afd17dcc2a8b67ff2511eeb1dca851b1369316d0ea9000af5a7",
+    },
+}
 
 
 class HostSetupError(RuntimeError):
@@ -213,6 +238,37 @@ def _load_manifest(target: Path) -> dict[str, Any] | None:
     return _parse_manifest(_regular_bytes(path, f"managed manifest {_MANIFEST}"))
 
 
+def _legacy_reconciliation(
+    desired: dict[str, bytes], existing: dict[str, bytes | None],
+) -> tuple[dict[str, bytes], dict[str, str], list[str], list[str]]:
+    """Recognize released Anchor bytes when an older host has no ownership manifest."""
+    legacy: dict[str, str] = {}
+    unknown: list[str] = []
+    for relative, expected in desired.items():
+        content = existing.get(relative)
+        if content is None or content == expected:
+            continue
+        digest = _sha256(content)
+        if digest in _LEGACY_MANAGED_HASHES.get(relative, set()):
+            legacy[relative] = digest
+        else:
+            unknown.append(relative)
+    if not legacy:
+        return desired, {}, [], []
+    compatible: list[str] = []
+    reconciled = dict(desired)
+    if unknown == [_CUSTOM_INSTRUCTIONS]:
+        content = existing[_CUSTOM_INSTRUCTIONS]
+        assert content is not None
+        if b"# Odibi Anchor operating contract" in content and b"agent_bootstrap.py" in content:
+            reconciled.pop(_CUSTOM_INSTRUCTIONS)
+            compatible.append(_CUSTOM_INSTRUCTIONS)
+            unknown.clear()
+    if unknown:
+        return desired, {}, [], []
+    return reconciled, legacy, compatible, sorted(legacy)
+
+
 def _destination(target: Path, relative: str) -> Path:
     destination = target.joinpath(*PurePosixPath(relative).parts)
     current = target
@@ -319,9 +375,28 @@ def _setup_databricks_workspace(
         )
     previous: dict[str, str] = {} if manifest is None else manifest["files"]
     compatible_unmanaged: list[str] = []
-    existing: dict[str, bytes | None] = {}
+    existing: dict[str, bytes | None] = {
+        relative: _workspace_read(workspace, _workspace_api_path(target, relative))
+        for relative in desired
+    }
+    legacy_managed: list[str] = []
+    if manifest is None:
+        desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
+            desired, existing
+        )
+    elif _CUSTOM_INSTRUCTIONS not in previous:
+        custom = existing.get(_CUSTOM_INSTRUCTIONS)
+        if (
+            custom is not None
+            and b"# Odibi Anchor operating contract" in custom
+            and b"agent_bootstrap.py" in custom
+        ):
+            desired.pop(_CUSTOM_INSTRUCTIONS)
+            compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
     for relative in sorted(set(previous) | set(desired)):
-        content = _workspace_read(workspace, _workspace_api_path(target, relative))
+        content = existing.get(relative)
+        if relative not in existing:
+            content = _workspace_read(workspace, _workspace_api_path(target, relative))
         existing[relative] = content
         expected = previous.get(relative)
         if content is not None:
@@ -346,7 +421,10 @@ def _setup_databricks_workspace(
     ) + "\n").encode()
     if manifest is not None and previous == hashes:
         _verify_workspace_publication(workspace, target, desired, manifest_bytes)
-        return _result(target, "databricks", "unchanged", hashes, compatible_unmanaged)
+        return _result(
+            target, "databricks", "unchanged", hashes, compatible_unmanaged,
+            legacy_managed,
+        )
 
     before = {**existing, _MANIFEST: manifest_content}
     mutation_order = [*desired, *sorted(set(previous) - set(desired)), _MANIFEST]
@@ -397,8 +475,10 @@ def _setup_databricks_workspace(
             ) from publication_error
         raise
 
-    status = "installed" if manifest is None else "upgraded"
-    return _result(target, "databricks", status, hashes, compatible_unmanaged)
+    status = "upgraded" if manifest is not None or legacy_managed else "installed"
+    return _result(
+        target, "databricks", status, hashes, compatible_unmanaged, legacy_managed,
+    )
 
 
 def setup_host(
@@ -425,6 +505,29 @@ def setup_host(
         )
     previous: dict[str, str] = {} if manifest is None else manifest["files"]
     compatible_unmanaged: list[str] = []
+    existing = {
+        relative: (
+            _regular_bytes(_destination(target, relative), f"destination {relative}")
+            if _destination(target, relative).exists()
+            or _destination(target, relative).is_symlink()
+            else None
+        )
+        for relative in desired
+    }
+    legacy_managed: list[str] = []
+    if manifest is None:
+        desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
+            desired, existing
+        )
+    elif _CUSTOM_INSTRUCTIONS not in previous:
+        custom = existing.get(_CUSTOM_INSTRUCTIONS)
+        if (
+            custom is not None
+            and b"# Odibi Anchor operating contract" in custom
+            and b"agent_bootstrap.py" in custom
+        ):
+            desired.pop(_CUSTOM_INSTRUCTIONS)
+            compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
     host_file = _ADAPTER_FILES[adapter]
     host_destination = target / host_file
     if host_file not in previous and host_file in desired and host_destination.exists():
@@ -459,7 +562,9 @@ def setup_host(
     ) + "\n").encode()
     unchanged = manifest is not None and previous == hashes
     if unchanged:
-        return _result(target, adapter, "unchanged", hashes, compatible_unmanaged)
+        return _result(
+            target, adapter, "unchanged", hashes, compatible_unmanaged, legacy_managed,
+        )
 
     staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
     backup = staging / "backup"
@@ -531,8 +636,8 @@ def setup_host(
     finally:
         if not preserve_staging:
             _cleanup_staging(staging, adapter)
-    status = "installed" if manifest is None else "upgraded"
-    return _result(target, adapter, status, hashes, compatible_unmanaged)
+    status = "upgraded" if manifest is not None or legacy_managed else "installed"
+    return _result(target, adapter, status, hashes, compatible_unmanaged, legacy_managed)
 
 
 def _result(
@@ -541,6 +646,7 @@ def _result(
     status: str,
     hashes: dict[str, str],
     compatible_unmanaged: list[str] | None = None,
+    legacy_managed: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": "host_guidance_setup",
@@ -561,6 +667,7 @@ def _result(
             {"path": relative, "sha256": digest} for relative, digest in sorted(hashes.items())
         ],
         "compatible_unmanaged_files": sorted(compatible_unmanaged or []),
+        "reconciled_legacy_managed_files": sorted(legacy_managed or []),
         "next_operation": {
             "operation": "review_host_guidance",
             "path": str(target / _ADAPTER_FILES[adapter]),

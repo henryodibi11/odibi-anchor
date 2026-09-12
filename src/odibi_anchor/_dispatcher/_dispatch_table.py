@@ -494,6 +494,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "learning":     [
         'anchor("learning", "capture", observation_type="reusable_practice", summary="...", signal_key="...")',
         'anchor("learning", "assess", outcome="observations_recorded", observation_ids=["obs_..."])',
+        'anchor("learning", "triage", decision="derive_lesson", actor_kind="human", source_item_ids=["lrn_..."], expected_source_versions={"lrn_...": 1}, ...)',
         'anchor("learning", "safe_stop", status="blocked", reason="required evidence unavailable")',
     ],
     "save":         'anchor("save", entry_type="gotcha", content="Delta MERGE fails silently on null keys", tags=["delta", "merge"])',
@@ -677,7 +678,11 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`workbench`), references, provenance, evidence, and `retry_latest=True`.',
         '`assess`: provide `outcome="observations_recorded"` with `observation_ids`, or '
         '`outcome="nothing_reusable_learned"` without them; optional `notes`, `actor_kind` '
-        '(`agent` or `human`), `actor_ref`, and `retry_latest=True`.',
+        '(`agent` or `human`), `actor_ref`, and `retry_latest=True`. The result explains each '
+        'semantic projection decision and supplies the next managed operation.',
+        '`triage`: cross-project widening is human-only. Follow the assessed observation\'s '
+        '`next_operation`, preserve its expected source version and evidence, and use '
+        '`derive_lesson` or `derive_watch`; never create memory through SQLite.',
         '`safe_stop`: after the learning assessment has closed, terminate an accepted task with '
         'keyword-only `status` (`blocked` or `failed`) and a non-empty `reason`; optional '
         '`unavailable_evidence` is a list of strings. A successful gate cannot be safe-stopped.',
@@ -700,6 +705,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'request_owner_confirmation|withdraw|quarantine"`. On Databricks, explicitly set '
         '`provider="databricks_in_session"` to choose the lower-assurance two-step challenge '
         'even when Slack is configured; omitted `provider` preserves the default provider order.',
+        '`project="all"` means relevance-ranked eligibility across managed projects, not '
+        'unconditional injection into every task. Owner promotion of such shared memories is '
+        'bound to the boot-verified portfolio work authority.',
         'Lifecycle `reason`, `context`, and `evidence` values are JSON objects, not strings.',
         '**Lifecycle examples:**',
         '`anchor("memory", "apply", memory_id="...", action="used convention", '

@@ -19,7 +19,7 @@ from typing import Any
 
 DOMAIN = "memory_promotion"
 SCHEMA_VERSION = 4
-POLICY_VERSION = "verified-memory-promotion-v9"
+POLICY_VERSION = "verified-memory-promotion-v10"
 POLICY = {
     "automatic_candidate_activation_enabled": True,
     "automatic_active_confirmation_enabled": True,
@@ -39,6 +39,7 @@ POLICY = {
     "human_confirmation_receipts": 1,
     "require_separate_human_confirmation": True,
     "human_owner_reactivation_from_quarantine_enabled": True,
+    "shared_memory_owner_authority_required": True,
     "minimum_activation_attestations": 1,
     "minimum_confirmation_attestations": 2,
     "require_distinct_confirmation_tasks": True,
@@ -52,6 +53,9 @@ POLICY_SHA256 = hashlib.sha256(
     json.dumps(POLICY, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
 _LEGACY_POLICY_SHA256 = {
+    "verified-memory-promotion-v9": (
+        "2e16c54a3be84a442ac6435432ba79c8de021c0ec847267a403906f2e4c4e1ee"
+    ),
     "verified-memory-promotion-v8": (
         "47b59bc54cd49f1b5e9d017bfe4af6089171ad800e0487424170869afc317aab"
     ),
@@ -401,6 +405,15 @@ def _verified_human_receipt(row: sqlite3.Row) -> dict[str, Any]:
         }.get(row["transport"])
         if payload.get("owner_assurance") != expected_assurance or expected_assurance is None:
             raise RuntimeError("memory human authority receipt provider assurance mismatch")
+        if row["project_id"] == "all" and (
+            row["trust_domain"] != "work"
+            or not isinstance(payload.get("authority_id"), str)
+            or not payload["authority_id"].strip()
+            or subject.get("authority_id") != payload["authority_id"]
+            or not isinstance(subject.get("active_project_id"), str)
+            or not subject["active_project_id"].strip()
+        ):
+            raise RuntimeError("shared memory owner authority receipt is incomplete")
     identity = {
         "challenge_sha256": row["challenge_sha256"],
         "request_id": row["request_id"],
@@ -462,6 +475,16 @@ def _verified_event(
     }
     if any(payload.get(key) != value for key, value in indexed.items()):
         raise RuntimeError("memory promotion event indexed column mismatch")
+    if (
+        row["policy_version"] == POLICY_VERSION
+        and row["project_id"] == "all"
+        and (
+            row["trust_domain"] != "work"
+            or not isinstance(payload.get("authority_id"), str)
+            or not payload["authority_id"].strip()
+        )
+    ):
+        raise RuntimeError("shared memory promotion event has no work authority")
     identity = {
         "memory_id": row["memory_id"],
         "claim_sha256": row["claim_sha256"],
@@ -494,6 +517,8 @@ def _verified_event(
             raise RuntimeError("memory promotion event authority lane mismatch")
         if identity["actor_provider"] not in allowed_providers:
             raise RuntimeError("memory promotion event actor/provider mismatch")
+    if row["policy_version"] == POLICY_VERSION and row["project_id"] == "all":
+        identity["authority_id"] = payload.get("authority_id")
     idempotency_key = _sha256(identity)
     if (
         payload.get("format") != "odibi-anchor-memory-promotion-event-v1"
@@ -534,7 +559,9 @@ def _append_event(
     project_id: str, event_type: str, prior_event_id: str | None,
     target_status: str, attestation_ids: list[str],
     authority_lane: str | None = None, actor_provider: str | None = None,
+    trust_domain: str | None = None, authority_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
+    resolved_trust_domain = trust_domain or project_id
     if event_type == "withdrawal":
         resolved_lane = "safety_withdrawal"
         resolved_provider = "odibi-anchor-runtime"
@@ -552,6 +579,8 @@ def _append_event(
             verified_receipt["memory_id"] != memory_id
             or verified_receipt["claim_sha256"] != claim_sha256
             or verified_receipt["project_id"] != project_id
+            or verified_receipt["trust_domain"] != resolved_trust_domain
+            or verified_receipt.get("authority_id") != authority_id
             or verified_receipt["transition"] != event_type
             or verified_receipt["target_status"] != target_status
             or verified_receipt["prior_event_id"] != prior_event_id
@@ -588,6 +617,10 @@ def _append_event(
         "authority_lane": resolved_lane,
         "actor_provider": resolved_provider,
     }
+    if project_id == "all":
+        if resolved_trust_domain != "work" or not authority_id:
+            raise RuntimeError("shared memory promotion requires verified work authority")
+        identity["authority_id"] = authority_id
     idempotency_key = _sha256(identity)
     event_id = "mpe_" + idempotency_key
     existing = connection.execute(
@@ -612,7 +645,7 @@ def _append_event(
         "event_id": event_id,
         **identity,
         "project_id": project_id,
-        "trust_domain": project_id,
+        "trust_domain": resolved_trust_domain,
         "policy_version": POLICY_VERSION,
         "created_at": created_at,
     }
@@ -620,7 +653,7 @@ def _append_event(
     connection.execute(
         "INSERT INTO memory_promotion_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            event_id, memory_id, claim_sha256, project_id, project_id, event_type,
+            event_id, memory_id, claim_sha256, project_id, resolved_trust_domain, event_type,
             prior_event_id, target_status, POLICY_VERSION, POLICY_SHA256,
             _json(attestation_ids), raw, idempotency_key, created_at,
         ),
@@ -785,6 +818,7 @@ def _confirm_active(
 
 def _owner_subject(
     connection: sqlite3.Connection, *, memory_id: str, project_id: str, transition: str,
+    trust_domain: str, authority_id: str | None, active_project_id: str,
 ) -> tuple[dict[str, Any], sqlite3.Row]:
     memory = connection.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
     if memory is None or memory["project"] != project_id:
@@ -819,7 +853,7 @@ def _owner_subject(
         "memory_id": memory_id,
         "claim_sha256": claim_sha256,
         "project_id": project_id,
-        "trust_domain": project_id,
+        "trust_domain": trust_domain,
         "memory_type": memory["type"],
         "content": memory["content"],
         "source": memory["source"],
@@ -830,6 +864,9 @@ def _owner_subject(
         "policy_version": POLICY_VERSION,
         "policy_sha256": POLICY_SHA256,
     }
+    if project_id == "all":
+        subject["authority_id"] = authority_id
+        subject["active_project_id"] = active_project_id
     return subject, memory
 
 
@@ -863,10 +900,34 @@ def _existing_owner_transition(
     }
 
 
+def _owner_boundary(
+    path: str | Path, *, memory_id: str, active_project_id: str,
+    authority_id: str | None, trust_domain: str | None,
+) -> tuple[str, str, str | None]:
+    """Resolve a project-local or portfolio-shared owner-promotion boundary."""
+    with _connection(path, read_only=True) as connection:
+        memory = connection.execute("SELECT project FROM memories WHERE id=?", (memory_id,)).fetchone()
+    if memory is None:
+        raise ValueError("memory entry not found")
+    if memory["project"] == active_project_id:
+        return active_project_id, active_project_id, None
+    if memory["project"] != "all":
+        raise ValueError("memory belongs to a different project/trust boundary")
+    if not authority_id or trust_domain != "work":
+        raise ValueError("shared memory promotion requires boot-verified work authority")
+    from odibi_anchor.durability import ensure_database_authority
+
+    ensure_database_authority(
+        path, authority_id=authority_id, trust_domain=trust_domain, initialize=False,
+    )
+    return "all", trust_domain, authority_id
+
+
 def request_owner_promotion(
     path: str | Path, *, memory_id: str, project_id: str, transition: str,
     timeout_minutes: float = 60, provider: str | None = None,
     in_session_approval: str | None = None,
+    authority_id: str | None = None, trust_domain: str | None = None,
 ) -> dict[str, Any]:
     """Request exact owner authority through the selected human-presence provider."""
     if not isinstance(memory_id, str) or not memory_id.strip():
@@ -888,15 +949,21 @@ def request_owner_promotion(
         provider=provider, in_session_approval=in_session_approval,
     )
     initialize_schema(path)
+    memory_project_id, owner_trust_domain, owner_authority_id = _owner_boundary(
+        path, memory_id=memory_id, active_project_id=project_id,
+        authority_id=authority_id, trust_domain=trust_domain,
+    )
     with _connection(path, read_only=True) as connection:
         _verify_schema(connection)
         existing = _existing_owner_transition(
-            connection, memory_id=memory_id, project_id=project_id, transition=transition,
+            connection, memory_id=memory_id, project_id=memory_project_id, transition=transition,
         )
         if existing is not None:
             return existing
         subject, _memory = _owner_subject(
-            connection, memory_id=memory_id, project_id=project_id, transition=transition,
+            connection, memory_id=memory_id, project_id=memory_project_id,
+            transition=transition, trust_domain=owner_trust_domain,
+            authority_id=owner_authority_id, active_project_id=project_id,
         )
     if transition == "activation" and not _activation_enabled():
         raise ValueError("candidate activation is disabled")
@@ -906,7 +973,7 @@ def request_owner_promotion(
     expected_response = f"APPROVE {challenge}"
     request_message = (
         "Odibi Anchor memory authority request. Review the exact project-local claim and "
-        f"transition below.\n\nProject: {project_id}\nTransition: {transition}\n"
+        f"transition below.\n\nScope: {memory_project_id}\nTransition: {transition}\n"
         f"Type: {subject['memory_type']}\nSource: {subject['source']}\n"
         f"Claim: {subject['content']}\n\nReply exactly: {expected_response}"
     )
@@ -939,8 +1006,9 @@ def request_owner_promotion(
         timeout_minutes=timeout_minutes,
         transport=selected_provider.transport,
     )
+    response = request.response
     if (
-        request.response != expected_response
+        response != expected_response
         or request.response_user_id != selected_provider.expected_owner_id
         or request.transport != selected_provider.transport.name
         or not request.response_message_id
@@ -948,6 +1016,7 @@ def request_owner_promotion(
         or not request.transport
     ):
         raise ValueError("owner promotion response text, identity, or provider differs")
+    assert response is not None
     created_at = _now()
     receipt_identity = {
         "challenge_sha256": challenge,
@@ -960,8 +1029,8 @@ def request_owner_promotion(
         "receipt_id": receipt_id,
         "memory_id": memory_id,
         "claim_sha256": subject["claim_sha256"],
-        "project_id": project_id,
-        "trust_domain": project_id,
+        "project_id": memory_project_id,
+        "trust_domain": owner_trust_domain,
         "transition": transition,
         "target_status": subject["target_status"],
         "prior_event_id": subject["prior_event_id"],
@@ -984,7 +1053,7 @@ def request_owner_promotion(
         "request": {
             "request_id": request.request_id,
             "message_sha256": hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
-            "response_sha256": hashlib.sha256(request.response.encode("utf-8")).hexdigest(),
+            "response_sha256": hashlib.sha256(response.encode("utf-8")).hexdigest(),
             "response_message_id": request.response_message_id,
             "created_at": request.created_at,
             "delivered_at": request.delivered_at,
@@ -992,12 +1061,16 @@ def request_owner_promotion(
         },
         "created_at": created_at,
     }
+    if memory_project_id == "all":
+        receipt["authority_id"] = owner_authority_id
     with _connection(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         try:
             _verify_schema(connection)
             current_subject, _memory = _owner_subject(
-                connection, memory_id=memory_id, project_id=project_id, transition=transition,
+                connection, memory_id=memory_id, project_id=memory_project_id,
+                transition=transition, trust_domain=owner_trust_domain,
+                authority_id=owner_authority_id, active_project_id=project_id,
             )
             if current_subject != subject or _sha256(current_subject) != challenge:
                 raise ValueError("memory claim or lifecycle changed after owner approval")
@@ -1013,7 +1086,8 @@ def request_owner_promotion(
                 connection.execute(
                     "INSERT INTO memory_human_authority_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        receipt_id, memory_id, subject["claim_sha256"], project_id, project_id,
+                        receipt_id, memory_id, subject["claim_sha256"], memory_project_id,
+                        owner_trust_domain,
                         transition, subject["target_status"], subject["prior_event_id"], challenge,
                         request.response_user_id, request.transport, request.request_id,
                         request.response_message_id, _json(receipt), created_at,
@@ -1021,10 +1095,11 @@ def request_owner_promotion(
                 )
             event, event_created = _append_event(
                 connection, memory_id=memory_id, claim_sha256=subject["claim_sha256"],
-                project_id=project_id, event_type=transition,
+                project_id=memory_project_id, event_type=transition,
                 prior_event_id=subject["prior_event_id"], target_status=subject["target_status"],
                 attestation_ids=[receipt_id], authority_lane="human_owner",
                 actor_provider="odibi-anchor-human-input",
+                trust_domain=owner_trust_domain, authority_id=owner_authority_id,
             )
             changed = connection.execute(
                 "UPDATE memories SET status=? WHERE id=? AND status=?",
@@ -1076,12 +1151,15 @@ def withdraw_memory_in_transaction(
         claim_sha256 = _sha256(_claim(memory))
         if latest["claim_sha256"] != claim_sha256:
             raise RuntimeError("memory activation projection or claim diverged from authority")
+        latest_event = _verified_event(latest, connection)
         event, created = _append_event(
             connection, memory_id=memory_id, claim_sha256=claim_sha256,
             project_id=project_id, event_type="withdrawal",
             prior_event_id=latest["event_id"],
             target_status="candidate" if final_status == "candidate" else "quarantined",
             attestation_ids=json.loads(latest["attestation_ids_json"]),
+            trust_domain=latest_event["trust_domain"],
+            authority_id=latest_event.get("authority_id"),
         )
     elif latest is not None and latest["event_type"] in {"activation", "confirmation"}:
         raise RuntimeError("memory lifecycle projection diverged from promotion authority")
@@ -1098,11 +1176,16 @@ def withdraw_memory_in_transaction(
 
 def withdraw_candidate_activation(
     path: str | Path, *, memory_id: str, project_id: str, quarantine: bool = False,
+    authority_id: str | None = None, trust_domain: str | None = None,
 ) -> dict[str, Any]:
     """Append a safe rollback event and atomically lower the retrieval projection."""
     if type(quarantine) is not bool:
         raise TypeError("quarantine must be a bool")
     initialize_schema(path)
+    memory_project_id, _owner_trust_domain, _owner_authority_id = _owner_boundary(
+        path, memory_id=memory_id, active_project_id=project_id,
+        authority_id=authority_id, trust_domain=trust_domain,
+    )
     target_status = "quarantined" if quarantine else "candidate"
     with _connection(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -1116,7 +1199,7 @@ def withdraw_candidate_activation(
             ):
                 raise ValueError("activation already withdrawn to a different lifecycle state")
             event, created = withdraw_memory_in_transaction(
-                connection, memory_id=memory_id, project_id=project_id,
+                connection, memory_id=memory_id, project_id=memory_project_id,
                 final_status=target_status,
             )
             if event is None:

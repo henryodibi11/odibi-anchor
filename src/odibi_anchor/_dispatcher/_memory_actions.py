@@ -937,6 +937,10 @@ def build_task_memory_context(
         "bounded_limit": limit,
         "retrieval_is_application": False,
         "authority": "advisory",
+        "scope_semantics": {
+            "project_local": "eligible only inside its exact managed project",
+            "all": "eligible across projects when relevant; not selected for every task",
+        },
     }
 
 
@@ -1123,6 +1127,7 @@ def memory_action(
         )
         return {"kind": "memory_selection_recovery", "action": command, **result}
     if selector == "promotion":
+        from odibi_anchor._dispatcher._boot import _ENV
         from odibi_anchor.codebase._memory_promotion import (
             evaluate_shadow_promotion,
             finalize_verifier_attestation,
@@ -1204,6 +1209,8 @@ def memory_action(
                 ),
                 timeout_minutes=timeout_minutes, provider=provider,
                 in_session_approval=in_session_approval,
+                authority_id=_ENV.get("authority_id"),
+                trust_domain=_ENV.get("trust_domain"),
             )
         if command in {"withdraw", "quarantine"}:
             if payload or run_id is not None:
@@ -1213,6 +1220,8 @@ def memory_action(
             return withdraw_candidate_activation(
                 path, memory_id=memory_id, project_id=project,
                 quarantine=command == "quarantine",
+                authority_id=_ENV.get("authority_id"),
+                trust_domain=_ENV.get("trust_domain"),
             )
         if command == "inspect":
             if run_id is not None:

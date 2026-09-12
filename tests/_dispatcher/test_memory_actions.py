@@ -27,6 +27,7 @@ from odibi_anchor.codebase._memory_lifecycle import (
     record_selection,
 )
 from odibi_anchor.codebase.memory_context import append_memory
+from odibi_anchor.durability import ensure_database_authority
 
 
 class _Profile:
@@ -92,6 +93,9 @@ def test_task_retrieval_apply_and_evaluate_are_separate(tmp_path):
     )
     assert context["selection_count"] == 1
     assert context["retrieval_is_application"] is False
+    assert context["scope_semantics"]["all"] == (
+        "eligible across projects when relevant; not selected for every task"
+    )
     assert state.memory_applications == []
     assert "description" not in context["query"]
     assert "goal" not in context["query"]
@@ -770,6 +774,46 @@ def test_dispatcher_passes_only_exact_prepared_databricks_approval(tmp_path, mon
     assert prepared["status"] == "approval_required"
     assert recorded["status"] == "recorded"
     assert recorded["receipt"]["challenge_sha256"] == prepared["challenge_sha256"]
+
+
+def test_dispatcher_promotes_shared_memory_under_boot_authority(tmp_path, monkeypatch):
+    from odibi_anchor._dispatcher import _boot
+
+    db = tmp_path / "memory.db"
+    memory = append_memory(
+        tmp_path, entry_type="convention", content="Shared owner preference.",
+        project="all", db_path=str(db),
+    )
+    ensure_database_authority(
+        db, authority_id="enterprise-analytics", trust_domain="work", initialize=True,
+    )
+    monkeypatch.setitem(_boot._ENV, "authority_id", "enterprise-analytics")
+    monkeypatch.setitem(_boot._ENV, "trust_domain", "work")
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
+    monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: False)
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+    state = _state(tmp_path)
+
+    prepared = memory_action(
+        tmp_path, ("promotion",), {
+            "command": "request_owner_activation", "memory_id": memory["id"],
+            "provider": "databricks_in_session", "db_path": str(db),
+        }, session_state=state, query_fn=None, render_fn=None,
+    )
+    assert isinstance(prepared, dict)
+    recorded = memory_action(
+        tmp_path, ("promotion",), {
+            "command": "request_owner_activation", "memory_id": memory["id"],
+            "provider": "databricks_in_session",
+            "in_session_approval": prepared["approval_response"], "db_path": str(db),
+        }, session_state=state, query_fn=None, render_fn=None,
+    )
+
+    assert isinstance(recorded, dict)
+    receipt = recorded["receipt"]
+    assert isinstance(receipt, dict)
+    assert receipt["project_id"] == "all"
+    assert receipt["authority_id"] == "enterprise-analytics"
 
 
 def test_dispatcher_rejects_unsupported_owner_provider(tmp_path):

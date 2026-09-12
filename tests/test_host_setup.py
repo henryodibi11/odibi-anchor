@@ -72,6 +72,86 @@ def test_upgrades_only_unchanged_managed_content(tmp_path, monkeypatch):
     assert (target / ".assistant" / "README.md").read_text() == "new packaged content\n"
 
 
+def test_legacy_anchor_install_without_manifest_is_safely_adopted(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    legacy_path = ".assistant/agent_bootstrap.py"
+    legacy_content = b"released legacy bootstrap\n"
+    legacy_digest = module._sha256(legacy_content)
+    monkeypatch.setitem(module._LEGACY_MANAGED_HASHES, legacy_path, {legacy_digest})
+    for relative, content in module._desired_files("databricks").items():
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(legacy_content if relative == legacy_path else content)
+
+    result = setup_host(target, adapter="databricks")
+    repeated = setup_host(target, adapter="databricks")
+
+    assert result["status"] == "upgraded"
+    assert result["reconciled_legacy_managed_files"] == [legacy_path]
+    assert (target / legacy_path).read_bytes() == (resources / legacy_path).read_bytes()
+    assert repeated["status"] == "unchanged"
+
+
+def test_legacy_reconciliation_preserves_custom_anchor_instructions(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    legacy_path = ".assistant/agent_bootstrap.py"
+    legacy_content = b"released legacy bootstrap\n"
+    monkeypatch.setitem(
+        module._LEGACY_MANAGED_HASHES, legacy_path, {module._sha256(legacy_content)}
+    )
+    custom = b"# Odibi Anchor operating contract\nCustom rules using agent_bootstrap.py\n"
+    for relative, content in module._desired_files("databricks").items():
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if relative == legacy_path:
+            content = legacy_content
+        elif relative == ".assistant_instructions.md":
+            content = custom
+        destination.write_bytes(content)
+
+    result = setup_host(target, adapter="databricks")
+    repeated = setup_host(target, adapter="databricks")
+
+    assert (target / ".assistant_instructions.md").read_bytes() == custom
+    assert result["compatible_unmanaged_files"] == [".assistant_instructions.md"]
+    assert repeated["status"] == "unchanged"
+    assert repeated["compatible_unmanaged_files"] == [".assistant_instructions.md"]
+    manifest = json.loads((target / module._MANIFEST).read_text())
+    assert ".assistant_instructions.md" not in manifest["files"]
+
+
+def test_legacy_reconciliation_refuses_unknown_distribution_bytes(tmp_path, monkeypatch):
+    resources = _resources(tmp_path)
+    monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
+    target = tmp_path / "target"
+    target.mkdir()
+    legacy_path = ".assistant/agent_bootstrap.py"
+    legacy_content = b"released legacy bootstrap\n"
+    monkeypatch.setitem(
+        module._LEGACY_MANAGED_HASHES, legacy_path, {module._sha256(legacy_content)}
+    )
+    for relative, content in module._desired_files("databricks").items():
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if relative == legacy_path:
+            content = legacy_content
+        elif relative.endswith("quick-reference.md"):
+            content = b"unknown edit\n"
+        destination.write_bytes(content)
+    before = {path: path.read_bytes() for path in target.rglob("*") if path.is_file()}
+
+    with pytest.raises(HostSetupError, match="unmanaged destination collision"):
+        setup_host(target, adapter="databricks")
+
+    assert {path: path.read_bytes() for path in target.rglob("*") if path.is_file()} == before
+
+
 def test_upgrade_removes_only_unchanged_files_no_longer_packaged(tmp_path, monkeypatch):
     resources = _resources(tmp_path)
     monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
@@ -490,6 +570,39 @@ def test_databricks_workspace_install_uses_api_without_staging(tmp_path, monkeyp
     assert first["verified_file_count"] == len(first["managed_files"])
     assert not any(".anchor-host-stage-" in path for _operation, path in workspace.calls)
     assert not any("__pycache__" in path or path.endswith(".pyc") for path in workspace.files)
+
+
+def test_databricks_workspace_reconciles_legacy_files_and_preserves_custom_instructions(
+    tmp_path, monkeypatch
+):
+    resources, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    legacy_path = ".assistant/agent_bootstrap.py"
+    legacy_content = b"released legacy bootstrap\n"
+    monkeypatch.setitem(
+        module._LEGACY_MANAGED_HASHES, legacy_path, {module._sha256(legacy_content)}
+    )
+    custom = b"# Odibi Anchor operating contract\nCustom rules using agent_bootstrap.py\n"
+    for relative, content in module._desired_files("databricks").items():
+        if relative == legacy_path:
+            content = legacy_content
+        elif relative == ".assistant_instructions.md":
+            content = custom
+        workspace.files[f"/Users/test@example.invalid/anchor-host/{relative}"] = content
+
+    result = setup_host(target, adapter="databricks")
+    repeated = setup_host(target, adapter="databricks")
+
+    assert result["status"] == "upgraded"
+    assert result["reconciled_legacy_managed_files"] == [legacy_path]
+    assert result["compatible_unmanaged_files"] == [".assistant_instructions.md"]
+    assert workspace.files[f"/Users/test@example.invalid/anchor-host/{legacy_path}"] == (
+        resources / legacy_path
+    ).read_bytes()
+    assert workspace.files[
+        "/Users/test@example.invalid/anchor-host/.assistant_instructions.md"
+    ] == custom
+    assert repeated["status"] == "unchanged"
 
 
 def test_databricks_workspace_api_upgrade_restores_original_on_failure(
