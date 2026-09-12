@@ -142,6 +142,16 @@ def _resolve_environment(
         "authority_id": active_environment.get("ANCHOR_AUTHORITY_ID"),
         "trust_domain": active_environment.get("ANCHOR_TRUST_DOMAIN"),
         "durable_root": active_environment.get("ANCHOR_DURABLE_ROOT"),
+        "retention_days": (
+            int(active_environment["ANCHOR_RETENTION_DAYS"])
+            if active_environment.get("ANCHOR_RETENTION_DAYS")
+            else None
+        ),
+        "retention_minimum_snapshots": (
+            int(active_environment["ANCHOR_RETENTION_MINIMUM_SNAPSHOTS"])
+            if active_environment.get("ANCHOR_RETENTION_MINIMUM_SNAPSHOTS")
+            else None
+        ),
         "is_databricks": bool(active_environment.get("DATABRICKS_RUNTIME_VERSION")),
         "runtime_paths": runtime_paths,
     }

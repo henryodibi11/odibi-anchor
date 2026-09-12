@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import sqlite3
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -653,6 +654,79 @@ def test_gate_sweeps_bounded_project_local_structured_candidates_without_selecti
     assert len(swept) == len(set(swept)) == 5
     assert set(swept) < set(local_ids)
     assert {result["status"] for result in verification["results"]} == {"unavailable"}
+
+
+def test_gate_reports_memory_verification_unavailable_for_databricks_git_folder_baseline(
+    tmp_path, monkeypatch,
+):
+    from odibi_anchor._repository_snapshot import (
+        DatabricksGitFolderIdentity,
+        DatabricksGitFolderTaskBaseline,
+    )
+
+    db = tmp_path / "memory.db"
+    target = tmp_path / "target"
+    target.mkdir()
+    memory_id = insert_memory(
+        db,
+        project="project:test",
+        type="discovery",
+        content="Candidate requiring an independent verifier.",
+        source="structured_learning:databricks-candidate",
+    )["id"]
+    identity = DatabricksGitFolderIdentity(
+        repository_id="42",
+        workspace_path="/Workspace/project",
+        branch="feature",
+        head_sha="a" * 40,
+        remote_url="https://example.invalid/project.git",
+        git_provider=None,
+    )
+    class Provider:
+        def __init__(self) -> None:
+            self.provider_id: str = "test.databricks-git-folder"
+
+        def capture_identity(
+            self, target_worktree: str | os.PathLike[str]
+        ) -> DatabricksGitFolderIdentity:
+            del target_worktree
+            return identity
+
+    provider = Provider()
+    baseline = DatabricksGitFolderTaskBaseline(
+        target_worktree=str(target),
+        repository_scope=(".",),
+        directory_scopes=(".",),
+        identity=identity,
+        preimages=(),
+        captured_at="2026-09-12T00:00:00+00:00",
+        identity_provider=provider,
+    )
+    state = SimpleNamespace(
+        memory_selections=[],
+        task_window_id="ltw-databricks",
+        active_project="project:test",
+        task_repository_baseline=baseline,
+        target_root=str(target),
+    )
+    current_boot = importlib.import_module("odibi_anchor._dispatcher._boot")
+    monkeypatch.setitem(current_boot._ENV, "memory_db", str(db))
+    gate_result = {}
+
+    _verify_selected_memory_candidates(gate_result, session_state=state)
+
+    verification = gate_result["memory_candidate_verification"]
+    assert verification["results"] == [
+        {
+            "memory_id": memory_id,
+            "status": "unavailable",
+            "reason": (
+                "memory verification requires canonical local Git history; "
+                "Databricks Git Folder task evidence does not provide it"
+            ),
+        }
+    ]
+    assert verification["authority_mutation"] == "none"
 
 
 def test_activation_kill_switch_preserves_attestation_without_authority_mutation(

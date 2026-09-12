@@ -143,6 +143,34 @@ def test_bootstrap_managed_project_refuses_implicit_creation(tmp_path, monkeypat
     assert hashlib.sha256(config.read_bytes()).hexdigest() == before
 
 
+def test_bootstrap_managed_project_refuses_stale_retention_environment(
+    tmp_path, monkeypatch
+):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    home = tmp_path / "state"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(home),
+            "instruction_root": str(instruction),
+        }},
+        "projects": {"alpha": {"targets": {"local": str(target)}}},
+        "personas": {},
+    })
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setenv("ANCHOR_RETENTION_DAYS", "1")
+
+    with pytest.raises(RuntimeError, match=r"restart Python.*ANCHOR_RETENTION_DAYS"):
+        bootstrap_managed_project(
+            config_path=config, project_id="alpha", instruction_root=instruction
+        )
+
+
 def test_bootstrap_managed_project_explicit_creation_checkpoints_state(
     tmp_path, monkeypatch
 ):

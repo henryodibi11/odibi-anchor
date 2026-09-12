@@ -602,6 +602,101 @@ def _remote_file_matches(files: Any, source: Path, destination: str) -> bool:
         return verified.stat().st_size == source.stat().st_size and _sha256(verified) == _sha256(source)
 
 
+def _retention_policy(
+    retention_days: int | None,
+    minimum_snapshots: int | None,
+) -> tuple[int, int] | None:
+    if retention_days is None and minimum_snapshots is None:
+        return None
+    if retention_days is None or minimum_snapshots is None:
+        raise ValueError(
+            "retention_days and minimum_snapshots must be configured together"
+        )
+    for value, label, maximum in (
+        (retention_days, "retention_days", 3650),
+        (minimum_snapshots, "minimum_snapshots", 1000),
+    ):
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ValueError(f"{label} must be an integer from 1 through {maximum}")
+    return retention_days, minimum_snapshots
+
+
+def _delete_publication(
+    path: Path,
+    *,
+    files: Any | None,
+    publication_root: str,
+) -> None:
+    if files is None:
+        path.unlink()
+    else:
+        files.delete(_remote_child(publication_root, path.name))
+
+
+def _apply_retention(
+    *,
+    snapshot_root: Path,
+    files: Any | None,
+    publication_root: str,
+    manifests: list[dict[str, Any]],
+    retention_days: int,
+    minimum_snapshots: int,
+) -> dict[str, Any]:
+    """Remove expired manifests, then blobs no retained manifest can reach."""
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    ordered = sorted(
+        manifests,
+        key=lambda item: (item["created_at"], item["snapshot_id"]),
+        reverse=True,
+    )
+    expired = [
+        item
+        for index, item in enumerate(ordered)
+        if index >= minimum_snapshots
+        and datetime.fromisoformat(
+            str(item["created_at"]).replace("Z", "+00:00")
+        )
+        < cutoff
+    ]
+    candidate_blobs = {item["snapshot_file"] for item in expired} | {
+        item["artifacts"]["file"]
+        for item in expired
+        if item["format"] == _FORMAT_V2
+    }
+    for item in expired:
+        manifest_path = snapshot_root / f"{item['snapshot_id']}{_MANIFEST_SUFFIX}"
+        _delete_publication(
+            manifest_path,
+            files=files,
+            publication_root=publication_root,
+        )
+
+    retained = [item for item in ordered if item not in expired]
+    removed_blobs: list[str] = []
+    referenced = {item["snapshot_file"] for item in retained} | {
+        item["artifacts"]["file"]
+        for item in retained
+        if item["format"] == _FORMAT_V2
+    }
+    for name in sorted(candidate_blobs - referenced):
+        path = snapshot_root / name
+        if path.is_file():
+            _delete_publication(
+                path,
+                files=files,
+                publication_root=publication_root,
+            )
+            removed_blobs.append(name)
+    return {
+        "status": "applied",
+        "days": retention_days,
+        "minimum_snapshots": minimum_snapshots,
+        "removed_snapshots": len(expired),
+        "removed_blobs": len(removed_blobs),
+        "retained_snapshots": len(retained),
+    }
+
+
 def list_snapshots(
     *,
     durable_root: str | os.PathLike[str],
@@ -662,8 +757,11 @@ def snapshot_state(
     durable_root: str | os.PathLike[str],
     authority_id: str,
     databricks: bool = False,
+    retention_days: int | None = None,
+    minimum_snapshots: int | None = None,
 ) -> dict[str, Any]:
     """Back up live local state and publish immutable bytes plus a commit manifest."""
+    retention_policy = _retention_policy(retention_days, minimum_snapshots)
     qualified = qualify_paths(
         source_db=source_db,
         source_artifacts=source_artifacts,
@@ -755,7 +853,7 @@ def snapshot_state(
                 assert existing is not None
                 manifest_path = snapshot_root / f"{existing['snapshot_id']}{_MANIFEST_SUFFIX}"
                 published_manifest_path = _remote_child(publication_root, manifest_path.name)
-                return {
+                result = {
                     "kind": "durable_snapshot",
                     "action": "reused",
                     "manifest": existing,
@@ -773,6 +871,16 @@ def snapshot_state(
                         databricks=databricks,
                     ),
                 }
+                if retention_policy is not None:
+                    result["retention"] = _apply_retention(
+                        snapshot_root=snapshot_root,
+                        files=files,
+                        publication_root=publication_root,
+                        manifests=manifests,
+                        retention_days=retention_policy[0],
+                        minimum_snapshots=retention_policy[1],
+                    )
+                return result
             created = datetime.now(UTC)
             if existing is not None:
                 latest = datetime.fromisoformat(existing["created_at"].replace("Z", "+00:00"))
@@ -828,7 +936,7 @@ def snapshot_state(
                 _publish_remote_file(files, staged_manifest, published_manifest_path)
             else:
                 _publish_file_exclusive(staged_manifest, manifest_path)
-            return {
+            result = {
                 "kind": "durable_snapshot",
                 "action": "created",
                 "manifest": manifest,
@@ -846,6 +954,16 @@ def snapshot_state(
                     databricks=databricks,
                 ),
             }
+            if retention_policy is not None:
+                result["retention"] = _apply_retention(
+                    snapshot_root=snapshot_root,
+                    files=files,
+                    publication_root=publication_root,
+                    manifests=[*manifests, manifest],
+                    retention_days=retention_policy[0],
+                    minimum_snapshots=retention_policy[1],
+                )
+            return result
 
 
 def restore_latest(

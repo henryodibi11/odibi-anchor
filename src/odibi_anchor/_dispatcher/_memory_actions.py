@@ -1162,6 +1162,15 @@ def memory_action(
             baseline = session_state.task_repository_baseline
             if baseline is None or not session_state.task_window_id or not session_state.target_root:
                 raise RuntimeError("memory promotion verify requires accepted source-task authority")
+            from odibi_anchor._repository_snapshot import (
+                is_databricks_git_folder_baseline,
+            )
+
+            if is_databricks_git_folder_baseline(baseline):
+                raise ValueError(
+                    "memory promotion verification requires canonical local Git history; "
+                    "Databricks Git Folder task evidence does not provide it"
+                )
             return run_installed_verifier(
                 path,
                 memory_id=memory_id,

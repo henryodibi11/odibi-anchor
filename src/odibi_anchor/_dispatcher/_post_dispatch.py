@@ -154,6 +154,8 @@ def _snapshot_durable_state(result, *, memory_db: str) -> None:
             durable_root=durable_root,
             authority_id=authority_id,
             databricks=bool(_ENV.get("is_databricks")),
+            retention_days=_ENV.get("retention_days"),
+            minimum_snapshots=_ENV.get("retention_minimum_snapshots"),
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError(
@@ -251,6 +253,27 @@ def _verify_selected_memory_candidates(result, *, session_state) -> None:
             "results": [
                 {"memory_id": memory_id, "status": "unavailable",
                  "reason": "repository task authority unavailable"}
+                for memory_id in memory_ids
+            ],
+            "selected_count": len(selected_ids),
+            "sweep_count": len(sweep_ids),
+            "authority_mutation": "none",
+        }
+        return
+    from odibi_anchor._repository_snapshot import is_databricks_git_folder_baseline
+
+    if is_databricks_git_folder_baseline(baseline):
+        result["memory_candidate_verification"] = {
+            "bounded_limit": 10,
+            "results": [
+                {
+                    "memory_id": memory_id,
+                    "status": "unavailable",
+                    "reason": (
+                        "memory verification requires canonical local Git history; "
+                        "Databricks Git Folder task evidence does not provide it"
+                    ),
+                }
                 for memory_id in memory_ids
             ],
             "selected_count": len(selected_ids),

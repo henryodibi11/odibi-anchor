@@ -21,6 +21,19 @@ approved durable storage. On shared/serverless compute, use a stable user-specif
 Never use a live SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository`
 and `artifact_namespace` are optional metadata; exact host/project targets are routing authority.
 
+To bound snapshot accumulation, opt into automatic retention in the portfolio:
+
+```toml
+[durability.retention]
+days = 7
+minimum_snapshots = 3
+```
+
+After each successful durable checkpoint, Anchor retains every snapshot from the last
+`days` and always retains at least the newest `minimum_snapshots`. It removes expired
+manifests first, then removes only database or artifact blobs no retained manifest
+references. Omitting this table preserves all snapshots.
+
 Install or reconcile the packaged instructions once per host instruction root:
 
 ```bash

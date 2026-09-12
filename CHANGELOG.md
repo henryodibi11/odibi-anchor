@@ -2,6 +2,18 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Portfolio-configurable durable snapshot retention keeps a time window plus a minimum
+  number of restore points and safely reclaims only blobs unreferenced by retained manifests.
+
+### Fixed
+
+- Gates now report memory-verifier evidence as unavailable for Databricks Git Folder task
+  baselines instead of accessing a local-Git-only target-ref field and raising `AttributeError`.
+
 ## [0.3.7] - 2026-09-12
 
 ### Added

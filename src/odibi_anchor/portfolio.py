@@ -42,7 +42,17 @@ _PERSONA_FORBIDDEN = frozenset(
         "deny",
     }
 )
-_TOP = frozenset({"schema_version", "incomplete_fields", "authority", "hosts", "projects", "personas"})
+_TOP = frozenset(
+    {
+        "schema_version",
+        "incomplete_fields",
+        "authority",
+        "durability",
+        "hosts",
+        "projects",
+        "personas",
+    }
+)
 
 
 def portfolio_schema() -> dict[str, Any]:
@@ -50,6 +60,14 @@ def portfolio_schema() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "authority": {"required": ["id", "trust_domain"], "trust_domain": "work"},
+        "durability": {
+            "optional": True,
+            "retention": {
+                "required": ["days", "minimum_snapshots"],
+                "days": {"minimum": 1, "maximum": 3650},
+                "minimum_snapshots": {"minimum": 1, "maximum": 1000},
+            },
+        },
         "hosts": {
             "key": "safe_id",
             "required": ["adapter", "local_state_root"],
@@ -154,6 +172,22 @@ def _structural(portfolio: Any) -> dict[str, Any]:
     if authority.get("trust_domain") not in {None, "work"}:
         raise ValueError("authority.trust_domain must be 'work'")
 
+    durability = _table(root.get("durability", {}), "durability")
+    _check_keys(durability, {"retention"}, "durability")
+    if "retention" in durability:
+        retention = _table(durability["retention"], "durability.retention")
+        _check_keys(retention, {"days", "minimum_snapshots"}, "durability.retention")
+        if set(retention) != {"days", "minimum_snapshots"}:
+            raise ValueError(
+                "durability.retention requires days and minimum_snapshots"
+            )
+        for key, maximum in (("days", 3650), ("minimum_snapshots", 1000)):
+            value = retention[key]
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(
+                    f"durability.retention.{key} must be an integer from 1 through {maximum}"
+                )
+
     hosts = _table(root.get("hosts", {}), "hosts")
     for host_id, host_value in hosts.items():
         _safe_id(host_id, "host ID")
@@ -218,6 +252,23 @@ def validate_portfolio(portfolio: Any, *, host_id: str | None = None) -> dict[st
         missing("authority.trust_domain", "PortfolioV1 requires the work trust domain.")
     else:
         configured.append({"field": "authority.trust_domain", "reason": "The fixed work trust domain is configured."})
+
+    retention = root.get("durability", {}).get("retention")
+    if retention is None:
+        na.append(
+            {
+                "field": "durability.retention",
+                "reason": "Automatic durable snapshot retention is not configured.",
+            }
+        )
+    else:
+        configured.extend(
+            {
+                "field": f"durability.retention.{key}",
+                "reason": "A bounded automatic snapshot retention value is configured.",
+            }
+            for key in ("days", "minimum_snapshots")
+        )
 
     hosts = root.get("hosts", {})
     if not hosts:
@@ -370,6 +421,11 @@ def _render(portfolio: dict[str, Any], *, comments: bool = False) -> bytes:
     for key in ("id", "trust_domain"):
         if key in authority:
             lines.append(f"{key} = {_quote(authority[key])}")
+    retention = root.get("durability", {}).get("retention")
+    if retention is not None:
+        lines += ["", "[durability.retention]"]
+        lines.append(f"days = {retention['days']}")
+        lines.append(f"minimum_snapshots = {retention['minimum_snapshots']}")
     for host_id in sorted(root.get("hosts", {})):
         host = root["hosts"][host_id]
         lines += ["", f"[hosts.{_quote(host_id)}]"]
@@ -638,6 +694,18 @@ def resolve_project(
             **(
                 {"ANCHOR_DURABLE_ROOT": portfolio["hosts"][host]["durable_root"]}
                 if portfolio["hosts"][host].get("durable_root")
+                else {}
+            ),
+            **(
+                {
+                    "ANCHOR_RETENTION_DAYS": str(
+                        portfolio["durability"]["retention"]["days"]
+                    ),
+                    "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS": str(
+                        portfolio["durability"]["retention"]["minimum_snapshots"]
+                    ),
+                }
+                if portfolio.get("durability", {}).get("retention") is not None
                 else {}
             ),
         },

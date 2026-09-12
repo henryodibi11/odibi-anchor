@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import tarfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -235,6 +235,142 @@ def test_v2_checkpoint_advances_when_only_artifacts_change(tmp_path: Path) -> No
     assert second["action"] == "created"
     assert second["manifest"]["sha256"] == first["manifest"]["sha256"]
     assert second["manifest"]["artifacts"]["sha256"] != first["manifest"]["artifacts"]["sha256"]
+
+
+def test_configured_retention_keeps_time_window_and_minimum_and_reclaims_only_unreferenced_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    artifacts.mkdir()
+    _database(source)
+
+    class ControlledDateTime(datetime):
+        current = datetime(2026, 1, 1, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(durability, "datetime", ControlledDateTime)
+    snapshots = []
+    for day in (1, 2, 3, 19, 20):
+        ControlledDateTime.current = datetime(2026, 1, day, tzinfo=UTC)
+        (artifacts / "record.md").write_text(f"state {day}\n", encoding="utf-8")
+        snapshots.append(
+            durability.snapshot_state(
+                source_db=source,
+                source_artifacts=artifacts,
+                durable_root=durable,
+                authority_id="work",
+            )
+        )
+
+    ControlledDateTime.current = datetime(2026, 1, 20, 12, tzinfo=UTC)
+    result = durability.snapshot_state(
+        source_db=source,
+        source_artifacts=artifacts,
+        durable_root=durable,
+        authority_id="work",
+        retention_days=7,
+        minimum_snapshots=2,
+    )
+
+    assert result["action"] == "reused"
+    assert result["retention"] == {
+        "status": "applied",
+        "days": 7,
+        "minimum_snapshots": 2,
+        "removed_snapshots": 3,
+        "removed_blobs": 3,
+        "retained_snapshots": 2,
+    }
+    listing = durability.list_snapshots(
+        durable_root=durable, authority_id="work"
+    )["snapshots"]
+    assert [item["snapshot_id"] for item in listing] == [
+        snapshots[3]["manifest"]["snapshot_id"],
+        snapshots[4]["manifest"]["snapshot_id"],
+    ]
+    shared_database = Path(snapshots[0]["snapshot_path"])
+    assert shared_database.is_file()
+    for expired in snapshots[:3]:
+        assert not Path(expired["artifacts_path"]).exists()
+
+
+def test_databricks_retention_deletes_expired_manifest_and_unreferenced_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    artifacts.mkdir()
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+
+    class ControlledDateTime(datetime):
+        current = datetime(2026, 1, 1, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(durability, "datetime", ControlledDateTime)
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    for day in (1, 20):
+        ControlledDateTime.current = datetime(2026, 1, day, tzinfo=UTC)
+        (artifacts / "record.md").write_text(f"state {day}\n", encoding="utf-8")
+        durability.snapshot_state(
+            source_db=source,
+            source_artifacts=artifacts,
+            durable_root=durable,
+            authority_id="work",
+            databricks=True,
+        )
+
+    result = durability.snapshot_state(
+        source_db=source,
+        source_artifacts=artifacts,
+        durable_root=durable,
+        authority_id="work",
+        databricks=True,
+        retention_days=7,
+        minimum_snapshots=1,
+    )
+
+    assert result["retention"]["removed_snapshots"] == 1
+    assert result["retention"]["removed_blobs"] == 1
+    assert len([name for name in files.files if name.endswith(".manifest.json")]) == 1
+    assert len([name for name in files.files if name.endswith(".artifacts.tar")]) == 1
+    assert len([name for name in files.files if name.endswith(".sqlite3")]) == 1
+
+
+@pytest.mark.parametrize(
+    "days, minimum, message",
+    [
+        (7, None, "configured together"),
+        (0, 3, "retention_days must be an integer"),
+        (7, False, "minimum_snapshots must be an integer"),
+    ],
+)
+def test_snapshot_retention_rejects_partial_or_unbounded_policy(
+    tmp_path: Path, days, minimum, message
+) -> None:
+    source = tmp_path / "live.db"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+
+    with pytest.raises(ValueError, match=message):
+        durability.snapshot_state(
+            source_db=source,
+            durable_root=durable,
+            authority_id="work",
+            retention_days=days,
+            minimum_snapshots=minimum,
+        )
 
 
 def test_databricks_snapshot_restore_uses_files_api_without_fuse(

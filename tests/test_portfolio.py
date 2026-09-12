@@ -51,6 +51,44 @@ def test_deterministic_bytes_ignore_dictionary_insertion_order(tmp_path):
     assert one.read_bytes() == two.read_bytes()
 
 
+def test_retention_configuration_round_trips_and_resolves_to_environment(tmp_path):
+    path = tmp_path / "anchor.toml"
+    portfolio = _portfolio(tmp_path)
+    portfolio["durability"] = {
+        "retention": {"days": 7, "minimum_snapshots": 3}
+    }
+
+    write_portfolio(path, portfolio)
+    loaded = load_portfolio(path)
+    resolved = resolve_project(loaded, host_id="amp-host", project_id="alpha")
+
+    assert loaded["durability"]["retention"] == {
+        "days": 7,
+        "minimum_snapshots": 3,
+    }
+    assert resolved["environment"]["ANCHOR_RETENTION_DAYS"] == "7"
+    assert resolved["environment"]["ANCHOR_RETENTION_MINIMUM_SNAPSHOTS"] == "3"
+    assert "[durability.retention]" in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "retention, message",
+    [
+        ({"days": 7}, "requires days and minimum_snapshots"),
+        ({"days": 0, "minimum_snapshots": 3}, "days must be an integer"),
+        ({"days": 7, "minimum_snapshots": True}, "minimum_snapshots must be an integer"),
+    ],
+)
+def test_retention_configuration_rejects_partial_or_unbounded_values(
+    tmp_path, retention, message
+):
+    portfolio = _portfolio(tmp_path)
+    portfolio["durability"] = {"retention": retention}
+
+    with pytest.raises(ValueError, match=message):
+        validate_portfolio(portfolio)
+
+
 def test_scaffold_is_commented_and_truthfully_incomplete(tmp_path):
     path = tmp_path / "anchor.toml"
     result = scaffold_portfolio(path, host_id="amp", adapter="amp", target_root="/work/repo")

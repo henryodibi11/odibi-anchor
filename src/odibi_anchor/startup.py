@@ -386,10 +386,15 @@ def bootstrap_managed_project(
     guidance = setup_host(root, adapter=host["adapter"])
 
     def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
+        optional_managed_names = {
+            "ANCHOR_DURABLE_ROOT",
+            "ANCHOR_RETENTION_DAYS",
+            "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS",
+        }
         conflicts = {
             name
-            for name, value in environment.items()
-            if name in os.environ and os.environ[name] != value
+            for name in set(environment) | optional_managed_names
+            if name in os.environ and os.environ[name] != environment.get(name)
         }
         if conflicts:
             raise RuntimeError(
@@ -422,6 +427,18 @@ def bootstrap_managed_project(
             **(
                 {"ANCHOR_DURABLE_ROOT": host["durable_root"]}
                 if host.get("durable_root")
+                else {}
+            ),
+            **(
+                {
+                    "ANCHOR_RETENTION_DAYS": str(
+                        portfolio["durability"]["retention"]["days"]
+                    ),
+                    "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS": str(
+                        portfolio["durability"]["retention"]["minimum_snapshots"]
+                    ),
+                }
+                if portfolio.get("durability", {}).get("retention") is not None
                 else {}
             ),
         }
@@ -482,6 +499,16 @@ def bootstrap_managed_project(
             durable_root=durable_root,
             authority_id=prepared["environment"]["ANCHOR_AUTHORITY_ID"],
             databricks=host["adapter"] == "databricks",
+            retention_days=(
+                int(prepared["environment"]["ANCHOR_RETENTION_DAYS"])
+                if "ANCHOR_RETENTION_DAYS" in prepared["environment"]
+                else None
+            ),
+            minimum_snapshots=(
+                int(prepared["environment"]["ANCHOR_RETENTION_MINIMUM_SNAPSHOTS"])
+                if "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS" in prepared["environment"]
+                else None
+            ),
         )
 
     startup_packet = {
