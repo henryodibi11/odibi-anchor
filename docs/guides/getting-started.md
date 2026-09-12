@@ -82,22 +82,23 @@ The command installs `.assistant_instructions.md`, `.assistant/`, and the host p
 tracks hashes, upgrades only unchanged managed files, and refuses collisions. It does not
 silently create or change routing configuration.
 
-## Diagnose, prepare, and launch
+## Prepare, diagnose, and launch
 
-Run doctor before guessing:
+When a portfolio is configured, prepare it before setting environment variables or running
+doctor. Do not point `ANCHOR_HOME` at the portfolio directory:
 
 ```bash
-anchor doctor
 anchor portfolio validate --config /absolute/private/path/anchor.toml --host local
 anchor portfolio prepare --config /absolute/private/path/anchor.toml --host local --project example
 ```
 
 `portfolio prepare` returns the exact environment and bootstrap inputs. Apply every returned
-environment field in the same persistent Python process, then launch:
+environment field in the same persistent Python process, then run the returned launcher:
 
 ```python
 import os
-from odibi_anchor import launch, prepare_portfolio_runtime
+import runpy
+from odibi_anchor import doctor, prepare_portfolio_runtime
 
 prepared = prepare_portfolio_runtime(
     config_path="/absolute/private/path/anchor.toml",
@@ -105,9 +106,16 @@ prepared = prepare_portfolio_runtime(
     project_id="example",
 )
 os.environ.update(prepared["environment"])
-anchor = launch(**prepared["bootstrap"]["arguments"])
+diagnostics = doctor()
+namespace = runpy.run_path(prepared["next_operation"]["arguments"]["script"])
+anchor = namespace["anchor"]
 status = anchor("status", output_format="dict")
 ```
+
+The process-bound `anchor` callable comes from that namespace or from an explicit `launch()`
+return value; it is not importable as `from odibi_anchor import anchor`. If doctor runs before
+Databricks preparation, it remains read-only and directs the caller to `portfolio.prepare`
+instead of asking the caller to invent `ANCHOR_HOME`.
 
 Accept a task before loading its returned required skills. Load each with
 `anchor("skill_loaded", "<name>")` in that same process; attempting to register a skill before
@@ -115,8 +123,8 @@ task acceptance is invalid. On Databricks, `launch()` automatically attaches rea
 Folder identity when the Workspace API can attest the configured target.
 
 On Databricks, retain `ANCHOR_DURABLE_ROOT`; current releases qualify it through the Files
-API rather than FUSE. After compute replacement, rerun preparation. It restores an absent
-local database from the latest verified snapshot before launch.
+API rather than FUSE. After compute replacement, rerun preparation. It restores the absent
+local database and managed project artifacts from the latest verified snapshot before launch.
 
 ## Add another project
 
@@ -124,12 +132,14 @@ local database from the latest verified snapshot before launch.
 anchor portfolio add-project \
   --config /absolute/private/path/anchor.toml \
   --host local --project another-project \
-  --target-root /absolute/path/to/another-project \
-  --expected-sha256 <digest-returned-by-portfolio-show>
+  --target-root /absolute/path/to/another-project
 ```
 
-The digest protects against concurrent edits. Every runtime must still prepare and bind one
-exact project and root.
+The target must already be a directory, but it does not have to be a Git repository. Git identity
+is required only for source-change evidence. `add-project` protects its read/write with an
+optimistic digest and returns an exact `portfolio.prepare` next operation; follow it to register,
+restore, and bootstrap the new project. Supply `--expected-sha256` when a separately reviewed
+portfolio digest must remain unchanged between approval and execution.
 
 ## Safe reset and cleanup
 

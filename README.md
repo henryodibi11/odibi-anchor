@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.3"
+python -m pip install "odibi-anchor==0.3.4"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.3"
+python -m pip install "odibi-anchor[mcp]==0.3.4"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,32 +64,34 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.3"
+%pip install "odibi-anchor[databricks]==0.3.4"
 dbutils.library.restartPython()
 ```
 
-Then run the read-only doctor and create or prepare an explicit portfolio. No Anchor source
-clone is required:
+Prepare the configured portfolio first. It selects local live state, restores durable state,
+and returns the exact bootstrap environment. No Anchor source clone or manually chosen
+`ANCHOR_HOME` is required:
 
 ```python
 import os
+import runpy
 
-os.environ["ANCHOR_HOME"] = "/tmp/anchor-state"  # local compute disk; session-scoped
-os.environ["ANCHOR_PROJECT_ID"] = "my-databricks-project"
-os.environ["ANCHOR_PROJECT_ROOT"] = "/Workspace/Users/<user>/<git-folder>"
+from odibi_anchor import prepare_portfolio_runtime
 
-from odibi_anchor import doctor, launch, register_project
-
-startup = doctor()
-if startup["next_operation"]["operation"] == "register_project":
-    registration = register_project(**startup["next_operation"]["arguments"])
-anchor = launch(
-    anchor_home=os.environ["ANCHOR_HOME"],
-    project_id=os.environ["ANCHOR_PROJECT_ID"],
-    project_root=os.environ["ANCHOR_PROJECT_ROOT"],
+prepared = prepare_portfolio_runtime(
+    config_path="/Workspace/Users/<user>/.odibi-anchor/anchor.toml",
+    host_id="databricks-work",
+    project_id="my-databricks-project",
 )
-orientation = anchor("orient", output_format="dict")
+os.environ.update(prepared["environment"])
+namespace = runpy.run_path(prepared["next_operation"]["arguments"]["script"])
+anchor = namespace["anchor"]
+status = anchor("status", output_format="dict")
 ```
+
+The `anchor` callable is process-bound and comes from the launcher namespace (or the return
+value of `odibi_anchor.launch()`); `from odibi_anchor import anchor` is intentionally unsupported.
+Run the read-only doctor after preparation when additional startup diagnostics are needed.
 
 Run `anchor setup-host databricks --target /Workspace/Users/<user>` once to install and
 subsequently reconcile the packaged instructions and launcher. Workspace targets are published
@@ -99,9 +101,10 @@ PortfolioV1 to keep host-specific project roots and state locations explicit ins
 [portfolio and durable state](docs/guides/portfolio-and-durable-state.md).
 
 `ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
-checkout. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Configure
-an approved durable snapshot root while keeping live SQLite local; Anchor checkpoints successful
-authority writes and restores an absent local database through verified immutable files. Do not run live
+checkout. Let portfolio preparation set it. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Configure
+an approved durable snapshot root while keeping live state local; Anchor checkpoints successful
+authority writes and restores the absent SQLite database and managed project artifacts through
+verified immutable files. Do not run live
 SQLite state from Workspace Files, DBFS, Volumes, or another network/distributed filesystem.
 See [portfolio and durable state](docs/guides/portfolio-and-durable-state.md) and
 [Databricks MCP guidance](docs/guides/mcp-databricks.md).

@@ -6,13 +6,17 @@
 
 Project routing: `odibi_anchor.launch(...)` binds one immutable managed project and exact
 target. A unique exact target match can supply the project ID; ambiguity requires an explicit
-ID. `workspace/.active_project` is not routing authority. Run `anchor doctor` before startup
-when the home, route, host, or task implications are uncertain.
+ID. `workspace/.active_project` is not routing authority. For a configured portfolio, prepare
+before doctor or bootstrap and apply its environment exactly; never choose `ANCHOR_HOME` manually.
+Unconfigured Databricks doctor returns `portfolio.prepare` as its next operation.
 
 Preferred configured startup: `anchor portfolio prepare --config <absolute-config> --host
 <host-id> --project <project-id>`. Host setup: `anchor setup-host
 <amp|claude|databricks|chatgpt> --target <instruction-root>`. Both return one exact next
 operation and never infer a global active project.
+
+The process-bound `anchor` callable comes from the launcher namespace or `launch()` return
+value. It is intentionally not available through `from odibi_anchor import anchor`.
 
 Substantial problem: `anchor("problem", "create", title="...")`; capture stable `I*`,
 `H*`, and `E*` entries; resume with `anchor("problem", "resume", "PRB-...")`.
@@ -77,8 +81,9 @@ a non-destructive move plan with `anchor("memory", "storage", command="plan",
 destination="/absolute/path")`. Actual migration and cross-trust-domain transfer require
 separate authority.
 
-With durable state configured, successful authority writes checkpoint local SQLite. Use
-`anchor state list|snapshot|restore`; never open the durable snapshot as live SQLite.
+With durable state configured, successful authority writes checkpoint local SQLite and managed
+project artifacts. Use `anchor state list|snapshot|restore`; never open durable snapshot bytes as
+live state.
 
 ## Hard Limits (RuntimeError)
 

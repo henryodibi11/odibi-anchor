@@ -228,24 +228,34 @@ def prepare_portfolio_runtime(
         )
     home.mkdir(parents=True, exist_ok=True)
     restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
-    if not database.exists():
-        snapshots: list[dict[str, Any]] = []
-        if durable_root is not None:
-            from odibi_anchor.durability import list_snapshots, restore_latest
+    projects = home / "workspace" / "projects"
+    snapshots: list[dict[str, Any]] = []
+    if durable_root is not None:
+        from odibi_anchor.durability import list_snapshots, restore_latest
 
-            try:
-                snapshots = list_snapshots(
-                    durable_root=durable_root,
-                    authority_id=authority_id,
-                    databricks=is_databricks,
-                )["snapshots"]
-            except FileNotFoundError:
-                snapshots = []
+        try:
+            snapshots = list_snapshots(
+                durable_root=durable_root,
+                authority_id=authority_id,
+                databricks=is_databricks,
+            )["snapshots"]
+        except FileNotFoundError:
+            snapshots = []
+    latest_is_v2 = bool(
+        snapshots and snapshots[-1].get("format") == "odibi-anchor-durable-snapshot-v2"
+    )
+    if latest_is_v2 and database.exists() != projects.exists():
+        raise RuntimeError(
+            "local durable state is partial: the database and managed projects must both "
+            "exist or both be absent before portfolio preparation"
+        )
+    if not database.exists():
         if snapshots:
             assert durable_root is not None
             restore = restore_latest(
                 durable_root=durable_root,
                 destination_db=database,
+                destination_artifacts=projects,
                 authority_id=authority_id,
                 databricks=is_databricks,
             )
@@ -351,11 +361,73 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Return secret-free startup facts without creating or changing state."""
     env = os.environ if environment is None else environment
     from odibi_anchor._dispatcher._project import resolve_route_binding, route_binding_diagnostics
-    from odibi_anchor._runtime_paths import resolve_runtime_paths
+    from odibi_anchor._runtime_paths import resolve_resource_root, resolve_runtime_paths
 
-    paths = resolve_runtime_paths(environment=env)
     raw_project = env.get("ANCHOR_PROJECT_ID")
     raw_target = env.get("ANCHOR_PROJECT_ROOT")
+    route_inputs = {
+        "ANCHOR_HOME": env.get("ANCHOR_HOME"),
+        "ANCHOR_PROJECT_ID": raw_project,
+        "ANCHOR_PROJECT_ROOT": raw_target,
+    }
+    is_databricks = bool(env.get("DATABRICKS_RUNTIME_VERSION"))
+    databricks_capability = _databricks_capability(required=is_databricks)
+    if is_databricks and not env.get("ANCHOR_HOME"):
+        resource_root = resolve_resource_root()
+        next_operation = (
+            {
+                "operation": "install_dependency",
+                "command": databricks_capability["install_command"],
+                "restart_python": True,
+                "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
+            }
+            if not databricks_capability["qualified"]
+            else {
+                "operation": "portfolio.prepare",
+                "required_inputs": ["config_path", "host_id", "project_id"],
+                "command": (
+                    "anchor portfolio prepare --config <absolute-config> "
+                    "--host <host-id> --project <project-id>"
+                ),
+                "reason": (
+                    "Portfolio preparation selects local live state, durable snapshots, "
+                    "and the exact managed-project route. Do not set ANCHOR_HOME manually."
+                ),
+            }
+        )
+        return {
+            "kind": "startup_doctor",
+            "read_only": True,
+            "package": {"name": "odibi-anchor", "version": __version__},
+            "home": {"path": None, "exists": False, "status": "unconfigured"},
+            "database": {"path": None, "exists": False, "status": "unconfigured"},
+            "host": {"platform": sys.platform, "databricks": True},
+            "capabilities": {"databricks_sdk": databricks_capability},
+            "filesystem": {
+                "resource_root": str(resource_root),
+                "source_checkout": (resource_root / "src" / "odibi_anchor").is_dir(),
+                "concurrency_capability": "not_qualified",
+            },
+            "route_inputs": route_inputs,
+            "routing": {
+                "status": "unconfigured",
+                "diagnostics": None,
+                "reason": "portfolio preparation has not supplied the exact Databricks route",
+            },
+            "next_operation": next_operation,
+            "tasks": {
+                "status": "unavailable",
+                "count": None,
+                "implication": "portfolio preparation is required before task inspection",
+            },
+            "concurrency": {
+                "status": "unqualified",
+                "implication": "doctor performs no multi-process or filesystem-locking probe; "
+                               "single-writer safety must not be inferred",
+            },
+        }
+
+    paths = resolve_runtime_paths(environment=env)
     target = None
     route = None
     route_error = None
@@ -370,13 +442,6 @@ def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
         route_error = str(exc)
 
     database = Path(env.get("ANCHOR_MEMORY_DB") or paths.anchor_home / ".agent_memory.db").resolve()
-    route_inputs = {
-        "ANCHOR_HOME": env.get("ANCHOR_HOME"),
-        "ANCHOR_PROJECT_ID": raw_project,
-        "ANCHOR_PROJECT_ROOT": raw_target,
-    }
-    is_databricks = bool(env.get("DATABRICKS_RUNTIME_VERSION"))
-    databricks_capability = _databricks_capability(required=is_databricks)
     route_operation = (
         {
             "operation": "launch",

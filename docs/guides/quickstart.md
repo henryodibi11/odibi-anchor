@@ -43,8 +43,10 @@ Python. No Anchor source checkout is required:
 dbutils.library.restartPython()
 ```
 
-Run doctor, scaffold or validate the private PortfolioV1, install host guidance, and call
-`prepare_portfolio_runtime()` before launch. Apply its returned environment exactly. See
+Scaffold or validate the private PortfolioV1, install host guidance, and call
+`prepare_portfolio_runtime()` before doctor or launch. Apply its returned environment exactly;
+never choose `ANCHOR_HOME` manually. The process-bound `anchor` callable comes from the returned
+launcher namespace or `launch()`, not `from odibi_anchor import anchor`. See
 [Getting started](getting-started.md) for the copy-ready sequence. Normal user prompts then
 contain only outcome, target/project intent, constraints, and authority.
 

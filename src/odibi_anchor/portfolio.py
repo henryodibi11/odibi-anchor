@@ -552,14 +552,22 @@ def add_project(
     updated = deepcopy(portfolio)
     updated.setdefault("projects", {})[project] = entry
     updated["incomplete_fields"] = [item for item in updated.get("incomplete_fields", []) if item != "projects.id"]
-    validation = validate_portfolio(updated, host_id=host)
+    validate_portfolio(updated, host_id=host)
     result = write_portfolio(config, updated, expected_sha256=actual)
     return {
         **result,
         "project_id": project,
         "host_id": host,
         "target_root": entry["targets"][host],
-        "next_operation": validation["next_operation"],
+        "next_operation": {
+            "operation": "portfolio.prepare",
+            "arguments": {
+                "config_path": str(config),
+                "host_id": host,
+                "project_id": project,
+            },
+            "reason": "Prepare and register the newly configured exact project route.",
+        },
     }
 
 

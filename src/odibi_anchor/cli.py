@@ -124,7 +124,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--host", required=True)
     prepare.add_argument("--project", required=True)
     prepare.add_argument("--persona")
-    state = commands.add_parser("state", help="inspect or transfer durable SQLite state")
+    state = commands.add_parser("state", help="inspect or transfer durable Anchor state")
     state_commands = state.add_subparsers(dest="state_command", required=True)
     for name in ("list", "snapshot", "restore"):
         command = state_commands.add_parser(name)
@@ -133,6 +133,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--databricks", action="store_true")
         if name in {"snapshot", "restore"}:
             command.add_argument("--database", required=True)
+            command.add_argument(
+                "--artifacts",
+                help="absolute managed projects directory for v2 snapshot or restore",
+            )
     return parser
 
 
@@ -197,6 +201,7 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
     if ns.state_command == "snapshot":
         return snapshot_state(
             source_db=ns.database,
+            source_artifacts=ns.artifacts,
             durable_root=ns.durable_root,
             authority_id=ns.authority,
             databricks=ns.databricks,
@@ -205,6 +210,7 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
         return restore_latest(
             durable_root=ns.durable_root,
             destination_db=ns.database,
+            destination_artifacts=ns.artifacts,
             authority_id=ns.authority,
             databricks=ns.databricks,
         )

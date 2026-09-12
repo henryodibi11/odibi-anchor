@@ -184,6 +184,15 @@ def test_add_project_uses_cas_and_rejects_duplicate_id_and_root(tmp_path):
     document = load_portfolio_document(path)
     assert document["sha256"] == result["sha256"]
     assert "beta" in document["portfolio"]["projects"]
+    assert result["next_operation"] == {
+        "operation": "portfolio.prepare",
+        "arguments": {
+            "config_path": str(path),
+            "host_id": "amp-host",
+            "project_id": "beta",
+        },
+        "reason": "Prepare and register the newly configured exact project route.",
+    }
     with pytest.raises(ValueError, match="already exists"):
         add_project(path, project_id="beta", host_id="amp-host", target_root="/other")
     with pytest.raises(ValueError, match="duplicate target root"):

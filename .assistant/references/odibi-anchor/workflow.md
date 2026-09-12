@@ -9,7 +9,8 @@ Use this deterministic reference when Odibi Anchor action sequencing or signatur
 For installed operation, first prefer `anchor portfolio prepare --config <absolute-path>
 --host <host-id> --project <project-id>`. Its explicit PortfolioV1 replaces project-ID,
 host-root, and state-path rediscovery and returns copy-ready immutable route/environment
-inputs. Run `anchor setup-host <adapter> --target <instruction-root>` to install or reconcile
+inputs. Apply that environment before doctor or bootstrap and never set `ANCHOR_HOME` manually.
+Run `anchor setup-host <adapter> --target <instruction-root>` to install or reconcile
 this workflow and its launcher without silently replacing user edits. The source-checkout path
 below remains a development compatibility route, not a requirement for installed use.
 
@@ -30,6 +31,9 @@ orientation = namespace["ORIENTATION"]
 bootstrap = namespace["BOOTSTRAP"]
 assert bootstrap["success"] is True
 ```
+
+`anchor` is process-bound state returned by this namespace (or by `launch()`), not a top-level
+package export. Never use `from odibi_anchor import anchor`.
 
 The launcher resolves exactly one checkout in this order: an explicit
 `ANCHOR_SOURCE_CHECKOUT` init global or environment value; its `.assistant` parent when that
@@ -134,9 +138,9 @@ package. It never executes recorded actions or reconstructs chain-of-thought. Us
 diagnostics and `command="plan", destination="/absolute/path"` for a non-destructive
 migration plan. Migration execution and trust-domain transfer require separate approval.
 
-When the portfolio configures durable state, keep live SQLite on local compute. Successful
-authority writes checkpoint it. `anchor state list|snapshot|restore` provides explicit recovery;
-durable snapshot bytes are never opened as a live SQLite store.
+When the portfolio configures durable state, keep live SQLite and managed project artifacts on
+local compute. Successful authority writes checkpoint both. `anchor state list|snapshot|restore`
+provides explicit recovery; durable snapshot bytes are never opened as live state.
 
 **⚠️ ALWAYS assign anchor() results to a variable.** Bare calls get blocked by Databricks safety
 guards. Use `result = anchor("status"); print(result)` instead. This applies to ALL anchor() calls.
@@ -149,6 +153,11 @@ reinitialization is required, as shown in the managed-project lifecycle below.
 
 Project artifacts always remain beneath Odibi Anchor. Use a managed project when
 source can live there, or retain an external source tree without scattering artifacts:
+
+For installed PortfolioV1 operation, add an approved missing project to the portfolio before
+bootstrap, then follow the returned `portfolio.prepare` operation. Its target must be an existing
+directory but need not be Git unless source-change evidence is required. Do not bootstrap a
+missing project ID first. The dispatcher calls below remain the non-portfolio compatibility path.
 
 ```python
 result = anchor("project", "create", name="queue-automation")

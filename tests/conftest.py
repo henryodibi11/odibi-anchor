@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-# On Databricks, ANCHOR_HOME must be set to a durable external path. For the test
-# session, default to a temp directory so tests never require explicit external
-# state configuration and never write into the source checkout.
+# On Databricks, portfolio preparation sets ANCHOR_HOME to local compute while
+# ANCHOR_DURABLE_ROOT separately identifies durable snapshots. For the test session,
+# default to a temp directory so tests never require external state configuration
+# and never write into the source checkout.
 _cw_test_home = os.path.join(tempfile.gettempdir(), "anchor_test_home")
 os.makedirs(_cw_test_home, exist_ok=True)
 os.environ.setdefault("ANCHOR_HOME", _cw_test_home)

@@ -141,20 +141,31 @@ def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypat
     database = tmp_path / "live.db"
     durable = tmp_path / "durable"
     restored = tmp_path / "restored.db"
+    artifacts = tmp_path / "projects"
+    restored_artifacts = tmp_path / "restored-projects"
     durable.mkdir()
+    artifacts.mkdir()
+    (artifacts / "record.md").write_text("# Kept\n")
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE facts(value TEXT)")
         connection.execute("INSERT INTO facts VALUES('kept')")
 
     common = ["--durable-root", str(durable), "--authority", "work"]
-    assert cli.main(["state", "snapshot", *common, "--database", str(database)]) == 0
+    assert cli.main([
+        "state", "snapshot", *common, "--database", str(database),
+        "--artifacts", str(artifacts),
+    ]) == 0
     capsys.readouterr()
     assert cli.main(["state", "list", *common]) == 0
     assert len(json.loads(capsys.readouterr().out)["result"]["snapshots"]) == 1
-    assert cli.main(["state", "restore", *common, "--database", str(restored)]) == 0
+    assert cli.main([
+        "state", "restore", *common, "--database", str(restored),
+        "--artifacts", str(restored_artifacts),
+    ]) == 0
     capsys.readouterr()
     with sqlite3.connect(restored) as connection:
         assert connection.execute("SELECT value FROM facts").fetchone() == ("kept",)
+    assert (restored_artifacts / "record.md").read_text() == "# Kept\n"
 
 
 def test_state_list_cli_selects_databricks_transport(monkeypatch, capsys):

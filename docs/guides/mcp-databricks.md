@@ -19,30 +19,34 @@ Use runtimes in this order:
 2. The standard-library `anchor` CLI where only a process interface is available.
 3. Optional MCP stdio when an MCP client is required.
 
-For direct Python in a Databricks notebook, configure local compute storage and bind one
-existing managed project explicitly; do not use notebook cwd, workspace visibility,
-authentication, or `.active_project` as routing/task authority:
+For direct Python in a Databricks notebook, prepare one portfolio route before launch; do not
+invent `ANCHOR_HOME` or use notebook cwd, workspace visibility, authentication, or
+`.active_project` as routing/task authority:
 
 ```python
 import os
-from odibi_anchor import launch, register_project
+from odibi_anchor import launch, prepare_portfolio_runtime
 
-os.environ["ANCHOR_HOME"] = "/tmp/odibi-anchor-state"
-registration = register_project(
-    anchor_home=os.environ["ANCHOR_HOME"],
+prepared = prepare_portfolio_runtime(
+    config_path="/Workspace/Users/<user>/.odibi-anchor/anchor.toml",
+    host_id="databricks-work",
     project_id="exact-project-id",
-    project_root="/absolute/checked-out-target",
 )
-anchor = launch(**registration["next_operation"]["arguments"])
+os.environ.update(prepared["environment"])
+anchor = launch(
+    anchor_home=prepared["environment"]["ANCHOR_HOME"],
+    project_id=prepared["project_id"],
+    project_root=prepared["target_root"],
+)
 diagnostics = anchor("concurrency", command="inspect")
 ```
 
 The paths are placeholders and must be supplied by the host; do not hard-code credentials or copy
-private state into the product repository. `/tmp` is session-scoped. Stop every Anchor process
-before copying a closed backup to durable storage, and restore it to local storage before reuse.
-Workspace Files, DBFS, and Volumes are not supported locations for the live SQLite database.
-Direct-Python Databricks concurrency is **not qualified** by orb/Linux results. Use one writer and
-a per-project `ANCHOR_HOME`. The archived HTTP App remains unqualified regardless of these settings.
+private state into the product repository. `/tmp` is session-scoped; portfolio preparation restores
+the database and managed project artifacts from the configured durable snapshot root. Workspace
+Files, DBFS, and Volumes are not supported locations for live state. Direct-Python Databricks
+concurrency is **not qualified** by orb/Linux results. Use one Anchor writer for the configured
+authority. The archived HTTP App remains unqualified regardless of these settings.
 
 See the [runtime rollout guide](runtime-rollout.md) for supported commands and
 compatibility guarantees. A future HTTP design requires a separate approved spec for

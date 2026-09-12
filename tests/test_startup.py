@@ -236,6 +236,95 @@ def test_prepare_portfolio_runtime_registers_exact_route_without_mutating_enviro
     assert again["registration"]["status"] == "existing"
 
 
+def test_prepare_portfolio_runtime_restores_v2_database_and_managed_projects(tmp_path):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    register_project(anchor_home=state, project_id="alpha", project_root=target)
+    database = state / ".agent_memory.db"
+    projects = state / "workspace" / "projects"
+    (projects / "alpha" / "problems" / "P-1.md").write_text("# Recovered\n")
+    durability.ensure_database_authority(
+        database, authority_id="work", trust_domain="work", initialize=True
+    )
+    snapshot = durability.snapshot_state(
+        source_db=database,
+        source_artifacts=projects,
+        durable_root=durable,
+        authority_id="work",
+    )
+    shutil.rmtree(state)
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {
+                "adapter": "amp", "local_state_root": str(state),
+                "durable_root": str(durable),
+            }},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+
+    assert result["restore"]["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert result["restore"]["artifacts"]["status"] == "restored"
+    assert result["registration"]["status"] == "existing"
+    assert (projects / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
+
+
+@pytest.mark.parametrize("remove", ["database", "projects"])
+def test_prepare_portfolio_runtime_refuses_partial_local_v2_state(tmp_path, remove):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    register_project(anchor_home=state, project_id="alpha", project_root=target)
+    database = state / ".agent_memory.db"
+    projects = state / "workspace" / "projects"
+    durability.ensure_database_authority(
+        database, authority_id="work", trust_domain="work", initialize=True
+    )
+    durability.snapshot_state(
+        source_db=database,
+        source_artifacts=projects,
+        durable_root=durable,
+        authority_id="work",
+    )
+    if remove == "database":
+        database.unlink()
+    else:
+        shutil.rmtree(projects)
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {
+                "adapter": "amp", "local_state_root": str(state),
+                "durable_root": str(durable),
+            }},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="local durable state is partial"):
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+
+
 def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
     tmp_path, monkeypatch
 ):
@@ -419,6 +508,39 @@ def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     assert set(tmp_path.rglob("*")) == before
 
 
+def test_doctor_directs_unconfigured_databricks_to_portfolio_prepare(monkeypatch):
+    monkeypatch.setattr(
+        "odibi_anchor.startup.importlib.metadata.version",
+        lambda _name: "0.138.0",
+    )
+
+    result = doctor(environment={
+        "DATABRICKS_RUNTIME_VERSION": "serverless",
+        "TOKEN": "secret",
+    })
+
+    assert result["read_only"] is True
+    assert result["home"] == {"path": None, "exists": False, "status": "unconfigured"}
+    assert result["database"] == {
+        "path": None, "exists": False, "status": "unconfigured"
+    }
+    assert result["routing"]["status"] == "unconfigured"
+    assert result["next_operation"] == {
+        "operation": "portfolio.prepare",
+        "required_inputs": ["config_path", "host_id", "project_id"],
+        "command": (
+            "anchor portfolio prepare --config <absolute-config> "
+            "--host <host-id> --project <project-id>"
+        ),
+        "reason": (
+            "Portfolio preparation selects local live state, durable snapshots, "
+            "and the exact managed-project route. Do not set ANCHOR_HOME manually."
+        ),
+    }
+    assert result["tasks"]["status"] == "unavailable"
+    assert "secret" not in repr(result)
+
+
 def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, monkeypatch):
     home = tmp_path / "home"
     target = tmp_path / "target"
@@ -442,12 +564,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.3"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.4"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.3"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.4"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

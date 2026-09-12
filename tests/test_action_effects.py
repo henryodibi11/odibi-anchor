@@ -593,9 +593,14 @@ def test_successful_authority_write_checkpoints_configured_active_state(tmp_path
     database = tmp_path / "memory.db"
     sqlite3.connect(database).close()
     durable = tmp_path / "durable"
+    anchor_home = tmp_path / "anchor-home"
     durable.mkdir()
+    (anchor_home / "workspace" / "projects").mkdir(parents=True)
     monkeypatch.setitem(boot._ENV, "memory_db", str(database))
     monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(
+        boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=anchor_home)
+    )
     monkeypatch.setitem(boot._ENV, "authority_id", "work")
     monkeypatch.setitem(boot._ENV, "trust_domain", "work")
     monkeypatch.setitem(boot._ENV, "is_databricks", False)
@@ -630,13 +635,19 @@ def test_successful_memory_rejection_is_preserved_in_durable_restore(tmp_path, m
     database = tmp_path / "memory.db"
     durable = tmp_path / "durable"
     restored = tmp_path / "restored.db"
+    anchor_home = tmp_path / "anchor-home"
+    restored_artifacts = tmp_path / "restored-projects"
     durable.mkdir()
+    (anchor_home / "workspace" / "projects").mkdir(parents=True)
     memory = insert_memory(
         str(database), project="alpha", type="gotcha", content="Rejected candidate"
     )
     rejection = reject_memory_entry(str(database), entry_id=memory["id"])
     monkeypatch.setitem(boot._ENV, "memory_db", str(database))
     monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(
+        boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=anchor_home)
+    )
     monkeypatch.setitem(boot._ENV, "authority_id", "work")
     monkeypatch.setitem(boot._ENV, "trust_domain", "work")
     monkeypatch.setitem(boot._ENV, "is_databricks", False)
@@ -653,7 +664,10 @@ def test_successful_memory_rejection_is_preserved_in_durable_restore(tmp_path, m
     )
     close_db(str(database))
     restore_latest(
-        durable_root=durable, destination_db=restored, authority_id="work"
+        durable_root=durable,
+        destination_db=restored,
+        destination_artifacts=restored_artifacts,
+        authority_id="work",
     )
 
     assert result["durable_state"]["action"] == "created"

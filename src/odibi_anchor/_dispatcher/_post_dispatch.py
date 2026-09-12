@@ -148,6 +148,9 @@ def _snapshot_durable_state(result, *, memory_db: str) -> None:
     try:
         result["durable_state"] = snapshot_state(
             source_db=memory_db,
+            source_artifacts=(
+                _ENV["runtime_paths"].anchor_home / "workspace" / "projects"
+            ),
             durable_root=durable_root,
             authority_id=authority_id,
             databricks=bool(_ENV.get("is_databricks")),

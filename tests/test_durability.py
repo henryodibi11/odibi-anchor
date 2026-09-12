@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+import tarfile
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -91,14 +93,77 @@ def test_snapshot_restore_round_trip_and_idempotence(tmp_path: Path) -> None:
     json.dumps(first)
 
 
+def test_v2_snapshot_restores_project_artifacts_and_empty_directories(tmp_path: Path) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    restored_db = tmp_path / "restored.db"
+    restored_artifacts = tmp_path / "restored-projects"
+    durable.mkdir()
+    (artifacts / "alpha" / "problems").mkdir(parents=True)
+    (artifacts / "alpha" / "specs").mkdir()
+    (artifacts / "alpha" / "problems" / "P-1.md").write_text("# Evidence\n", encoding="utf-8")
+    _database(source)
+
+    first = durability.snapshot_state(
+        source_db=source,
+        source_artifacts=artifacts,
+        durable_root=durable,
+        authority_id="work",
+    )
+    second = durability.snapshot_state(
+        source_db=source,
+        source_artifacts=artifacts,
+        durable_root=durable,
+        authority_id="work",
+    )
+    restored = durability.restore_latest(
+        durable_root=durable,
+        destination_db=restored_db,
+        destination_artifacts=restored_artifacts,
+        authority_id="work",
+    )
+
+    assert first["manifest"]["format"] == "odibi-anchor-durable-snapshot-v2"
+    assert first["manifest"]["artifacts"]["file_count"] == 1
+    assert second["action"] == "reused"
+    assert restored["artifacts"]["status"] == "restored"
+    assert (restored_artifacts / "alpha" / "specs").is_dir()
+    assert (restored_artifacts / "alpha" / "problems" / "P-1.md").read_text() == "# Evidence\n"
+
+
+def test_v2_checkpoint_advances_when_only_artifacts_change(tmp_path: Path) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    artifacts.mkdir()
+    _database(source)
+    first = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work"
+    )
+    (artifacts / "record.md").write_text("new\n", encoding="utf-8")
+    second = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work"
+    )
+
+    assert second["action"] == "created"
+    assert second["manifest"]["sha256"] == first["manifest"]["sha256"]
+    assert second["manifest"]["artifacts"]["sha256"] != first["manifest"]["artifacts"]["sha256"]
+
+
 def test_databricks_snapshot_restore_uses_files_api_without_fuse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
     restored = tmp_path / "restored.db"
+    restored_artifacts = tmp_path / "restored-projects"
     durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
     _database(source)
+    artifacts.mkdir()
+    (artifacts / "PROJECT.md").write_text("# Project\n", encoding="utf-8")
     files = FakeDatabricksFiles()
     monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
 
@@ -115,12 +180,14 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
 
     first = durability.snapshot_state(
         source_db=source,
+        source_artifacts=artifacts,
         durable_root=durable,
         authority_id="work",
         databricks=True,
     )
     second = durability.snapshot_state(
         source_db=source,
+        source_artifacts=artifacts,
         durable_root=durable,
         authority_id="work",
         databricks=True,
@@ -133,6 +200,7 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
     restored_result = durability.restore_latest(
         durable_root=durable,
         destination_db=restored,
+        destination_artifacts=restored_artifacts,
         authority_id="work",
         databricks=True,
     )
@@ -143,10 +211,12 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
     assert listing["snapshots"] == [
         {
             "created_at": first["manifest"]["created_at"],
+            "format": "odibi-anchor-durable-snapshot-v2",
             "logical_digest": first["manifest"]["logical_digest"],
             "sha256": first["manifest"]["sha256"],
             "size_bytes": first["manifest"]["size_bytes"],
             "snapshot_id": first["manifest"]["snapshot_id"],
+            "artifacts": first["manifest"]["artifacts"],
         }
     ]
     assert listing["next_operation"]["arguments"]["databricks"] is True
@@ -158,6 +228,7 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
             ("alpha",),
             ("beta",),
         ]
+    assert (restored_artifacts / "PROJECT.md").read_text() == "# Project\n"
 
 
 def test_databricks_manifest_failure_removes_uncommitted_remote_snapshot(
@@ -178,7 +249,8 @@ def test_databricks_manifest_failure_removes_uncommitted_remote_snapshot(
             databricks=True,
         )
 
-    assert files.files == {}
+    assert not any(path.endswith(".manifest.json") for path in files.files)
+    assert any(path.endswith(".sqlite3") for path in files.files)
 
 
 def test_databricks_missing_snapshot_root_is_typed_and_permission_errors_propagate(
@@ -277,15 +349,26 @@ def test_tampering_fails_closed(tmp_path: Path, target: str) -> None:
         durability.list_snapshots(durable_root=str(durable), authority_id="work")
 
 
-@pytest.mark.parametrize("missing", ["snapshot", "manifest"])
-def test_incomplete_publication_fails_closed(tmp_path: Path, missing: str) -> None:
+def test_missing_referenced_snapshot_fails_closed(tmp_path: Path) -> None:
     source, durable = tmp_path / "live.db", tmp_path / "durable"
     durable.mkdir()
     _database(source)
     result = durability.snapshot_state(source_db=str(source), durable_root=str(durable), authority_id="work")
-    Path(result[f"{missing}_path"]).unlink()
+    Path(result["snapshot_path"]).unlink()
     with pytest.raises(RuntimeError, match="incomplete"):
         durability.list_snapshots(durable_root=str(durable), authority_id="work")
+
+
+def test_uncommitted_orphan_snapshot_is_ignored(tmp_path: Path) -> None:
+    source, durable = tmp_path / "live.db", tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+    result = durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+    Path(result["manifest_path"]).unlink()
+
+    assert durability.list_snapshots(
+        durable_root=durable, authority_id="work"
+    )["snapshots"] == []
 
 
 def test_restore_never_overwrites(tmp_path: Path) -> None:
@@ -301,6 +384,87 @@ def test_restore_never_overwrites(tmp_path: Path) -> None:
         durability.restore_latest(
             durable_root=str(durable), destination_db=str(destination), authority_id="work", overwrite=True
         )
+
+
+def test_v2_restore_requires_absent_artifact_destination(tmp_path: Path) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    destination = tmp_path / "restored.db"
+    existing = tmp_path / "existing-projects"
+    durable.mkdir()
+    artifacts.mkdir()
+    existing.mkdir()
+    _database(source)
+    durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work"
+    )
+
+    with pytest.raises(FileExistsError, match="destination_artifacts"):
+        durability.restore_latest(
+            durable_root=durable,
+            destination_db=destination,
+            destination_artifacts=existing,
+            authority_id="work",
+        )
+    assert not destination.exists()
+
+
+def test_v2_snapshot_rejects_symlinks_in_managed_artifacts(tmp_path: Path) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    artifacts.mkdir()
+    _database(source)
+    (artifacts / "outside").symlink_to(tmp_path, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlinks"):
+        durability.snapshot_state(
+            source_db=source,
+            source_artifacts=artifacts,
+            durable_root=durable,
+            authority_id="work",
+        )
+
+
+def test_v2_restore_rejects_traversal_archive_even_with_valid_manifest(tmp_path: Path) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    artifacts.mkdir()
+    _database(source)
+    result = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work"
+    )
+    bundle = Path(result["artifacts_path"])
+    with tarfile.open(bundle, mode="w") as archive:
+        info = tarfile.TarInfo("../escape.md")
+        info.size = 0
+        archive.addfile(info)
+    manifest_path = Path(result["manifest_path"])
+    manifest = json.loads(manifest_path.read_text())
+    artifacts_manifest = manifest["artifacts"]
+    artifacts_manifest["sha256"] = durability._sha256(bundle)
+    artifacts_manifest["file"] = f"{artifacts_manifest['sha256']}.artifacts.tar"
+    replacement = bundle.with_name(artifacts_manifest["file"])
+    bundle.rename(replacement)
+    artifacts_manifest["size_bytes"] = replacement.stat().st_size
+    body = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["manifest_sha256"] = hashlib.sha256(
+        durability._canonical_bytes(body)
+    ).hexdigest()
+    manifest_path.write_bytes(durability._canonical_bytes(manifest))
+
+    with pytest.raises(RuntimeError, match="invalid artifact archive entry"):
+        durability.restore_latest(
+            durable_root=durable,
+            destination_db=tmp_path / "restored.db",
+            destination_artifacts=tmp_path / "restored-projects",
+            authority_id="work",
+        )
+    assert not (tmp_path / "escape.md").exists()
 
 
 def test_database_authority_cannot_be_reused_across_work_authorities(tmp_path: Path) -> None:
@@ -430,6 +594,6 @@ def test_manifest_is_published_last(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     with pytest.raises(OSError, match="manifest publication"):
         durability.snapshot_state(source_db=str(source), durable_root=str(durable), authority_id="work")
     snapshots = durable / "work" / "snapshots"
-    assert not list(snapshots.glob("*.sqlite3"))
+    assert list(snapshots.glob("*.sqlite3"))
     assert not list(snapshots.glob("*.manifest.json"))
     assert durability.list_snapshots(durable_root=str(durable), authority_id="work")["snapshots"] == []

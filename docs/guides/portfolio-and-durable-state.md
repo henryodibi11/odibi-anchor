@@ -53,15 +53,17 @@ authority snapshot only when the local database is absent, and returns copy-read
 environment plus bootstrap inputs. It does not mutate the caller's environment.
 `.active_project` is never consulted.
 
-## Durable SQLite lifecycle
+## Durable state lifecycle
 
-The live database stays on local compute. After each successful authority write—including
+The live database and managed project artifact tree stay on local compute. After each successful authority write—including
 task acceptance, evidence/memory writes, and terminal closure—Anchor automatically snapshots
-it when `ANCHOR_DURABLE_ROOT` and `ANCHOR_AUTHORITY_ID` are configured. Snapshot bytes are copied as opaque immutable
+both when `ANCHOR_DURABLE_ROOT` and `ANCHOR_AUTHORITY_ID` are configured. Database and artifact-bundle
+bytes are copied as opaque immutable
 files to `<durable_root>/<authority_id>/snapshots/`; a canonical checksummed manifest
 is published last. Restore copies durable bytes to local staging, verifies SHA-256,
-logical content, and SQLite integrity locally, then publishes only to an absent local
-destination.
+logical content, SQLite integrity, and safe artifact paths locally, then publishes only to absent
+local destinations. Legacy v1 database-only snapshots remain readable; v2 restores require both
+destinations so a partial state cannot be presented as complete.
 
 Each live database is bound to one configured work authority. Preparation refuses an
 existing unowned database or a database owned by another authority. After making an
@@ -77,8 +79,10 @@ storage:
 anchor state list --durable-root /Volumes/catalog/schema/anchor \
   --authority enterprise-analytics-ai --databricks
 anchor state snapshot --database /tmp/odibi-anchor/.agent_memory.db \
+  --artifacts /tmp/odibi-anchor/workspace/projects \
   --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 anchor state restore --database /tmp/odibi-anchor/.agent_memory.db \
+  --artifacts /tmp/odibi-anchor/workspace/projects \
   --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 ```
 

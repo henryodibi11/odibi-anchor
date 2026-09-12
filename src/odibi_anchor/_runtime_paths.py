@@ -1,8 +1,9 @@
 """Resolve immutable distribution resources and writable runtime state paths.
 
 Source checkouts never default writable state into the repository. On Databricks,
-ANCHOR_HOME must be set explicitly to a durable external path. On local machines, an
-installed distribution resolves state beneath an explicit or operating-system user
+ANCHOR_HOME must be supplied by portfolio preparation so live state remains on local
+compute while ANCHOR_DURABLE_ROOT names durable snapshot storage. On local machines,
+an installed distribution resolves state beneath an explicit or operating-system user
 location. Resolution is pure: callers create directories only when an action actually
 needs writable state.
 """
@@ -94,9 +95,9 @@ def resolve_runtime_paths(
         anchor_home = Path(profile_cw_root)
     elif active_environment.get("DATABRICKS_RUNTIME_VERSION"):
         raise RuntimeError(
-            "ANCHOR_HOME must be set to a durable external path on Databricks. "
-            "Ephemeral driver-local storage is not safe for writable state "
-            "and the source checkout must not be used as a state directory."
+            "ANCHOR_HOME must be set explicitly on Databricks. Run portfolio prepare "
+            "and apply its returned environment; live SQLite must stay on local compute "
+            "while durable snapshots use ANCHOR_DURABLE_ROOT."
         )
     else:
         anchor_home = _default_user_state_home(

@@ -86,10 +86,12 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     db = tmp_path / "memory.db"
     durable = tmp_path / "durable"
     durable.mkdir()
+    (tmp_path / "workspace" / "projects").mkdir(parents=True)
     monkeypatch.setitem(boot._ENV, "memory_db", str(db))
     monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
     monkeypatch.setitem(boot._ENV, "authority_id", "work")
     monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=tmp_path))
     result = {"assessment": {
         "assessment_id": "las-durable", "outcome": "nothing_reusable_learned",
         "observation_ids": [], "actor_kind": "agent",
@@ -102,6 +104,7 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     )
 
     assert result["durable_state"]["action"] == "created"
+    assert result["durable_state"]["manifest"]["format"] == "odibi-anchor-durable-snapshot-v2"
     assert result["accepted_task_closure"]["status"] == "unavailable"
     assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
 
@@ -117,12 +120,14 @@ def test_durable_checkpoint_ignores_environment_redirection_after_boot(tmp_path,
     redirected = tmp_path / "redirected-durable"
     bound.mkdir()
     redirected.mkdir()
+    (tmp_path / "workspace" / "projects").mkdir(parents=True)
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE evidence(value TEXT)")
     monkeypatch.setitem(boot._ENV, "durable_root", str(bound))
     monkeypatch.setitem(boot._ENV, "authority_id", "bound-authority")
     monkeypatch.setitem(boot._ENV, "trust_domain", "work")
     monkeypatch.setitem(boot._ENV, "is_databricks", False)
+    monkeypatch.setitem(boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=tmp_path))
     monkeypatch.setenv("ANCHOR_DURABLE_ROOT", str(redirected))
     monkeypatch.setenv("ANCHOR_AUTHORITY_ID", "redirected-authority")
     result = {}

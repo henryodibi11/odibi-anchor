@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] - 2026-09-12
+
+### Changed
+
+- Unconfigured Databricks doctor now returns an actionable portfolio-preparation operation instead
+  of requiring callers to invent `ANCHOR_HOME`.
+- Startup guidance now prepares configured portfolios before doctor/bootstrap and identifies the
+  process-bound source of the `anchor` callable.
+- Adding a portfolio project now returns its exact preparation operation; targets may be non-Git
+  directories when source-change evidence is not required.
+- The Databricks extra constrains protobuf below version 6 for compatibility with Databricks
+  runtime packages while retaining the qualified SDK floor.
+- Durable snapshot v2 checkpoints both SQLite authority state and the complete managed-project
+  artifact tree, restores both through verified no-overwrite staging, and remains able to read
+  legacy v1 database-only snapshots.
+
 ## [0.3.3] - 2026-09-11
 
 ### Fixed
@@ -110,3 +126,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.1]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.1
 [0.3.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.2
 [0.3.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.3
+[0.3.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.4
