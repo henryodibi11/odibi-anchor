@@ -12,6 +12,7 @@ from contextlib import contextmanager as _contextmanager
 from contextlib import suppress as _suppress
 from datetime import UTC as _UTC
 from datetime import datetime as _datetime
+from pathlib import Path as _Path
 
 from odibi_anchor._utils._session_state import (
     _SESSION_FILES_CHANGED,
@@ -136,6 +137,127 @@ def _verified_record(path: str) -> dict:
     if digest != actual:
         raise ContinuityUnavailable("continuity record checksum mismatch")
     return record
+
+
+def _relocate_restored_continuity(
+    staged_projects_root: str | _os.PathLike[str],
+    destination_projects_root: str | _os.PathLike[str],
+) -> dict:
+    """Rebase verified continuity paths in an unpublished restored artifact tree."""
+    staged_root = _Path(staged_projects_root)
+    destination_root = _Path(destination_projects_root)
+    owner_paths = sorted(staged_root.glob("*/continuity/v1/OWNER.json"))
+    if not owner_paths:
+        return {"status": "not_present", "owners_relocated": 0, "records_relocated": 0}
+    if destination_root.name != "projects" or destination_root.parent.name != "workspace":
+        raise ContinuityUnavailable(
+            "restored continuity requires a destination ending in workspace/projects"
+        )
+    destination_home = destination_root.parent.parent
+    updates: list[tuple[_Path, bytes]] = []
+    source_homes: set[str] = set()
+    relocated_owners = 0
+    relocated_records = 0
+    from odibi_anchor._dispatcher._project import RouteBinding
+
+    for owner_path in owner_paths:
+        project_id = owner_path.parents[2].name
+        try:
+            owner_bytes = owner_path.read_bytes()
+            owner = _json.loads(owner_bytes)
+        except (OSError, UnicodeDecodeError, _json.JSONDecodeError) as exc:
+            raise ContinuityUnavailable("restored continuity owner is unreadable") from exc
+        if not isinstance(owner, dict) or set(owner) != {
+            "schema_version", "project_id", "anchor_home", "target_root", "artifact_root",
+        }:
+            raise ContinuityUnavailable("restored continuity owner is malformed")
+        if owner_bytes != (_canonical_json(owner) + "\n").encode("utf-8"):
+            raise ContinuityUnavailable("restored continuity owner is not canonical")
+        source_home = _Path(str(owner["anchor_home"]))
+        source_artifact = _Path(str(owner["artifact_root"]))
+        if (
+            not source_home.is_absolute()
+            or owner["project_id"] != project_id
+            or source_artifact != source_home / "workspace" / "projects" / project_id
+        ):
+            raise ContinuityUnavailable(
+                "restored continuity owner is not bound to its canonical managed project path"
+            )
+        source_homes.add(str(source_home))
+        destination_artifact = destination_root / project_id
+        if source_home == destination_home and source_artifact == destination_artifact:
+            continue
+
+        relocated_owner = {
+            **owner,
+            "anchor_home": str(destination_home),
+            "artifact_root": str(destination_artifact),
+        }
+        updates.append(
+            (owner_path, (_canonical_json(relocated_owner) + "\n").encode("utf-8"))
+        )
+        relocated_owners += 1
+        records_root = owner_path.parent
+        for record_path in sorted(records_root.glob("*/*/*.json")):
+            record = _verified_record(str(record_path))
+            record_owner = record.get("owner")
+            if not isinstance(record_owner, dict) or _stable_owner(record_owner) != owner:
+                raise ContinuityUnavailable(
+                    "restored continuity record owner does not match its sentinel"
+                )
+            matches = []
+            for binding_source in ("explicit", "target_match", "legacy_selector"):
+                candidate = RouteBinding(
+                    project_id=project_id,
+                    target_root=str(owner["target_root"]),
+                    artifact_root=str(source_artifact),
+                    anchor_home=str(source_home),
+                    binding_source=binding_source,
+                    runtime_instance_id=str(record_owner.get("runtime_instance_id", "")),
+                    schema_version=str(record_owner.get("route_schema_version", "")),
+                )
+                if candidate.fingerprint() == record_owner.get("route_fingerprint"):
+                    matches.append(binding_source)
+            if len(matches) != 1:
+                raise ContinuityUnavailable(
+                    "restored continuity record route fingerprint is not reproducible"
+                )
+            relocated_binding = RouteBinding(
+                project_id=project_id,
+                target_root=str(owner["target_root"]),
+                artifact_root=str(destination_artifact),
+                anchor_home=str(destination_home),
+                binding_source=matches[0],
+                runtime_instance_id=str(record_owner["runtime_instance_id"]),
+                schema_version=str(record_owner["route_schema_version"]),
+            )
+            relocated_record = {
+                **record,
+                "owner": {
+                    **record_owner,
+                    "anchor_home": str(destination_home),
+                    "artifact_root": str(destination_artifact),
+                    "route_fingerprint": relocated_binding.fingerprint(),
+                },
+            }
+            relocated_record.pop("record_sha256", None)
+            relocated_record["record_sha256"] = _hashlib.sha256(
+                _canonical_json(relocated_record).encode("utf-8")
+            ).hexdigest()
+            updates.append(
+                (record_path, (_canonical_json(relocated_record) + "\n").encode("utf-8"))
+            )
+            relocated_records += 1
+
+    if len(source_homes) != 1:
+        raise ContinuityUnavailable("restored continuity owners disagree on source anchor home")
+    for path, content in updates:
+        path.write_bytes(content)
+    return {
+        "status": "relocated" if updates else "unchanged",
+        "owners_relocated": relocated_owners,
+        "records_relocated": relocated_records,
+    }
 
 
 @_contextmanager

@@ -46,6 +46,7 @@ jobs:
           python scripts/full_verification.py
           --mode advisory
           --base-ref "$QUALITY_BASE_REF"
+          --pytest-workers 2
           --json-out quality-report.json
       - name: Collect non-blocking ratchet telemetry
         if: always()

@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -279,6 +280,78 @@ def test_prepare_portfolio_runtime_restores_v2_database_and_managed_projects(tmp
     assert result["restore"]["artifacts"]["status"] == "restored"
     assert result["registration"]["status"] == "existing"
     assert (projects / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
+
+
+def test_prepare_portfolio_runtime_relocates_continuity_to_new_local_state_root(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+    from odibi_anchor._dispatcher._project import resolve_route_binding
+    from odibi_anchor._dispatcher._session import _save_continuity_state
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    old_state = tmp_path / "old-state"
+    new_state = tmp_path / "new-state"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    register_project(anchor_home=old_state, project_id="alpha", project_root=target)
+    database = old_state / ".agent_memory.db"
+    durability.ensure_database_authority(
+        database, authority_id="work", trust_domain="work", initialize=True
+    )
+    route = resolve_route_binding(
+        old_state,
+        project="alpha",
+        target_hint=target,
+        runtime_instance_id="runtime-a",
+    )
+    assert route is not None
+    _save_continuity_state(
+        route,
+        SimpleNamespace(
+            session_id="session-a",
+            task_window_id="task-a",
+            continuity_generation=0,
+            continuity_record_sha256=None,
+            continuity_status="uninitialized",
+        ),
+        {"open_task": "task-a"},
+    )
+    durability.snapshot_state(
+        source_db=database,
+        source_artifacts=old_state / "workspace" / "projects",
+        durable_root=durable,
+        authority_id="work",
+    )
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"local": {
+                "adapter": "amp", "local_state_root": str(new_state),
+                "durable_root": str(durable),
+            }},
+            "projects": {"alpha": {"targets": {"local": str(target)}}},
+            "personas": {},
+        },
+    )
+
+    result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    for name, value in result["environment"].items():
+        monkeypatch.setenv(name, value)
+    anchor = launch(anchor_home=new_state, project_id="alpha", project_root=target)
+
+    assert result["restore"]["artifacts"]["continuity"] == {
+        "status": "relocated",
+        "owners_relocated": 1,
+        "records_relocated": 1,
+    }
+    assert callable(anchor)
+    status = anchor("status", output_format="dict")
+    assert status["runtime"]["route_binding"]["project_id"] == "alpha"
 
 
 @pytest.mark.parametrize("remove", ["database", "projects"])
@@ -564,12 +637,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.5"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.6"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.5"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.6"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

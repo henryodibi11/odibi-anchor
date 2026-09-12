@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] - 2026-09-12
+
+### Fixed
+
+- Verified v2 restores can relocate managed continuity from a prior ephemeral local state root.
+  Restore proves each original route fingerprint and canonical project path, rebases only local
+  path fields plus derived fingerprints/checksums in unpublished staging, and leaves the immutable
+  durable snapshot unchanged. Ambiguous or malformed continuity still fails before publication.
+- Databricks setup guidance now recommends a stable user-specific local compute path to avoid
+  cross-user ownership collisions on shared/serverless `/tmp`.
+
+### Changed
+
+- Quality CI runs the unchanged pytest coverage with two isolated workers per supported Python
+  version, while the canonical local verifier remains serial unless parallelism is requested.
+
 ## [0.3.5] - 2026-09-12
 
 ### Fixed
@@ -138,3 +154,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.3
 [0.3.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.4
 [0.3.5]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.5
+[0.3.6]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.6

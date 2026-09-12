@@ -132,6 +132,91 @@ def test_v2_snapshot_restores_project_artifacts_and_empty_directories(tmp_path: 
     assert (restored_artifacts / "alpha" / "problems" / "P-1.md").read_text() == "# Evidence\n"
 
 
+def test_v2_restore_relocates_verified_continuity_without_changing_snapshot(
+    tmp_path: Path,
+) -> None:
+    from odibi_anchor._dispatcher._project import RouteBinding
+    from odibi_anchor._dispatcher._session import (
+        _load_continuity_state,
+        _save_continuity_state,
+    )
+
+    source_home = tmp_path / "old-state"
+    source_projects = source_home / "workspace" / "projects"
+    source_artifact = source_projects / "alpha"
+    source_db = source_home / ".agent_memory.db"
+    target = tmp_path / "target"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    source_home.mkdir()
+    _database(source_db)
+    binding = RouteBinding(
+        project_id="alpha",
+        target_root=str(target),
+        artifact_root=str(source_artifact),
+        anchor_home=str(source_home),
+        binding_source="explicit",
+        runtime_instance_id="runtime-a",
+    )
+    session = SimpleNamespace(
+        session_id="session-a",
+        task_window_id="task-a",
+        continuity_generation=0,
+        continuity_record_sha256=None,
+        continuity_status="uninitialized",
+    )
+    _save_continuity_state(binding, session, {"open_task": "task-a"})
+    snapshot = durability.snapshot_state(
+        source_db=source_db,
+        source_artifacts=source_projects,
+        durable_root=durable,
+        authority_id="work",
+    )
+    bundle = Path(snapshot["artifacts_path"])
+    bundle_sha256 = hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+    destination_home = tmp_path / "new-state"
+    destination_home.mkdir()
+    destination_projects = destination_home / "workspace" / "projects"
+    restored = durability.restore_latest(
+        durable_root=durable,
+        destination_db=destination_home / ".agent_memory.db",
+        destination_artifacts=destination_projects,
+        authority_id="work",
+    )
+
+    relocated_binding = RouteBinding(
+        project_id="alpha",
+        target_root=str(target),
+        artifact_root=str(destination_projects / "alpha"),
+        anchor_home=str(destination_home),
+        binding_source="explicit",
+        runtime_instance_id="runtime-a",
+    )
+    restored_session = SimpleNamespace(
+        session_id="session-a",
+        task_window_id="task-a",
+        continuity_generation=0,
+        continuity_record_sha256=None,
+        continuity_status="uninitialized",
+    )
+    continuity = _load_continuity_state(relocated_binding, restored_session)
+
+    assert restored["artifacts"]["continuity"] == {
+        "status": "relocated",
+        "owners_relocated": 1,
+        "records_relocated": 1,
+    }
+    assert continuity["state"] == {"open_task": "task-a"}
+    assert restored_session.continuity_generation == 1
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == bundle_sha256
+    original_owner = json.loads(
+        (source_artifact / "continuity" / "v1" / "OWNER.json").read_text()
+    )
+    assert original_owner["anchor_home"] == str(source_home)
+
+
 def test_v2_checkpoint_advances_when_only_artifacts_change(tmp_path: Path) -> None:
     source = tmp_path / "live.db"
     artifacts = tmp_path / "projects"

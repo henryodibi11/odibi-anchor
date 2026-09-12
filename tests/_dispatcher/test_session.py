@@ -14,6 +14,7 @@ from odibi_anchor._dispatcher._session import (
     _config,
     _load_continuity_state,
     _load_session_state,
+    _relocate_restored_continuity,
     _save_continuity_state,
     _save_session_state,
 )
@@ -110,6 +111,37 @@ class TestRouteOwnedContinuity:
 
         with pytest.raises(ContinuityUnavailable, match="owner mismatch"):
             _save_continuity_state(second, _continuity_state(session="session-b"), {"owner": "b"})
+
+    def test_restore_relocation_rejects_unproven_route_fingerprint(self, tmp_path):
+        source_home = tmp_path / "source"
+        artifact = source_home / "workspace" / "projects" / "project-a"
+        binding = RouteBinding(
+            project_id="project-a",
+            target_root=str(tmp_path / "target"),
+            artifact_root=str(artifact),
+            anchor_home=str(source_home),
+            binding_source="explicit",
+            runtime_instance_id="runtime-a",
+        )
+        saved = _save_continuity_state(binding, _continuity_state(), {"owner": "a"})
+        record_path = saved["record_path"]
+        with open(record_path, encoding="utf-8") as stream:
+            record = json.load(stream)
+        record["owner"]["route_fingerprint"] = "sha256:" + "0" * 64
+        record.pop("record_sha256")
+        record["record_sha256"] = session_module._hashlib.sha256(
+            session_module._canonical_json(record).encode("utf-8")
+        ).hexdigest()
+        with open(record_path, "w", encoding="utf-8") as stream:
+            stream.write(session_module._canonical_json(record) + "\n")
+
+        with pytest.raises(ContinuityUnavailable, match="fingerprint is not reproducible"):
+            _relocate_restored_continuity(
+                source_home / "workspace" / "projects",
+                tmp_path / "destination" / "workspace" / "projects",
+            )
+        owner = json.loads((artifact / "continuity" / "v1" / "OWNER.json").read_text())
+        assert owner["anchor_home"] == str(source_home)
 
     def test_stale_writer_cannot_replace_newer_generation(self, tmp_path):
         binding = _binding(tmp_path)

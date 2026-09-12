@@ -69,7 +69,10 @@ def test_main_retains_order_and_atomically_writes_report(monkeypatch, tmp_path: 
     monkeypatch.setattr(full, "_execute", fake_execute)
     report_path = tmp_path / "nested" / "report.json"
 
-    assert full.main(["--mode", "advisory", "--base-ref", "origin/main", "--json-out", str(report_path)]) == 0
+    assert full.main([
+        "--mode", "advisory", "--base-ref", "origin/main", "--pytest-workers", "2",
+        "--json-out", str(report_path),
+    ]) == 0
 
     assert [item[0] for item in seen] == [
         "forbidden-imports", "quality-ratchet", "tests", "output-contracts", "distribution",
@@ -77,7 +80,7 @@ def test_main_retains_order_and_atomically_writes_report(monkeypatch, tmp_path: 
     assert seen[1][2] == [
         "check", "--mode", "advisory", "--format", "json", "--base-ref", "origin/main",
     ]
-    assert seen[2][2] == ["tests/"]
+    assert seen[2][2] == ["-n", "2", "tests/"]
     assert seen[4][2] == ["--format", "json"]
     assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "pass"
     assert not list(report_path.parent.glob(f".{report_path.name}.*"))
@@ -93,6 +96,11 @@ def test_one_failed_or_unavailable_check_makes_suite_nonzero(monkeypatch, bad_st
     monkeypatch.setattr(full, "_execute", fake_execute)
 
     assert full.main([]) == 1
+
+
+def test_negative_pytest_worker_count_is_rejected() -> None:
+    with pytest.raises(SystemExit, match="zero or greater"):
+        full.main(["--pytest-workers", "-1"])
 
 
 def test_execute_timeout_is_unavailable(monkeypatch, tmp_path: Path) -> None:

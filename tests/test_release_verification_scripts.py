@@ -132,10 +132,12 @@ def test_quality_workflow_is_read_only_and_uses_maintained_entry_points() -> Non
     assert "permissions:\n  contents: read" in workflow
     assert 'python-version: ["3.11", "3.12"]' in workflow
     assert "python scripts/full_verification.py" in workflow
+    assert "--pytest-workers 2" in workflow
     assert "python scripts/quality_ratchet.py check" in workflow
     assert 'python -m pip install ".[dev]"' in workflow
     assert 'python -m pip install ".[mcp]"' in workflow
     assert "python -m pip install --group quality" in workflow
+    assert "pytest-xdist>=3.8,<4" in pyproject["dependency-groups"]["quality"]
     assert "setuptools>=68,<81" in pyproject["dependency-groups"]["quality"]
     assert "contents: write" not in workflow
     assert "secrets." not in workflow

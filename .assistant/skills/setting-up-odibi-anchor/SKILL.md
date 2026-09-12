@@ -26,15 +26,15 @@ portfolio preparation, and bootstrap are already healthy.
    readable. Before importing Anchor, inspect `importlib.metadata.version("odibi-anchor")`.
    If the distribution is missing or differs from the exact approved release, install it with
    the applicable command:
-   - local/CLI: `python -m pip install "odibi-anchor==0.3.5"`
-   - MCP: `python -m pip install "odibi-anchor[mcp]==0.3.5"`
-   - Databricks: `%pip install "odibi-anchor[databricks]==0.3.5"`, then run
+   - local/CLI: `python -m pip install "odibi-anchor==0.3.6"`
+   - MCP: `python -m pip install "odibi-anchor[mcp]==0.3.6"`
+   - Databricks: `%pip install "odibi-anchor[databricks]==0.3.6"`, then run
      `dbutils.library.restartPython()`.
 
    Do not use an unpinned/latest package. A Databricks Python restart clears all imports,
    variables, and callable bindings; resume this workflow at step 2 in the restarted process.
    If the exact distribution is already active, do not reinstall it.
-3. Verify `importlib.metadata.version("odibi-anchor") == odibi_anchor.__version__ == "0.3.5"`
+3. Verify `importlib.metadata.version("odibi-anchor") == odibi_anchor.__version__ == "0.3.6"`
    and verify that `odibi_anchor.__file__` is under the active environment's site-packages.
    Never continue through a source checkout when an installed release was requested.
 4. If no portfolio exists, create a launch-ready PortfolioV1 without manual TOML surgery:
@@ -78,6 +78,9 @@ portfolio preparation, and bootstrap are already healthy.
    Do not set `ANCHOR_HOME` manually, map `ANCHOR_DURABLE_ROOT` to it, or probe the durable
    Volume through FUSE. Preparation keeps live state on local compute and restores immutable
    snapshots through the Databricks Files API. Apply every returned environment field exactly.
+   On shared/serverless compute, configure a stable user-specific local state path rather than
+   a generic `/tmp/odibi-anchor` path that another OS user can own. A verified v2 restore safely
+   relocates continuity records when that configured local path changes.
    Other hosts may use `anchor portfolio prepare --config <path> --host <id> --project <id>`.
    The `anchor` callable comes from the launcher namespace or `launch()` return value; never
    attempt `from odibi_anchor import anchor`.

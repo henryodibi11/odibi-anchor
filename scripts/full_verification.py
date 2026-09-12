@@ -230,6 +230,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-ref")
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--pytest-workers", type=int, default=0)
     return parser
 
 
@@ -238,6 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.timeout < 1:
         raise SystemExit("--timeout must be at least 1 second")
+    if args.pytest_workers < 0:
+        raise SystemExit("--pytest-workers must be zero or greater")
     print()
     print("╔══════════════════════════════════════════════════════════╗")
     print("║     odibi_anchor — Full Verification Suite         ║")
@@ -247,10 +250,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     quality_args = ["check", "--mode", args.mode, "--format", "json"]
     if args.base_ref:
         quality_args.extend(["--base-ref", args.base_ref])
+    pytest_args = (
+        ["-n", str(args.pytest_workers), "tests/"]
+        if args.pytest_workers
+        else ["tests/"]
+    )
     definitions = [
         ("forbidden-imports", "1. No forbidden framework imports", "check_no_datakit_imports.py", []),
         ("quality-ratchet", "2. Ruff/Pyright quality ratchet", "quality_ratchet.py", quality_args),
-        ("tests", "3. Pytest suite", "run_tests.py", ["tests/"]),
+        ("tests", "3. Pytest suite", "run_tests.py", pytest_args),
         ("output-contracts", "4. Output contracts", "verify_outputs.py", []),
         ("distribution", "5. Distribution build/install", "verify_distribution.py", ["--format", "json"]),
     ]

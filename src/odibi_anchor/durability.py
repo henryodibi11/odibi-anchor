@@ -942,6 +942,13 @@ def restore_latest(
                 }
                 if extracted != expected:
                     raise RuntimeError("artifact bundle inventory mismatch")
+                from odibi_anchor._dispatcher._session import (
+                    _relocate_restored_continuity,
+                )
+
+                continuity = _relocate_restored_continuity(
+                    staged_artifacts, artifacts_destination
+                )
                 try:
                     shutil.copytree(staged_artifacts, artifacts_destination)
                 except Exception:
@@ -951,6 +958,7 @@ def restore_latest(
                 artifacts_status = {
                     "status": "restored",
                     "destination": str(artifacts_destination),
+                    "continuity": continuity,
                     **manifest["artifacts"],
                 }
             else:

@@ -15,11 +15,11 @@ anchor portfolio scaffold \
 anchor portfolio validate --config /absolute/private/path/anchor.toml --host databricks-work
 ```
 
-For Databricks, configure `local_state_root` on local compute (for example
-`/tmp/odibi-anchor`) and `durable_root` on approved durable storage. Never use a
-live SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository` and
-`artifact_namespace` are optional metadata; exact host/project targets are routing
-authority.
+For Databricks, configure `local_state_root` on local compute and `durable_root` on
+approved durable storage. On shared/serverless compute, use a stable user-specific path
+(for example `/tmp/odibi-anchor-hodibi`) rather than a generic path another OS user can own.
+Never use a live SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository`
+and `artifact_namespace` are optional metadata; exact host/project targets are routing authority.
 
 Install or reconcile the packaged instructions once per host instruction root:
 
@@ -63,7 +63,10 @@ files to `<durable_root>/<authority_id>/snapshots/`; a canonical checksummed man
 is published last. Restore copies durable bytes to local staging, verifies SHA-256,
 logical content, SQLite integrity, and safe artifact paths locally, then publishes only to absent
 local destinations. Legacy v1 database-only snapshots remain readable; v2 restores require both
-destinations so a partial state cannot be presented as complete.
+destinations so a partial state cannot be presented as complete. When a v2 snapshot moves to a
+different configured local state root, restore verifies each continuity owner's canonical managed
+path and original route fingerprint, then rebases only local paths and derived checksums in staging.
+The immutable snapshot is never modified, and ambiguous continuity fails before publication.
 
 Each live database is bound to one configured work authority. Preparation refuses an
 existing unowned database or a database owned by another authority. After making an

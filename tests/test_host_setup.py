@@ -169,7 +169,7 @@ def test_databricks_installs_complete_authored_guidance_without_snapshot_cache(
     installed_setup_skill = (
         target / ".assistant" / "skills" / "setting-up-odibi-anchor" / "SKILL.md"
     ).read_text(encoding="utf-8")
-    install_command = '%pip install "odibi-anchor[databricks]==0.3.5"'
+    install_command = '%pip install "odibi-anchor[databricks]==0.3.6"'
     assert install_command in installed_instructions
     assert install_command in installed_setup_skill
     assert not (target / ".assistant" / "references" / "snapshots").exists()
