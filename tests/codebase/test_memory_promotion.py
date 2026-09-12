@@ -700,6 +700,7 @@ def test_local_owner_decline_timeout_or_invalid_ui_is_non_mutating(
     monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
     monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: True)
     monkeypatch.setattr("odibi_anchor.human_input_windows._windows_username", lambda: "Henry")
+    monkeypatch.setattr("odibi_anchor.human_input_windows.time.time", lambda: 0.0)
     monkeypatch.setattr(
         "odibi_anchor.human_input_windows._message_box", lambda *_args: dialog_result,
     )
