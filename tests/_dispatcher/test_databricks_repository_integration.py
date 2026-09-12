@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,11 +43,11 @@ def current_session_state():
 
 
 def reset_current_session() -> None:
+    from odibi_anchor._utils._session_state import reset_session_state
     from odibi_anchor.codebase.structured_learning_context import (
         active_learning_obligation,
         close_learning_obligation_legacy,
     )
-    from odibi_anchor._utils._session_state import reset_session_state
 
     state = current_session_state()
     owner = {
@@ -107,6 +108,47 @@ def accept_source_task(anchor, *, repository_scope: list[str] | None = None) -> 
     )
 
 
+def initialize_repository(root: Path) -> str:
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=root, check=True, capture_output=True,
+            text=True, encoding="utf-8",
+        ).stdout.strip()
+
+    git("init", "-b", "main")
+    git("config", "user.email", "tests@example.invalid")
+    git("config", "user.name", "Tests")
+    git("config", "commit.gpgsign", "false")
+    git("add", ".")
+    git("commit", "-m", "base")
+    return git("rev-parse", "HEAD")
+
+
+def test_canonical_local_git_takes_precedence_over_databricks_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anchor_home = tmp_path.parent / f"{tmp_path.name}-state"
+    anchor_home.mkdir()
+    monkeypatch.setenv("ANCHOR_HOME", str(anchor_home))
+    provider = NonCopyableDatabricksProvider()
+    (tmp_path / "source.py").write_text("VALUE = 1\n", encoding="utf-8")
+    head_sha = initialize_repository(tmp_path)
+    anchor, _, _ = init(root=str(tmp_path), output_format="dict", repository_provider=provider)
+
+    task = accept_source_task(anchor)
+
+    baseline = current_session_state().task_repository_baseline
+    assert baseline is not None
+    assert baseline.authority_kind == "clean"
+    assert baseline.task_start_head_sha == head_sha
+    assert current_session_state().repository_provider is provider
+    assert provider.calls == 0
+    assert "databricks_implementation_guidance" not in task
+    assert "repository_evidence" not in task
+    reset_current_session()
+
+
 def test_source_task_requires_scope_and_explicit_unknown_state_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -159,6 +201,7 @@ def test_bounded_edit_requires_acknowledgement_and_detects_later_drift(
     assert task["repository_evidence"]["evidence_kind"] == "databricks_git_folder"
     assert task["repository_evidence"]["capabilities"]["local_worktree_status"] == "unavailable"
     assert "content" not in task["repository_evidence"]["preimages"][0]
+    assert provider.calls == 2
 
     with pytest.raises(RuntimeError, match="repository_scope is required"):
         anchor(

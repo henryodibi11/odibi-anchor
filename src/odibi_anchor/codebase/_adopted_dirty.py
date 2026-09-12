@@ -194,7 +194,7 @@ def record_touched_path(path: str | Path, *, task_window_id: str, touched_path: 
                 "created": False, "status": "unavailable",
             }
         existing = connection.execute(
-            "SELECT record_json,record_sha256 FROM task_touched_paths "
+            "SELECT * FROM task_touched_paths "
             "WHERE task_window_id=? AND path=?",
             (task_window_id, normalized),
         ).fetchone()

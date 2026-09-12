@@ -2,6 +2,16 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.10] - 2026-09-12
+
+### Fixed
+
+- Databricks source-change tasks now prefer canonical local Git evidence when a Git Folder exposes
+  both a real local checkout and Repos API identity, while retaining the Databricks provider as the
+  fallback when canonical local Git is unavailable.
+- Repeating a durable task's `touched` registration after rebind is idempotent instead of failing
+  while verifying the existing immutable record.
+
 ## [0.3.9] - 2026-09-12
 
 ### Added
@@ -205,3 +215,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.7]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.7
 [0.3.8]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.8
 [0.3.9]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.9
+[0.3.10]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.10

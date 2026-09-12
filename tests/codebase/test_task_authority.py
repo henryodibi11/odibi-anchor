@@ -503,7 +503,8 @@ def test_durable_touched_path_can_authorize_scope(tmp_path):
         task_stage={"repository_scope": (), "trust_domain": "private"},
         task_result=result(),
     )
-    record_touched_path(db, task_window_id="ltw_durable", touched_path="extra.py")
+    first = record_touched_path(db, task_window_id="ltw_durable", touched_path="extra.py")
+    repeated = record_touched_path(db, task_window_id="ltw_durable", touched_path="extra.py")
     (Path(original.target_root) / "extra.py").write_text("VALUE = 2\n", encoding="utf-8")
 
     approval = request_adoption_approval(
@@ -513,6 +514,8 @@ def test_durable_touched_path_can_authorize_scope(tmp_path):
         state_path=tmp_path / "human.sqlite3", transport=ApprovalTransport(), timeout_minutes=1,
     )
 
+    assert first["created"] is True
+    assert repeated["created"] is False
     assert approval["created"] is True
     assert inspect_adoptions(db)["touched_paths"] == 1
 

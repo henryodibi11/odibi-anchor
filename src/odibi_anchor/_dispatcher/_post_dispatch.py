@@ -441,7 +441,9 @@ def run_post_dispatch(
             if not session_state.target_root or not session_state.artifact_root:
                 raise RuntimeError("source-change task requires a resolvable target and artifact root")
             repository_provider = getattr(session_state, "repository_provider", None)
-            if repository_provider is not None:
+            from odibi_anchor._repository_snapshot import canonical_local_git_available
+            local_git_available = canonical_local_git_available(session_state.target_root)
+            if repository_provider is not None and not local_git_available:
                 from odibi_anchor._repository_snapshot import (
                     capture_databricks_git_folder_task_baseline,
                     databricks_task_baseline_projection,
