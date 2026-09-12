@@ -47,10 +47,42 @@ launcher returns a ready startup packet.
    target need not be Git unless source-change evidence is required. A request merely to use a
    project does not authorize this write-capable path.
 
-5. Run `anchor portfolio validate`, then `anchor setup-host <adapter> --target
+5. For an explicitly approved retention-policy change to an existing portfolio, use the
+   public optimistic-concurrency API instead of editing TOML or snapshot storage directly:
+
+   ```python
+   from odibi_anchor.portfolio import (
+       load_portfolio_document,
+       validate_portfolio,
+       write_portfolio,
+   )
+
+   config_path = "<absolute-portfolio-path>"
+   host_id = "<host-id>"
+   document = load_portfolio_document(config_path)
+   portfolio = document["portfolio"]
+   portfolio.setdefault("durability", {})["retention"] = {
+       "days": 1,
+       "minimum_snapshots": 3,
+   }
+   validation = validate_portfolio(portfolio, host_id=host_id)
+   assert validation["status"] == "valid", validation
+   written = write_portfolio(
+       config_path,
+       portfolio,
+       expected_sha256=document["sha256"],
+   )
+   assert written["validation_status"] == "valid", written
+   ```
+
+   This policy is portfolio-wide. After the write, start a fresh Python process and rerun the
+   managed launcher before checkpointing so the runtime loads the new policy. Let the next
+   successful managed checkpoint enforce retention; never delete manifests or blobs manually.
+
+6. Run `anchor portfolio validate`, then `anchor setup-host <adapter> --target
    <instruction-root>`. Setup is manifest-managed and must refuse modified managed files
    or incompatible user-owned collisions.
-6. The managed launcher is the primary preparation path. Use the direct preparation API below
+7. The managed launcher is the primary preparation path. Use the direct preparation API below
    only to recover or diagnose a launcher failure; do not substitute a prohibited CLI subprocess:
 
    ```python
@@ -77,10 +109,10 @@ launcher returns a ready startup packet.
    Other hosts may use `anchor portfolio prepare --config <path> --host <id> --project <id>`.
    The `anchor` callable comes from the launcher namespace or `launch()` return value; never
    attempt `from odibi_anchor import anchor`.
-7. Run doctor after applying the prepared environment and follow any remediation. If doctor
+8. Run doctor after applying the prepared environment and follow any remediation. If doctor
    is run earlier on unconfigured Databricks, follow its `portfolio.prepare` operation rather
    than inventing route or state paths.
-8. Verify the immutable route, orientation, and task lifecycle before substantive work.
+9. Verify the immutable route, orientation, and task lifecycle before substantive work.
    Accept the task before loading task-specific skills; then load every skill named in the
    accepted task result with `anchor("skill_loaded", "<name>")`. `skill_loaded` requires the
    active task by design, so calling it before task acceptance is an invocation error, not a

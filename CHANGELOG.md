@@ -2,6 +2,16 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.12] - 2026-09-12
+
+### Changed
+
+- Managed Databricks setup guidance now includes a copy-ready, optimistic-concurrency-safe
+  portfolio retention recipe, including host validation, fresh-process re-bootstrap, and
+  Anchor-managed pruning instead of manual TOML or snapshot-storage edits.
+- The operating contract and quick reference now route approved portfolio-policy changes to the
+  setup skill so agents discover that recipe before attempting configuration changes.
+
 ## [0.3.11] - 2026-09-12
 
 ### Fixed

@@ -21,18 +21,41 @@ approved durable storage. On shared/serverless compute, use a stable user-specif
 Never use a live SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository`
 and `artifact_namespace` are optional metadata; exact host/project targets are routing authority.
 
-To bound snapshot accumulation, opt into automatic retention in the portfolio:
+To bound snapshot accumulation, opt into portfolio-wide automatic retention through the
+guarded public API. Do not edit the TOML or snapshot storage directly:
 
-```toml
-[durability.retention]
-days = 7
-minimum_snapshots = 3
+```python
+from odibi_anchor.portfolio import (
+    load_portfolio_document,
+    validate_portfolio,
+    write_portfolio,
+)
+
+config_path = "/absolute/private/path/anchor.toml"
+host_id = "databricks-work"
+document = load_portfolio_document(config_path)
+portfolio = document["portfolio"]
+portfolio.setdefault("durability", {})["retention"] = {
+    "days": 1,
+    "minimum_snapshots": 3,
+}
+validation = validate_portfolio(portfolio, host_id=host_id)
+assert validation["status"] == "valid", validation
+written = write_portfolio(
+    config_path,
+    portfolio,
+    expected_sha256=document["sha256"],
+)
+assert written["validation_status"] == "valid", written
 ```
 
 After each successful durable checkpoint, Anchor retains every snapshot from the last
 `days` and always retains at least the newest `minimum_snapshots`. It removes expired
 manifests first, then removes only database or artifact blobs no retained manifest
-references. Omitting this table preserves all snapshots.
+references. Omitting the retention policy preserves all snapshots. After changing the policy,
+start a fresh Python process and rerun the managed launcher before checkpointing so it loads the
+new values. Let the next successful managed checkpoint enforce the policy; never manually delete
+snapshot manifests or blobs.
 
 Install or reconcile the packaged instructions once per host instruction root:
 

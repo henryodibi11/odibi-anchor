@@ -17,6 +17,12 @@ artifact actions. `portfolio prepare` and manual environment application are rec
 The process-bound `anchor` callable comes from the launcher namespace or `launch()` return
 value. It is intentionally not available through `from odibi_anchor import anchor`.
 
+Portfolio configuration is setup work. For an approved project-addition or retention-policy
+change, load `setting-up-odibi-anchor` and use its guarded, copy-ready operation. Retention is
+portfolio-wide and uses `load_portfolio_document` plus `write_portfolio(...,
+expected_sha256=document["sha256"])`; never edit the TOML or snapshot storage directly.
+Start a fresh Python process and rerun the managed launcher before the next checkpoint.
+
 Substantial problem: `anchor("problem", "create", title="...")`; capture stable `I*`,
 `H*`, and `E*` entries; resume with `anchor("problem", "resume", "PRB-...")`.
 

@@ -165,6 +165,39 @@ bootstrap, then follow the returned `portfolio.prepare` operation. Its target mu
 directory but need not be Git unless source-change evidence is required. Do not bootstrap a
 missing project ID first. The dispatcher calls below remain the non-portfolio compatibility path.
 
+For an explicitly approved retention change, mutate the existing portfolio through its guarded
+public API, not by editing TOML or durable storage directly:
+
+```python
+from odibi_anchor.portfolio import (
+    load_portfolio_document,
+    validate_portfolio,
+    write_portfolio,
+)
+
+config_path = "<absolute-portfolio-path>"
+host_id = "<host-id>"
+document = load_portfolio_document(config_path)
+portfolio = document["portfolio"]
+portfolio.setdefault("durability", {})["retention"] = {
+    "days": 1,
+    "minimum_snapshots": 3,
+}
+validation = validate_portfolio(portfolio, host_id=host_id)
+assert validation["status"] == "valid", validation
+written = write_portfolio(
+    config_path,
+    portfolio,
+    expected_sha256=document["sha256"],
+)
+assert written["validation_status"] == "valid", written
+```
+
+The policy applies portfolio-wide. After writing it, start a fresh Python process and rerun the
+managed launcher before checkpointing so the runtime receives the updated environment. The next
+successful managed checkpoint enforces the age window and minimum restore-point floor. Never
+delete snapshot manifests or blobs manually.
+
 ```python
 result = anchor("project", "create", name="queue-automation")
 result = anchor("project", "create", name="shared-service", target="/path/to/repository")
