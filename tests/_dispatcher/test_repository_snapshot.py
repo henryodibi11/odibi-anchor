@@ -142,6 +142,64 @@ def test_clean_feature_branch_pretask_commit_is_accepted_and_excluded(repository
     assert capture_task_change_scope(baseline).changed_paths == ()
 
 
+@pytest.mark.parametrize("target", ["main", "master"])
+def test_task_baseline_resolves_one_remote_tracking_target(
+    repository: Path, target: str,
+) -> None:
+    target_sha = git(repository, "rev-parse", "main")
+    git(repository, "update-ref", f"refs/remotes/origin/{target}", target_sha)
+    git(repository, "branch", "-D", "main")
+
+    snapshot = capture_repository_snapshot(repository, target)
+    baseline = capture_task_repository_baseline(repository, target)
+
+    assert isinstance(baseline, TaskRepositoryBaseline)
+    assert snapshot.target_sha == baseline.target_sha == target_sha
+    assert snapshot.provenance["resolved_target_ref"] == f"refs/remotes/origin/{target}"
+    assert snapshot.provenance["remote_tracking_target_candidates"] == (
+        f"refs/remotes/origin/{target}",
+    )
+    assert validate_repository_snapshot(snapshot) == (True, ())
+
+
+def test_task_baseline_rejects_ambiguous_remote_tracking_target(repository: Path) -> None:
+    target_sha = git(repository, "rev-parse", "main")
+    git(repository, "update-ref", "refs/remotes/origin/main", target_sha)
+    git(repository, "update-ref", "refs/remotes/upstream/main", target_sha)
+    git(repository, "branch", "-D", "main")
+
+    with pytest.raises(RuntimeError, match=r"ambiguous.*origin/main.*upstream/main"):
+        capture_task_repository_baseline(repository, "main")
+
+
+def test_task_baseline_prefers_exact_target_over_remote_tracking_matches(repository: Path) -> None:
+    target_sha = git(repository, "rev-parse", "main")
+    git(repository, "update-ref", "refs/remotes/origin/main", target_sha)
+    git(repository, "update-ref", "refs/remotes/upstream/main", target_sha)
+
+    snapshot = capture_repository_snapshot(repository, "main")
+
+    assert snapshot.provenance["resolved_target_ref"] == "main"
+    assert snapshot.provenance["remote_tracking_target_candidates"] == ()
+
+
+def test_task_baseline_reports_missing_target_ref(repository: Path) -> None:
+    with pytest.raises(RuntimeError, match="cannot resolve configured target 'missing'"):
+        capture_task_repository_baseline(repository, "missing")
+
+
+def test_task_baseline_reports_target_without_common_history(repository: Path) -> None:
+    git(repository, "switch", "--orphan", "unrelated")
+    (repository / "a.py").unlink(missing_ok=True)
+    (repository / "unrelated.py").write_text("VALUE = 2\n", encoding="utf-8")
+    git(repository, "add", "--all")
+    git(repository, "commit", "-m", "unrelated history")
+    git(repository, "switch", "feature")
+
+    with pytest.raises(RuntimeError, match="configured target has no merge-base with HEAD"):
+        capture_task_repository_baseline(repository, "unrelated")
+
+
 @pytest.mark.parametrize("dirty_kind", ["staged", "unstaged", "untracked"])
 def test_task_baseline_rejects_each_dirty_class(repository: Path, dirty_kind: str) -> None:
     if dirty_kind == "untracked":

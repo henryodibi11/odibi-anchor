@@ -494,8 +494,19 @@ def capture_task_repository_baseline(
         raise RuntimeError("BLOCKED: source-change task requires a clean initial Git worktree")
     if snapshot.branch is None:
         raise RuntimeError("source-change task requires an attached Git branch")
-    if not snapshot.target_sha or not snapshot.merge_base_sha:
-        raise RuntimeError("source-change task requires a resolvable configured target")
+    if not snapshot.target_sha:
+        candidates = snapshot.provenance.get("remote_tracking_target_candidates", ())
+        if len(candidates) > 1:
+            raise RuntimeError(
+                "source-change task configured target is ambiguous across remote-tracking "
+                f"refs: {', '.join(candidates)}; configure an exact default_target_ref"
+            )
+        raise RuntimeError(
+            f"source-change task cannot resolve configured target {configured_target_ref!r} "
+            "as an exact ref or one unambiguous remote-tracking ref"
+        )
+    if not snapshot.merge_base_sha:
+        raise RuntimeError("source-change task configured target has no merge-base with HEAD")
     return TaskRepositoryBaseline(
         snapshot.target_worktree, snapshot.branch, configured_target_ref,
         snapshot.target_sha, snapshot.merge_base_sha, snapshot.head_sha,
@@ -947,6 +958,27 @@ def _optional_commit(git: _Git, ref: str) -> str | None:
     raise RuntimeError(f"local git command failed ({exit_code}): git {' '.join(args)}")
 
 
+def _resolve_configured_target(
+    git: _Git, configured_target_ref: str,
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """Resolve an exact target, then one unambiguous local remote-tracking match."""
+    exact = _optional_commit(git, configured_target_ref)
+    if exact is not None:
+        return configured_target_ref, exact, ()
+    if configured_target_ref.startswith("refs/"):
+        return None, None, ()
+    suffix = f"/{configured_target_ref}"
+    candidates = tuple(sorted(
+        ref for ref in git.run(
+            "for-each-ref", "--format=%(refname)", "refs/remotes",
+        ).splitlines()
+        if ref.endswith(suffix) and not ref.endswith("/HEAD")
+    ))
+    if len(candidates) != 1:
+        return None, None, candidates
+    return candidates[0], _optional_commit(git, candidates[0]), candidates
+
+
 def _optional_branch(git: _Git) -> str | None:
     """Return the attached short branch, distinguishing a detached HEAD."""
     args = ("symbolic-ref", "--quiet", "--short", "HEAD")
@@ -1167,7 +1199,9 @@ def capture_repository_snapshot(
     head = git.run("rev-parse", "HEAD").strip()
     branch_value = git.run("symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip()
     branch = branch_value or None
-    target = git.run("rev-parse", "--verify", f"{configured_target_ref}^{{commit}}", check=False).strip() or None
+    resolved_target_ref, target, remote_candidates = _resolve_configured_target(
+        git, configured_target_ref,
+    )
     base = git.run("merge-base", target, head, check=False).strip() if target else None
     base = base or None
     committed_range = f"{base}..{head}" if base else None
@@ -1210,6 +1244,8 @@ def capture_repository_snapshot(
     provenance = {
         "scope": "local_only", "remote_validated": False, "git_version": version,
         "commands": tuple(git.commands), "captured_at": captured,
+        "resolved_target_ref": resolved_target_ref,
+        "remote_tracking_target_candidates": remote_candidates,
         "caller_attestation": dict(caller_attestation or {}),
         "managed_exclusions": tuple({"path": item, "reason": "explicitly_classified"} for item in sorted(classified)),
         "index_fingerprint": index_fingerprint,
@@ -1231,9 +1267,17 @@ def validate_repository_snapshot(
     stale: list[str] = []
     if git.run("rev-parse", "HEAD").strip() != snapshot.head_sha:
         stale.append("head")
-    target = git.run("rev-parse", "--verify", f"{snapshot.configured_target_ref}^{{commit}}", check=False).strip() or None
+    resolved_target_ref, target, remote_candidates = _resolve_configured_target(
+        git, snapshot.configured_target_ref,
+    )
     if target != snapshot.target_sha:
         stale.append("target")
+    if ("resolved_target_ref" in snapshot.provenance
+            and resolved_target_ref != snapshot.provenance["resolved_target_ref"]):
+        stale.append("target_ref")
+    if ("remote_tracking_target_candidates" in snapshot.provenance
+            and remote_candidates != snapshot.provenance["remote_tracking_target_candidates"]):
+        stale.append("target_candidates")
     index = _index_fingerprint(git)
     if index != snapshot.provenance.get("index_fingerprint"):
         stale.append("index")

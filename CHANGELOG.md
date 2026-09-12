@@ -2,6 +2,16 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.11] - 2026-09-12
+
+### Fixed
+
+- Canonical local Git baselines now resolve a configured target such as `main` or `master`
+  through exactly one matching remote-tracking ref when no exact ref exists, supporting
+  Databricks Git Folders that omit local default-branch refs while rejecting ambiguity.
+- Missing, ambiguous, and unrelated-history target failures now identify the precise condition
+  and remediation instead of reporting an apparently unresolved managed-project target.
+
 ## [0.3.10] - 2026-09-12
 
 ### Fixed
@@ -216,3 +226,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.8]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.8
 [0.3.9]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.9
 [0.3.10]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.10
+[0.3.11]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.11
