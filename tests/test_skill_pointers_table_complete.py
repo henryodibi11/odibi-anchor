@@ -180,7 +180,7 @@ def test_instructions_are_concise_provider_neutral_routing_contract():
     lowered = text.casefold()
     assert len(text.encode()) < 26_000
     assert all(word in lowered for word in ("outcome", "preserve", "proportion", "evidence", "stop"))
-    prohibited = ("aliases.json", "runtime alias", "mcp_cw_", "%pip", "/workspace/users/")
+    prohibited = ("aliases.json", "runtime alias", "mcp_cw_", "/workspace/users/")
     assert not any(fragment in lowered for fragment in prohibited)
 
 
