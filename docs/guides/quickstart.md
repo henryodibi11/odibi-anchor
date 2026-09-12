@@ -35,49 +35,36 @@ pip install -e ".[all,dev]"
 
 ### Databricks Free Edition
 
-Install the exact public release and its qualified Databricks SDK dependency, then restart
-Python. No Anchor source checkout is required:
-
-```python
-%pip install "odibi-anchor[databricks]==<version>"
-dbutils.library.restartPython()
-```
-
-Scaffold or validate the private PortfolioV1, install host guidance, and call
-`prepare_portfolio_runtime()` before doctor or launch. Apply its returned environment exactly;
-never choose `ANCHOR_HOME` manually. The process-bound `anchor` callable comes from the returned
-launcher namespace or `launch()`, not `from odibi_anchor import anchor`. See
-[Getting started](getting-started.md) for the copy-ready sequence. Normal user prompts then
-contain only outcome, target/project intent, constraints, and authority.
-
-The explicit entrypoint is a host troubleshooting/fallback equivalent, not user-prompt
-boilerplate:
+After one-time portfolio and host setup, the agent runs the managed launcher with only the
+project ID. This is host-owned behavior, not user-prompt boilerplate:
 
 ```python
 import runpy
 
-namespace = runpy.run_path("<instruction root>/.assistant/agent_bootstrap.py")
+namespace = runpy.run_path(
+    "<instruction root>/.assistant/agent_bootstrap.py",
+    init_globals={"ANCHOR_PROJECT_ID": "<project-id>"},
+)
 anchor = namespace["anchor"]
 orientation = namespace["ORIENTATION"]
+startup = namespace["STARTUP_PACKET"]
 assert namespace["BOOTSTRAP"]["success"] is True
-repository_evidence = namespace["BOOTSTRAP"]["repository_evidence"]
+assert startup["status"] == "ready"
 ```
 
-The entrypoint recognizes an exact normalized `/Workspace/...` selected target—the active managed
-project's target, or the Odibi Anchor checkout when no project is active—and, when the
-optional Databricks runtime SDK is available, auto-configures read-only Workspace get-status and
-Repos get identity attestation. Evidence is retained only if that target remains the effective
-root. No per-process executor/provider snippet is needed. An unavailable or denied attestation
-does not break orientation, but its structured acquisition outcome must not be treated as clean
-Git evidence.
+If Anchor is missing or stale, the launcher resolves the latest non-yanked stable release and
+returns an exact pinned `%pip install` plus Python restart. Run that remediation and rerun the
+same call. It then discovers the sibling portfolio and exact host, restores durable state, binds,
+orients, and returns copy-ready artifact actions. `prepare_portfolio_runtime()` and manual
+environment application are recovery paths, not normal startup.
 
 The packaged launcher uses the installed distribution. Explicit source checkout discovery
 is a development-only fallback; it never derives authority from cwd or scans a user tree.
 
 ## 3. Bootstrap and orient
 
-For an installed package, prefer PortfolioV1 preparation and `odibi_anchor.startup.launch()`.
-The packaged entrypoint above returns bounded structured status/audit orientation; bounded memory arrives with an accepted task. Retain its namespace and create a session or task only
+For an installed package, prefer the managed launcher above. It returns bounded structured
+status/audit orientation; bounded memory arrives with an accepted task. Retain its namespace and create a session or task only
 when the requested work requires that lifecycle. In notebooks, always assign `anchor()`
 results to variables.
 

@@ -4,16 +4,15 @@
 
 ## Code-Modifying Sequence (RuntimeError where the runtime enforces it)
 
-Project routing: `odibi_anchor.launch(...)` binds one immutable managed project and exact
-target. A unique exact target match can supply the project ID; ambiguity requires an explicit
-ID. `workspace/.active_project` is not routing authority. For a configured portfolio, prepare
-before doctor or bootstrap and apply its environment exactly; never choose `ANCHOR_HOME` manually.
-Unconfigured Databricks doctor returns `portfolio.prepare` as its next operation.
+Project routing: the managed launcher binds one immutable managed project and exact target from
+an explicit project ID. `workspace/.active_project` is not routing authority. Never choose
+`ANCHOR_HOME` or manually apply portfolio environment values during normal managed startup.
+Unconfigured Databricks doctor returns `portfolio.prepare` as a recovery operation.
 
-Preferred configured startup: `anchor portfolio prepare --config <absolute-config> --host
-<host-id> --project <project-id>`. Host setup: `anchor setup-host
-<amp|claude|databricks|chatgpt> --target <instruction-root>`. Both return one exact next
-operation and never infer a global active project.
+Preferred configured startup: run `.assistant/agent_bootstrap.py` in-process with
+`init_globals={"ANCHOR_PROJECT_ID": "<project-id>"}` and retain `STARTUP_PACKET`. The launcher
+resolves the sibling portfolio, exact host, state restore, route, orientation, and copy-ready
+artifact actions. `portfolio prepare` and manual environment application are recovery paths.
 
 The process-bound `anchor` callable comes from the launcher namespace or `launch()` return
 value. It is intentionally not available through `from odibi_anchor import anchor`.

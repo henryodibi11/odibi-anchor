@@ -29,6 +29,10 @@ def test_orient_aggregates_status_audit_and_defers_memory(tmp_path, monkeypatch)
     assert "terminal_return" in {
         route["record"] for route in o["capture_standards"]["routes"]
     }
+    assert {item["artifact"] for item in o["managed_artifact_actions"]} == {
+        "PROJECT.md", "problems/", "specs/", "work_items/",
+    }
+    assert all(item["list_or_show"].startswith('anchor("') for item in o["managed_artifact_actions"])
 
 
 def test_orient_markdown(tmp_path, monkeypatch):
@@ -39,6 +43,8 @@ def test_orient_markdown(tmp_path, monkeypatch):
     assert om.startswith("# Orientation")
     assert "Managed artifact contract v" in om
     assert "`decisions/`" in om
+    assert "## Managed artifact actions" in om
+    assert 'anchor("work_item", "list"' in om
     assert "Capture standards v1.1" in om
     assert "**Common fields:**" in om
     assert "Do not use for:" in om

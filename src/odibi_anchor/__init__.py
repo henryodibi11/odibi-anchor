@@ -144,6 +144,7 @@ __all__ = [
     "HumanInputError",
     "HumanInputTimeout",
     "apply_legacy_import",
+    "bootstrap_managed_project",
     "doctor",
     "ensure_database_authority",
     "get_human_input_request",
@@ -174,6 +175,7 @@ __all__ = [
 
 # Lazy import mapping: attribute → (module, name)
 _LAZY_IMPORTS = {
+    "bootstrap_managed_project": ("odibi_anchor.startup", "bootstrap_managed_project"),
     "launch": ("odibi_anchor.startup", "launch"),
     "doctor": ("odibi_anchor.startup", "doctor"),
     "ensure_database_authority": ("odibi_anchor.durability", "ensure_database_authority"),

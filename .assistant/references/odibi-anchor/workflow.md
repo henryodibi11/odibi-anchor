@@ -4,38 +4,44 @@
 
 Use this deterministic reference when Odibi Anchor action sequencing or signatures are needed.
 
-## Bootstrap from a source checkout
+## Bootstrap a managed project
 
-For installed operation, first prefer `anchor portfolio prepare --config <absolute-path>
---host <host-id> --project <project-id>`. Its explicit PortfolioV1 replaces project-ID,
-host-root, and state-path rediscovery and returns copy-ready immutable route/environment
-inputs. Apply that environment before doctor or bootstrap and never set `ANCHOR_HOME` manually.
-Run `anchor setup-host <adapter> --target <instruction-root>` to install or reconcile
-this workflow and its launcher without silently replacing user edits. The source-checkout path
-below remains a development compatibility route, not a requirement for installed use.
+For installed operation, run the managed launcher with the named project. It deterministically
+discovers the sibling portfolio and exact matching host, reconciles guidance, restores durable
+state, binds, orients, and emits managed artifact actions. The source-checkout path remains a
+development compatibility route, not a requirement for installed use.
 
-Run the source-owned `.assistant/agent_bootstrap.py` accompanying these instructions in
-the same persistent Python process that will make later `anchor()` calls. The launcher
-delegates to the repository-root `agent_bootstrap.py`, which remains the only bootstrap
-implementation:
+Run `.assistant/agent_bootstrap.py` accompanying these instructions in the same persistent
+Python process that will make later `anchor()` calls. In a source-checkout topology it delegates
+to the repository-root development bootstrap; in an installed managed host it owns portfolio
+startup directly:
 
 ```python
 import runpy
 
 bootstrap_path = "<instruction root>/.assistant/agent_bootstrap.py"
-namespace = runpy.run_path(bootstrap_path)
+namespace = runpy.run_path(
+    bootstrap_path,
+    init_globals={"ANCHOR_PROJECT_ID": "<project-id>"},
+)
 anchor = namespace["anchor"]
 ROOT = namespace["ROOT"]
 MANIFEST = namespace["MANIFEST"]
 orientation = namespace["ORIENTATION"]
 bootstrap = namespace["BOOTSTRAP"]
+startup = namespace["STARTUP_PACKET"]
 assert bootstrap["success"] is True
+assert startup["status"] == "ready"
 ```
+
+If Databricks reports that Anchor is missing or stale, run the exact pinned latest-stable install
+and restart remediation it emits, then rerun this identical call. `anchor portfolio prepare` and
+manual environment application remain recovery/diagnostic tools, not normal startup.
 
 `anchor` is process-bound state returned by this namespace (or by `launch()`), not a top-level
 package export. Never use `from odibi_anchor import anchor`.
 
-The launcher resolves exactly one checkout in this order: an explicit
+In source-checkout mode, the launcher resolves exactly one checkout in this order: an explicit
 `ANCHOR_SOURCE_CHECKOUT` init global or environment value; its `.assistant` parent when that
 is a source checkout; or that parent's fixed sibling `odibi_anchor`. An explicit
 value must be absolute and non-tilde, and an invalid explicit value never falls back.

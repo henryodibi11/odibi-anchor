@@ -1,6 +1,8 @@
 import hashlib
+import io
 import json
 import os
+import runpy
 import shutil
 import sqlite3
 import subprocess
@@ -14,12 +16,248 @@ import odibi_anchor.startup as startup_module
 from odibi_anchor.legacy_import import apply_legacy_import, plan_legacy_import
 from odibi_anchor.portfolio import write_portfolio
 from odibi_anchor.startup import (
+    bootstrap_managed_project,
     doctor,
     install_guidance,
     launch,
     prepare_portfolio_runtime,
     register_project,
 )
+
+
+def _managed_orientation(project_id: str, target: Path, artifact: Path) -> dict:
+    return {
+        "kind": "orientation",
+        "status": {
+            "runtime": {
+                "route_binding": {
+                    "project_id": project_id,
+                    "target_root": str(target),
+                    "artifact_root": str(artifact),
+                    "binding_source": "explicit",
+                }
+            }
+        },
+        "metrics": {"next_required_action": "new_session"},
+        "managed_artifact_actions": [
+            {
+                "artifact": "work_items/",
+                "name": "work_item",
+                "list_or_show": 'anchor("work_item", "list", output_format="dict")',
+            }
+        ],
+    }
+
+
+def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
+    tmp_path, monkeypatch
+):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    home = tmp_path / "state"
+    artifact = home / "workspace" / "projects" / "alpha"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(home),
+            "instruction_root": str(instruction),
+        }},
+        "projects": {"alpha": {"targets": {"local": str(target)}}},
+        "personas": {},
+    })
+    prepared = {
+        "environment": {
+            "ANCHOR_HOME": str(home), "ANCHOR_MEMORY_DB": str(home / ".agent_memory.db"),
+            "ANCHOR_AUTHORITY_ID": "owner", "ANCHOR_TRUST_DOMAIN": "work",
+            "ANCHOR_PROJECT_ID": "alpha", "ANCHOR_PROJECT_ROOT": str(target),
+        },
+        "target_root": str(target), "restore": {"action": "not_applicable"},
+    }
+    observed = {}
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda root, adapter: {
+        "status": "unchanged", "verified_file_count": 92, "verified_skill_count": 18,
+    })
+    def fake_prepare(**kwargs):
+        observed["prepare"] = kwargs
+        return prepared
+
+    monkeypatch.setattr(startup_module, "prepare_portfolio_runtime", fake_prepare)
+
+    def fake_launch(**kwargs):
+        observed["launch"] = kwargs
+        return lambda action, **_kwargs: _managed_orientation("alpha", target, artifact)
+
+    monkeypatch.setattr(startup_module, "launch", fake_launch)
+    isolated_environment = dict(os.environ)
+    for name in prepared["environment"]:
+        isolated_environment.pop(name, None)
+    monkeypatch.setattr(startup_module.os, "environ", isolated_environment)
+
+    result = bootstrap_managed_project(
+        config_path=config, project_id="alpha", instruction_root=instruction
+    )
+
+    assert observed["prepare"] == {
+        "config_path": config, "host_id": "local", "project_id": "alpha",
+    }
+    assert observed["launch"]["project_root"] == str(target)
+    assert result["startup_packet"] == {
+        "kind": "managed_startup_packet", "status": "ready", "project_id": "alpha",
+        "host_id": "local", "target_root": str(target), "artifact_root": str(artifact),
+        "binding_source": "explicit",
+        "guidance": {"status": "unchanged", "verified_files": 92, "verified_skills": 18},
+        "restore": {"action": "not_applicable"}, "project_created": False,
+        "portfolio_change": None, "durable_checkpoint": None,
+        "managed_artifact_actions": result["orientation"]["managed_artifact_actions"],
+        "next_required_action": "new_session",
+    }
+
+
+def test_bootstrap_managed_project_refuses_implicit_creation(tmp_path, monkeypatch):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    before = write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(tmp_path / "state"),
+            "instruction_root": str(instruction),
+        }},
+        "projects": {}, "personas": {},
+    })["sha256"]
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+
+    with pytest.raises(RuntimeError, match="creation requires explicit user authorization"):
+        bootstrap_managed_project(
+            config_path=config, project_id="new-project", instruction_root=instruction,
+            project_root=target,
+        )
+
+    assert hashlib.sha256(config.read_bytes()).hexdigest() == before
+
+
+def test_bootstrap_managed_project_explicit_creation_checkpoints_state(
+    tmp_path, monkeypatch
+):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    home = tmp_path / "state"
+    durable = tmp_path / "durable"
+    artifact = home / "workspace" / "projects" / "new-project"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    durable.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(home),
+            "instruction_root": str(instruction), "durable_root": str(durable),
+        }},
+        "projects": {}, "personas": {},
+    })
+    prepared = {
+        "environment": {
+            "ANCHOR_HOME": str(home), "ANCHOR_MEMORY_DB": str(home / ".agent_memory.db"),
+            "ANCHOR_AUTHORITY_ID": "owner", "ANCHOR_TRUST_DOMAIN": "work",
+            "ANCHOR_PROJECT_ID": "new-project", "ANCHOR_PROJECT_ROOT": str(target),
+            "ANCHOR_DURABLE_ROOT": str(durable),
+        },
+        "target_root": str(target), "restore": {"action": "created"},
+    }
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {
+        "status": "installed", "verified_file_count": 1, "verified_skill_count": 1,
+    })
+    monkeypatch.setattr(startup_module, "prepare_portfolio_runtime", lambda **_kwargs: prepared)
+    monkeypatch.setattr(startup_module, "launch", lambda **_kwargs: (
+        lambda action, **kwargs: _managed_orientation("new-project", target, artifact)
+    ))
+    checkpoint_calls = []
+    monkeypatch.setattr("odibi_anchor.durability.snapshot_state", lambda **kwargs: (
+        checkpoint_calls.append(kwargs) or {"snapshot_id": "checkpoint"}
+    ))
+    isolated_environment = dict(os.environ)
+    for name in prepared["environment"]:
+        isolated_environment.pop(name, None)
+    monkeypatch.setattr(startup_module.os, "environ", isolated_environment)
+
+    result = bootstrap_managed_project(
+        config_path=config, project_id="new-project", instruction_root=instruction,
+        create_if_missing=True, project_root=target,
+    )
+
+    assert result["startup_packet"]["project_created"] is True
+    assert result["startup_packet"]["durable_checkpoint"] == {"snapshot_id": "checkpoint"}
+    assert checkpoint_calls[0]["source_artifacts"] == home / "workspace" / "projects"
+    assert checkpoint_calls[0]["databricks"] is False
+    from odibi_anchor.portfolio import load_portfolio
+    assert load_portfolio(config)["projects"]["new-project"]["targets"]["local"] == str(target)
+
+
+def test_bootstrap_managed_project_conflict_precedes_creation_write(tmp_path, monkeypatch):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    before = write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(tmp_path / "state"),
+            "instruction_root": str(instruction),
+        }},
+        "projects": {}, "personas": {},
+    })["sha256"]
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setenv("ANCHOR_PROJECT_ID", "other-project")
+
+    with pytest.raises(RuntimeError, match="restart Python before binding another project"):
+        bootstrap_managed_project(
+            config_path=config, project_id="new-project", instruction_root=instruction,
+            create_if_missing=True, project_root=target,
+        )
+
+    assert hashlib.sha256(config.read_bytes()).hexdigest() == before
+
+
+def test_bootstrap_managed_project_refuses_ambiguous_instruction_host(tmp_path):
+    instruction = tmp_path / "instructions"
+    target = tmp_path / "target"
+    config = tmp_path / "anchor.toml"
+    instruction.mkdir()
+    target.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {
+            "one": {
+                "adapter": "amp", "local_state_root": str(tmp_path / "one"),
+                "instruction_root": str(instruction),
+            },
+            "two": {
+                "adapter": "amp", "local_state_root": str(tmp_path / "two"),
+                "instruction_root": str(instruction),
+            },
+        },
+        "projects": {"alpha": {"targets": {
+            "one": str(target), "two": str(target),
+        }}},
+        "personas": {},
+    })
+
+    with pytest.raises(ValueError, match="multiple portfolio hosts"):
+        bootstrap_managed_project(
+            config_path=config, project_id="alpha", instruction_root=instruction,
+        )
 
 
 def test_launch_binds_exact_route_and_returns_callable(tmp_path, monkeypatch):
@@ -637,12 +875,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.6"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.7"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.6"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.7"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -720,6 +958,90 @@ def test_assistant_launcher_uses_installed_package_without_source_checkout(tmp_p
     assert result["runtime"] == "installed_distribution"
     assert result["project_id"] == "alpha"
     assert result["target_root"] == str(target)
+
+
+def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
+    tmp_path, monkeypatch
+):
+    repository = Path(__file__).resolve().parents[1]
+    host = tmp_path / "host"
+    launcher = host / ".assistant" / "agent_bootstrap.py"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
+    payload = {
+        "releases": {
+            "0.3.7": [{"yanked": False}],
+            "0.4.0rc1": [{"yanked": False}],
+            "9.9.9": [{"yanked": True}],
+        }
+    }
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(json.dumps(payload).encode()),
+    )
+    monkeypatch.setattr("importlib.metadata.version", lambda _name: "0.3.6")
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
+    monkeypatch.delenv("ANCHOR_SOURCE_CHECKOUT", raising=False)
+
+    with pytest.raises(RuntimeError) as raised:
+        runpy.run_path(str(launcher))
+
+    message = str(raised.value)
+    assert '%pip install "odibi-anchor[databricks]==0.3.7"' in message
+    assert "dbutils.library.restartPython()" in message
+    assert "0.4.0rc1" not in message
+    assert "9.9.9" not in message
+
+
+def test_assistant_launcher_bootstraps_managed_project_from_id_only(
+    tmp_path, monkeypatch, capsys
+):
+    import odibi_anchor
+
+    repository = Path(__file__).resolve().parents[1]
+    host = tmp_path / "host"
+    target = tmp_path / "target"
+    launcher = host / ".assistant" / "agent_bootstrap.py"
+    config = host / ".odibi-anchor" / "anchor.toml"
+    launcher.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True)
+    target.mkdir()
+    shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
+    config.write_text("managed by test\n", encoding="utf-8")
+    packet = {
+        "kind": "managed_startup_packet", "status": "ready", "project_id": "alpha",
+        "target_root": str(target), "managed_artifact_actions": [],
+        "next_required_action": "new_session",
+    }
+    observed = {}
+
+    def fake_bootstrap_managed_project(**kwargs):
+        observed.update(kwargs)
+        return {
+            "anchor": lambda *_args, **_kwargs: {}, "root": str(target), "manifest": None,
+            "orientation": {"kind": "orientation"}, "startup_packet": packet,
+            "preparation": {"environment": {"ANCHOR_HOME": str(tmp_path / "state")}},
+        }
+
+    monkeypatch.setattr(
+        odibi_anchor, "bootstrap_managed_project", fake_bootstrap_managed_project
+    )
+    monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    monkeypatch.delenv("ANCHOR_SOURCE_CHECKOUT", raising=False)
+    monkeypatch.delenv("ANCHOR_PROJECT_ID", raising=False)
+
+    namespace = runpy.run_path(
+        str(launcher), init_globals={"ANCHOR_PROJECT_ID": "alpha"}
+    )
+
+    assert observed == {
+        "config_path": config, "project_id": "alpha", "instruction_root": host,
+        "create_if_missing": False, "project_root": None,
+    }
+    assert namespace["STARTUP_PACKET"] == packet
+    assert namespace["BOOTSTRAP"]["runtime"] == "managed_installed_distribution"
+    printed = capsys.readouterr().out
+    assert 'ODIBI_ANCHOR_STARTUP={"kind": "managed_startup_packet"' in printed
 
 
 def _legacy_db(path, *, overrides=None):

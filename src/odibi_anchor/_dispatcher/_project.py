@@ -19,7 +19,7 @@ _ACTIVE_PROJECT_FILE = ".active_project"
 _PROJECT_DESCRIPTOR = "PROJECT.md"
 ROUTE_BINDING_SCHEMA_VERSION = "1.0"
 _BINDING_SOURCES = frozenset({"explicit", "target_match", "legacy_selector"})
-ARTIFACT_CONTRACT_VERSION = "1.0"
+ARTIFACT_CONTRACT_VERSION = "1.1"
 _ARTIFACT_CONTRACT = (
     {
         "path": "PROJECT.md",
@@ -27,6 +27,11 @@ _ARTIFACT_CONTRACT = (
         "scaffold": False,
         "classify_as_managed": True,
         "migratable": False,
+        "managed_action": {
+            "name": "project",
+            "list_or_show": 'anchor("project", "status", output_format="dict")',
+            "help": 'anchor("help", "project", output_format="dict")',
+        },
         "use_when": "Recording stable project identity, ownership, roots, boundaries, and phase.",
         "do_not_use_for": "Session logs or implementation details.",
     },
@@ -37,6 +42,11 @@ _ARTIFACT_CONTRACT = (
         "classify_as_managed": True,
         "migratable": True,
         "migration_order": 0,
+        "managed_action": {
+            "name": "problem",
+            "list_or_show": 'anchor("problem", "list", output_format="dict")',
+            "help": 'anchor("help", "problem", output_format="dict")',
+        },
         "use_when": "An observed gap or uncertainty requires investigation before choosing a response.",
         "do_not_use_for": "Disguised feature requests with a predetermined solution.",
     },
@@ -47,6 +57,7 @@ _ARTIFACT_CONTRACT = (
         "classify_as_managed": True,
         "migratable": True,
         "migration_order": 3,
+        "managed_action": None,
         "use_when": "A consequential choice, rejected alternative, rationale, or reversal condition must survive sessions.",
         "do_not_use_for": "Routine implementation details with no durable consequence.",
     },
@@ -57,6 +68,11 @@ _ARTIFACT_CONTRACT = (
         "classify_as_managed": True,
         "migratable": True,
         "migration_order": 1,
+        "managed_action": {
+            "name": "spec",
+            "list_or_show": 'anchor("spec", "list", output_format="dict")',
+            "help": 'anchor("help", "spec", output_format="dict")',
+        },
         "use_when": "A precise behavioral contract is needed because competent implementations could diverge materially.",
         "do_not_use_for": "Generic planning or work that is already unambiguous.",
     },
@@ -67,6 +83,11 @@ _ARTIFACT_CONTRACT = (
         "classify_as_managed": True,
         "migratable": True,
         "migration_order": 2,
+        "managed_action": {
+            "name": "work_item",
+            "list_or_show": 'anchor("work_item", "list", output_format="dict")',
+            "help": 'anchor("help", "work_item", output_format="dict")',
+        },
         "use_when": "A bounded unit of work needs authorization, scope, ownership, acceptance criteria, and lifecycle state.",
         "do_not_use_for": "Unapproved ideas or unresolved investigation questions.",
     },
@@ -76,6 +97,7 @@ _ARTIFACT_CONTRACT = (
         "scaffold": True,
         "classify_as_managed": True,
         "migratable": False,
+        "managed_action": None,
         "use_when": "Retaining reproducible analysis, execution evidence, or a durable multi-session handoff.",
         "do_not_use_for": "Canonical product source that belongs in the authorized target root.",
     },
@@ -85,6 +107,7 @@ _ARTIFACT_CONTRACT = (
         "scaffold": True,
         "classify_as_managed": True,
         "migratable": False,
+        "managed_action": None,
         "use_when": "Retaining sanitized, provenance-recorded input or reference material needed by managed analysis.",
         "do_not_use_for": "Copying canonical source from a referenced target repository.",
     },
@@ -94,6 +117,7 @@ _ARTIFACT_CONTRACT = (
         "scaffold": True,
         "classify_as_managed": True,
         "migratable": False,
+        "managed_action": None,
         "use_when": "Preserving superseded or closed-cycle material that is no longer active authority.",
         "do_not_use_for": "Records that still govern current work.",
     },

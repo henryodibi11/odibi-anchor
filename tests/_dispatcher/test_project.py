@@ -84,6 +84,13 @@ def test_artifact_contract_is_runtime_owned_and_complete() -> None:
     )
     assert all("root_name" in item for item in contract["artifacts"])
     assert all(item["use_when"] and item["do_not_use_for"] for item in contract["artifacts"])
+    actions = {
+        item["path"]: item["managed_action"] for item in contract["artifacts"]
+    }
+    assert actions["work_items/"]["list_or_show"] == (
+        'anchor("work_item", "list", output_format="dict")'
+    )
+    assert actions["notebooks/"] is None
 
 
 def test_existing_project_inherits_runtime_contract_without_record_rewrite(tmp_path: Path) -> None:

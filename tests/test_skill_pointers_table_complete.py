@@ -204,7 +204,7 @@ def test_instructions_enforce_explicit_bootstrap_project_and_delivery_contract()
     required = (
         "## ⛔ STOP — mandatory agent execution contract",
         "Odibi Anchor use is mandatory",
-        'namespace = runpy.run_path(bootstrap_path)',
+        'namespace = runpy.run_path(',
         'assert bootstrap["success"] is True',
         'project_state = anchor("project", "status", output_format="dict")',
         "must not redirect an already-bound runtime",
@@ -224,14 +224,13 @@ def test_instructions_enforce_explicit_bootstrap_project_and_delivery_contract()
         "Do not edit after a successful gate",
         "NEVER use `exec`",
         "NEVER retry",
-        "Issue exactly one Anchor call at a time",
-        "NEVER bundle,\nparallelize, or concurrently execute Anchor calls",
-        "independent non-Anchor reads may run in parallel",
+        "Issue one Anchor call at a time",
+        "Independent non-Anchor reads may run in parallel",
     )
     for phrase in required:
         assert phrase in text
     assert text.index("## ⛔ STOP") < text.index("## Route native skills")
-    assert text.index("runpy.run_path(bootstrap_path)") < text.index('anchor("new_session"')
+    assert text.index("namespace = runpy.run_path(") < text.index('anchor("new_session"')
     assert "same persistent Python process" in text
     assert "artifact_root" in text
     assert "target_root" in text
@@ -1652,6 +1651,7 @@ def _write_trampoline_target(
         "DELEGATED_GLOBALS = {",
         "    'provider': globals().get('ANCHOR_REPOSITORY_PROVIDER'),",
         "    'unrelated': globals().get('UNRELATED'),",
+        "    'project': os.environ.get('ANCHOR_PROJECT_ID'),",
         "}",
     ]
     if sentinel is not None:
@@ -1687,16 +1687,18 @@ def _copy_assistant_launcher(destination: Path) -> Path:
     return launcher
 
 
-def test_assistant_launcher_actual_source_exports_live_bootstrap_state(tmp_path):
+def test_assistant_launcher_actual_source_exports_live_bootstrap_state(tmp_path, monkeypatch):
     checkout = tmp_path / "explicit-checkout"
     _write_trampoline_target(checkout)
     provider = object()
+    monkeypatch.delenv("ANCHOR_PROJECT_ID", raising=False)
 
     namespace = runpy.run_path(
         str(ROOT / ".assistant" / "agent_bootstrap.py"),
         init_globals={
             "ANCHOR_SOURCE_CHECKOUT": str(checkout),
             "ANCHOR_REPOSITORY_PROVIDER": provider,
+            "ANCHOR_PROJECT_ID": "source-project",
             "UNRELATED": "must-not-propagate",
         },
     )
@@ -1713,7 +1715,9 @@ def test_assistant_launcher_actual_source_exports_live_bootstrap_state(tmp_path)
     assert delegated["DELEGATED_GLOBALS"] == {
         "provider": provider,
         "unrelated": None,
+        "project": "source-project",
     }
+    assert "ANCHOR_PROJECT_ID" not in os.environ
 
 
 @pytest.mark.parametrize("copied_topology", [False, True])
@@ -1892,7 +1896,7 @@ def test_bootstrap_instructions_and_entrypoint_cannot_drift():
     assert launcher.is_file()
     assert "agent_bootstrap.py" in instructions
     assert 'bootstrap_path = "<instruction root>/.assistant/agent_bootstrap.py"' in workflow
-    assert workflow.count("runpy.run_path(bootstrap_path)") == 2
+    assert workflow.count("runpy.run_path(") == 2
     assert "re-run `init()`" not in workflow
     assert "same persistent Python process" in instructions
     assert "If deterministic resolution fails" in instructions
@@ -1902,7 +1906,7 @@ def test_bootstrap_instructions_and_entrypoint_cannot_drift():
     assert "This is an automatic host obligation, not user-prompt boilerplate" in workflow
     assert "existing external `target=` directory is valid and expected" in workflow
     assert "fixed sibling `odibi_anchor`" in workflow
-    assert "host troubleshooting/fallback equivalent" in public_contract
+    assert "recovery paths, not normal startup" in public_contract
     for stale in (
         'Path.cwd() / "src"',
         "user@example.com",

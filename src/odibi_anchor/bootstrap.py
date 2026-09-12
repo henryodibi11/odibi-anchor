@@ -752,6 +752,11 @@ def init(
         _next = (_st.get("metrics") or {}).get("next_required_action")
         _summary = "Orientation: ran status + audit_history; task memory is deferred to acceptance."
         _artifact_contract = artifact_contract()
+        _managed_artifact_actions = [
+            {"artifact": item["path"], **item["managed_action"]}
+            for item in _artifact_contract["artifacts"]
+            if item["managed_action"] is not None
+        ]
         _capture_standards = capture_standards_contract()
         ctx = build_base_context(
             kind="orientation",
@@ -771,6 +776,7 @@ def init(
             },
             audit_history=_parts.get("audit_history"),
             artifact_contract=_artifact_contract,
+            managed_artifact_actions=_managed_artifact_actions,
             capture_standards=_capture_standards,
         )
         if _of == "markdown":
@@ -790,6 +796,19 @@ def init(
                 )
             _lines.append("")
             _lines.append(_artifact_contract["activation"])
+            _lines.append("")
+            _lines.append("## Managed artifact actions")
+            _lines.append("")
+            for _action in _managed_artifact_actions:
+                _lines.append(
+                    f"- `{_action['artifact']}` → `{_action['list_or_show']}`; "
+                    f"details: `{_action['help']}`"
+                )
+            _lines.append("")
+            _lines.append(
+                "Use these managed actions before direct artifact filesystem traversal. "
+                "Artifacts without a managed action explicitly require a reported filesystem fallback."
+            )
             _lines.append("")
             _lines.extend([render_capture_standards_markdown(_capture_standards), ""])
             _lines.append(
@@ -2018,6 +2037,20 @@ def init(
                 )
                 if contract.get("activation"):
                     lines.extend(["", str(contract["activation"])])
+                actions = _final.get("managed_artifact_actions", [])
+                if actions:
+                    lines.extend(["", "## Managed artifact actions", ""])
+                    lines.extend(
+                        f"- `{item['artifact']}` → `{item['list_or_show']}`; "
+                        f"details: `{item['help']}`"
+                        for item in actions
+                    )
+                    lines.extend([
+                        "",
+                        "Use these managed actions before direct artifact filesystem traversal. "
+                        "Artifacts without a managed action explicitly require a reported "
+                        "filesystem fallback.",
+                    ])
                 if capture.get("version"):
                     from odibi_anchor._dispatcher._capture_standards import (
                         render_capture_standards_markdown,

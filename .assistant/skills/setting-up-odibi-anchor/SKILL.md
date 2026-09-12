@@ -14,29 +14,21 @@ after compute replacement, or being installed for a new host or repository.
 
 ## When NOT to load
 
-Do not load for ordinary implementation, review, data work, or memory use after doctor,
-portfolio preparation, and bootstrap are already healthy.
+Do not load for ordinary implementation, review, data work, or memory use after the managed
+launcher returns a ready startup packet.
 
 ## Workflow
 
-1. Identify the host, intended project root, instruction root, local state root, durable
-   root, authority ID, and portfolio path. Never infer a missing path from cwd or
-   `.active_project`.
-2. Do not assume the package is installed because this skill or other managed guidance is
-   readable. Before importing Anchor, inspect `importlib.metadata.version("odibi-anchor")`.
-   If the distribution is missing or differs from the exact approved release, install it with
-   the applicable command:
-   - local/CLI: `python -m pip install "odibi-anchor==0.3.6"`
-   - MCP: `python -m pip install "odibi-anchor[mcp]==0.3.6"`
-   - Databricks: `%pip install "odibi-anchor[databricks]==0.3.6"`, then run
-     `dbutils.library.restartPython()`.
-
-   Do not use an unpinned/latest package. A Databricks Python restart clears all imports,
-   variables, and callable bindings; resume this workflow at step 2 in the restarted process.
-   If the exact distribution is already active, do not reinstall it.
-3. Verify `importlib.metadata.version("odibi-anchor") == odibi_anchor.__version__ == "0.3.6"`
-   and verify that `odibi_anchor.__file__` is under the active environment's site-packages.
-   Never continue through a source checkout when an installed release was requested.
+1. Identify the exact intended project ID and instruction root. For an existing configured
+   project, run the sibling `.assistant/agent_bootstrap.py` with only
+   `init_globals={"ANCHOR_PROJECT_ID": "<project-id>"}`. Do not rediscover host, local state,
+   durable state, authority, target, or portfolio paths manually.
+2. The managed Databricks launcher checks PyPI before importing Anchor. If the distribution is
+   missing or stale, execute its exact pinned latest-stable `%pip install` remediation, run
+   `dbutils.library.restartPython()`, and rerun the same launcher call. Never guess a version or
+   use an unrecorded moving install. The launcher verifies distribution/runtime agreement.
+3. Inspect `STARTUP_PACKET`: require `status=ready`, the requested project ID and exact target,
+   then use its `managed_artifact_actions` for artifact discovery instead of direct traversal.
 4. If no portfolio exists, create a launch-ready PortfolioV1 without manual TOML surgery:
 
    ```bash
@@ -49,16 +41,17 @@ portfolio preparation, and bootstrap are already healthy.
      [--durable-root <absolute-durable-root>]
    ```
 
-   If the portfolio exists but the explicitly approved project does not, run `anchor portfolio
-   add-project` with its exact existing target. The target need not be Git unless source-change
-   evidence is required. Follow the returned `portfolio.prepare` operation; never try to
-   bootstrap a project ID before adding it to the portfolio.
+   If the portfolio exists but the explicitly approved project does not, prefer the managed
+   launcher with `ANCHOR_CREATE_PROJECT=True` and one exact existing `ANCHOR_PROJECT_ROOT`.
+   It performs the guarded portfolio update, scaffold/register, and durable checkpoint. The
+   target need not be Git unless source-change evidence is required. A request merely to use a
+   project does not authorize this write-capable path.
 
 5. Run `anchor portfolio validate`, then `anchor setup-host <adapter> --target
    <instruction-root>`. Setup is manifest-managed and must refuse modified managed files
    or incompatible user-owned collisions.
-6. Prepare before doctor whenever the portfolio exists. On Databricks/Genie, use the direct
-   Python API in the persistent notebook process; do not substitute a prohibited CLI subprocess:
+6. The managed launcher is the primary preparation path. Use the direct preparation API below
+   only to recover or diagnose a launcher failure; do not substitute a prohibited CLI subprocess:
 
    ```python
    import os

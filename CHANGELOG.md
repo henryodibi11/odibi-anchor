@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] - 2026-09-12
+
+### Added
+
+- The managed launcher now needs only an explicit project ID for normal startup. It discovers the
+  sibling portfolio and exact host, reconciles guidance, restores durable state, binds the route,
+  orients once, and emits a compact startup packet.
+- Explicitly authorized missing-project startup can optimistically guard the portfolio update,
+  scaffold and register the exact existing target, and checkpoint the resulting durable state.
+- Orientation advertises copy-ready managed actions for project, Problem, Spec, and work-item
+  artifacts, while identifying artifact classes that still require a reported filesystem fallback.
+
+### Changed
+
+- On Databricks, the managed launcher resolves the newest non-yanked stable PyPI release and emits
+  an exact pinned install-and-restart remediation only when the active distribution is stale or
+  missing. Prompts and managed guidance no longer hard-code a package version.
+
 ## [0.3.6] - 2026-09-12
 
 ### Fixed
@@ -155,3 +173,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.4
 [0.3.5]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.5
 [0.3.6]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.6
+[0.3.7]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.7

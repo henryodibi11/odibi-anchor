@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.6"
+python -m pip install "odibi-anchor==0.3.7"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.6"
+python -m pip install "odibi-anchor[mcp]==0.3.7"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,34 +64,31 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.6"
+%pip install "odibi-anchor[databricks]==0.3.7"
 dbutils.library.restartPython()
 ```
 
-Prepare the configured portfolio first. It selects local live state, restores durable state,
-and returns the exact bootstrap environment. No Anchor source clone or manually chosen
-`ANCHOR_HOME` is required:
+After one-time host setup, run the managed launcher with only the project ID. It selects local
+state, restores durable artifacts, binds the exact route, and advertises managed artifact actions.
+No source clone, host ID, portfolio path, or manually chosen `ANCHOR_HOME` is required:
 
 ```python
-import os
 import runpy
 
-from odibi_anchor import prepare_portfolio_runtime
-
-prepared = prepare_portfolio_runtime(
-    config_path="/Workspace/Users/<user>/.odibi-anchor/anchor.toml",
-    host_id="databricks-work",
-    project_id="my-databricks-project",
+namespace = runpy.run_path(
+    "/Workspace/Users/<user>/.assistant/agent_bootstrap.py",
+    init_globals={"ANCHOR_PROJECT_ID": "my-databricks-project"},
 )
-os.environ.update(prepared["environment"])
-namespace = runpy.run_path(prepared["next_operation"]["arguments"]["script"])
 anchor = namespace["anchor"]
-status = anchor("status", output_format="dict")
+startup = namespace["STARTUP_PACKET"]
+assert startup["status"] == "ready"
 ```
 
+If the installed distribution is missing or stale, the launcher returns the exact pinned
+latest-stable install and Python-restart remediation; run it and rerun the same launcher call.
 The `anchor` callable is process-bound and comes from the launcher namespace (or the return
 value of `odibi_anchor.launch()`); `from odibi_anchor import anchor` is intentionally unsupported.
-Run the read-only doctor after preparation when additional startup diagnostics are needed.
+Run doctor only when additional startup diagnostics are needed.
 
 Run `anchor setup-host databricks --target /Workspace/Users/<user>` once to install and
 subsequently reconcile the packaged instructions and launcher. Workspace targets are published

@@ -1,6 +1,5 @@
 """Lint the native skill-file contract."""
 import os
-import tomllib
 from pathlib import Path
 
 SKILLS_DIR = os.path.join(".assistant", "skills")
@@ -24,25 +23,22 @@ def test_new_skills_declare_when_not_to_load_and_enforcement():
     assert not failures, "\n".join(failures)
 
 
-def test_managed_startup_guidance_has_exact_databricks_install_preflight():
-    version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"][
-        "version"
-    ]
-    command = f'%pip install "odibi-anchor[databricks]=={version}"'
+def test_managed_startup_guidance_uses_launcher_resolved_install_preflight():
     instructions = Path(".assistant_instructions.md").read_text(encoding="utf-8")
     setup_skill = Path(
         ".assistant/skills/setting-up-odibi-anchor/SKILL.md"
     ).read_text(encoding="utf-8")
+    launcher = Path(".assistant/agent_bootstrap.py").read_text(encoding="utf-8")
 
-    assert command in instructions
-    assert command in setup_skill
-    assert "Never assume the Python package is installed" in instructions
-    assert "Do not assume the package is installed" in setup_skill
-    assert "dbutils.library.restartPython()" in instructions
-    assert "dbutils.library.restartPython()" in setup_skill
     for text in (instructions, setup_skill):
-        normalized = " ".join(text.split())
-        assert "from odibi_anchor import prepare_portfolio_runtime" in text
-        assert 'os.environ.update(prepared["environment"])' in text
-        assert 'prepared["next_operation"]["arguments"]["script"]' in text
-        assert "durable Volume through FUSE" in normalized
+        assert "latest" in text
+        assert "agent_bootstrap.py" in text
+        assert "ANCHOR_PROJECT_ID" in text
+    assert "https://pypi.org/pypi/odibi-anchor/json" in launcher
+    assert 'odibi-anchor[databricks]=={_latest}' in launcher
+    assert "dbutils.library.restartPython()" in launcher
+    assert "dbutils.library.restartPython()" in setup_skill
+    assert "from odibi_anchor import prepare_portfolio_runtime" in setup_skill
+    assert 'os.environ.update(prepared["environment"])' in setup_skill
+    assert 'prepared["next_operation"]["arguments"]["script"]' in setup_skill
+    assert "only to recover or diagnose" in setup_skill

@@ -318,6 +318,229 @@ def prepare_portfolio_runtime(
     }
 
 
+def _managed_host_id(
+    portfolio: Mapping[str, Any],
+    *,
+    instruction_root: Path,
+    host_id: str | None,
+) -> str:
+    """Resolve one host from explicit input or the launcher's exact instruction root."""
+    hosts = portfolio.get("hosts")
+    if not isinstance(hosts, Mapping):
+        raise ValueError("portfolio hosts are unavailable")
+    if host_id is not None:
+        if host_id not in hosts:
+            raise ValueError(f"host is not configured: {host_id}")
+        selected = hosts[host_id]
+        configured_root = selected.get("instruction_root")
+        if configured_root is not None and Path(configured_root).resolve() != instruction_root:
+            raise ValueError(
+                f"host {host_id} instruction_root does not match the managed launcher"
+            )
+        return host_id
+    matches = [
+        candidate
+        for candidate, settings in hosts.items()
+        if isinstance(settings, Mapping)
+        and settings.get("instruction_root") is not None
+        and Path(settings["instruction_root"]).resolve() == instruction_root
+    ]
+    if not matches:
+        raise ValueError("no portfolio host matches the managed launcher instruction root")
+    if len(matches) != 1:
+        raise ValueError("multiple portfolio hosts match the managed launcher instruction root")
+    return str(matches[0])
+
+
+def bootstrap_managed_project(
+    *,
+    config_path: str | os.PathLike[str],
+    project_id: str,
+    instruction_root: str | os.PathLike[str],
+    host_id: str | None = None,
+    create_if_missing: bool = False,
+    project_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Prepare, bind, orient, and describe one portfolio-managed runtime.
+
+    Existing projects need only their ID. Creation is a separate explicit mode and
+    requires an exact existing target; successful creation is durably checkpointed
+    when the selected host configures durable storage.
+    """
+    from odibi_anchor.portfolio import add_project, load_portfolio_document, resolve_project
+
+    root = _absolute_directory(instruction_root, "instruction_root")
+    if not isinstance(project_id, str) or re.fullmatch(
+        r"[a-z0-9]+(?:-[a-z0-9]+)*", project_id
+    ) is None:
+        raise ValueError("project_id must be a canonical lowercase hyphenated project ID")
+    document = load_portfolio_document(config_path)
+    portfolio = document["portfolio"]
+    selected_host = _managed_host_id(
+        portfolio, instruction_root=root, host_id=host_id
+    )
+    host = portfolio["hosts"][selected_host]
+
+    from odibi_anchor.host_setup import setup_host
+
+    guidance = setup_host(root, adapter=host["adapter"])
+
+    def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
+        conflicts = {
+            name
+            for name, value in environment.items()
+            if name in os.environ and os.environ[name] != value
+        }
+        if conflicts:
+            raise RuntimeError(
+                "managed bootstrap environment conflicts with this Python process; "
+                "restart Python before binding another project: "
+                + ", ".join(sorted(conflicts))
+            )
+
+    created = False
+    portfolio_change: dict[str, Any] | None = None
+    target: Path | None = None
+    if project_id not in portfolio.get("projects", {}):
+        if not create_if_missing:
+            raise RuntimeError(
+                f"managed project {project_id!r} is not configured; creation requires "
+                "explicit user authorization and one exact project_root"
+            )
+        if project_root is None:
+            raise ValueError("project_root is required when create_if_missing is true")
+        target = _absolute_directory(project_root, "project_root")
+        expected_environment = {
+            "ANCHOR_HOME": host["local_state_root"],
+            "ANCHOR_MEMORY_DB": os.path.join(
+                host["local_state_root"], ".agent_memory.db"
+            ).replace("\\", "/"),
+            "ANCHOR_AUTHORITY_ID": portfolio["authority"]["id"],
+            "ANCHOR_TRUST_DOMAIN": portfolio["authority"]["trust_domain"],
+            "ANCHOR_PROJECT_ID": project_id,
+            "ANCHOR_PROJECT_ROOT": str(target),
+            **(
+                {"ANCHOR_DURABLE_ROOT": host["durable_root"]}
+                if host.get("durable_root")
+                else {}
+            ),
+        }
+        refuse_environment_conflicts(expected_environment)
+        portfolio_change = add_project(
+            config_path,
+            project_id=project_id,
+            host_id=selected_host,
+            target_root=str(target),
+            expected_sha256=document["sha256"],
+        )
+        created = True
+    elif create_if_missing:
+        raise ValueError(f"managed project already exists: {project_id}")
+    else:
+        expected_environment = resolve_project(
+            portfolio, host_id=selected_host, project_id=project_id
+        )["environment"]
+        refuse_environment_conflicts(expected_environment)
+
+    prepared = prepare_portfolio_runtime(
+        config_path=config_path,
+        host_id=selected_host,
+        project_id=project_id,
+    )
+    if prepared["environment"] != expected_environment:
+        raise RuntimeError("portfolio environment changed during managed bootstrap preparation")
+    os.environ.update(prepared["environment"])
+    anchor = launch(
+        anchor_home=prepared["environment"]["ANCHOR_HOME"],
+        project_id=project_id,
+        project_root=prepared["target_root"],
+        output_format="dict",
+    )
+    orientation = anchor("orient", output_format="dict")
+    if not isinstance(orientation, Mapping) or orientation.get("kind") != "orientation":
+        raise RuntimeError("Odibi Anchor orientation returned an invalid structured result")
+    status = orientation.get("status")
+    runtime = status.get("runtime") if isinstance(status, Mapping) else None
+    binding = runtime.get("route_binding") if isinstance(runtime, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or binding.get("project_id") != project_id
+        or binding.get("target_root") != prepared["target_root"]
+        or not binding.get("artifact_root")
+    ):
+        raise RuntimeError("managed bootstrap orientation does not match the requested project")
+
+    durable_checkpoint: dict[str, Any] | None = None
+    durable_root = prepared["environment"].get("ANCHOR_DURABLE_ROOT")
+    if created and durable_root is not None:
+        from odibi_anchor.durability import snapshot_state
+
+        home = Path(prepared["environment"]["ANCHOR_HOME"])
+        durable_checkpoint = snapshot_state(
+            source_db=prepared["environment"]["ANCHOR_MEMORY_DB"],
+            source_artifacts=home / "workspace" / "projects",
+            durable_root=durable_root,
+            authority_id=prepared["environment"]["ANCHOR_AUTHORITY_ID"],
+            databricks=host["adapter"] == "databricks",
+        )
+
+    startup_packet = {
+        "kind": "managed_startup_packet",
+        "status": "ready",
+        "project_id": project_id,
+        "host_id": selected_host,
+        "target_root": prepared["target_root"],
+        "artifact_root": binding.get("artifact_root"),
+        "binding_source": binding.get("binding_source"),
+        "guidance": {
+            "status": guidance.get("status"),
+            "verified_files": guidance.get("verified_file_count"),
+            "verified_skills": guidance.get("verified_skill_count"),
+        },
+        "restore": {
+            key: prepared["restore"][key]
+            for key in (
+                "status", "action", "reason", "snapshot_id", "sha256", "format",
+                "integrity_check", "continuity",
+            )
+            if key in prepared["restore"]
+        },
+        "project_created": created,
+        "portfolio_change": (
+            {
+                key: portfolio_change[key]
+                for key in ("status", "path", "sha256", "project_id", "host_id", "target_root")
+                if key in portfolio_change
+            }
+            if portfolio_change is not None
+            else None
+        ),
+        "durable_checkpoint": (
+            {
+                key: durable_checkpoint[key]
+                for key in ("status", "action", "snapshot_id", "sha256", "format")
+                if key in durable_checkpoint
+            }
+            if durable_checkpoint is not None
+            else None
+        ),
+        "managed_artifact_actions": orientation.get("managed_artifact_actions", []),
+        "next_required_action": (orientation.get("metrics") or {}).get(
+            "next_required_action"
+        ),
+    }
+    return {
+        "kind": "managed_project_runtime",
+        "status": "ready",
+        "anchor": anchor,
+        "root": prepared["target_root"],
+        "manifest": getattr(anchor, "manifest", None),
+        "orientation": orientation,
+        "preparation": prepared,
+        "startup_packet": startup_packet,
+    }
+
+
 def _open_tasks(database: Path, project_id: str | None, target: Path | None) -> dict[str, Any]:
     if not database.is_file():
         return {"status": "unavailable", "count": None, "implication": "no state database exists"}
