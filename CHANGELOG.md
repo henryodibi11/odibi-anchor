@@ -2,6 +2,14 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] - 2026-09-12
+
+### Fixed
+
+- Managed host instructions and the setup skill now require an explicit, pinned installation
+  check before the first Anchor import, including the Databricks Python restart and post-restart
+  distribution, runtime-version, and module-origin verification.
+
 ## [0.3.4] - 2026-09-12
 
 ### Changed
@@ -127,3 +135,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.2]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.2
 [0.3.3]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.3
 [0.3.4]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.4
+[0.3.5]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.5

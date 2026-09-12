@@ -22,14 +22,21 @@ portfolio preparation, and bootstrap are already healthy.
 1. Identify the host, intended project root, instruction root, local state root, durable
    root, authority ID, and portfolio path. Never infer a missing path from cwd or
    `.active_project`.
-2. Install one exact released package. Use the host extra when applicable:
-   - local/CLI: `python -m pip install "odibi-anchor==<version>"`
-   - MCP: `python -m pip install "odibi-anchor[mcp]==<version>"`
-   - Databricks: `%pip install "odibi-anchor[databricks]==<version>"`, then
+2. Do not assume the package is installed because this skill or other managed guidance is
+   readable. Before importing Anchor, inspect `importlib.metadata.version("odibi-anchor")`.
+   If the distribution is missing or differs from the exact approved release, install it with
+   the applicable command:
+   - local/CLI: `python -m pip install "odibi-anchor==0.3.5"`
+   - MCP: `python -m pip install "odibi-anchor[mcp]==0.3.5"`
+   - Databricks: `%pip install "odibi-anchor[databricks]==0.3.5"`, then run
      `dbutils.library.restartPython()`.
-3. Verify `importlib.metadata.version("odibi-anchor")`, `odibi_anchor.__version__`, and
-   module origin. Never continue through a source checkout when an installed release was
-   requested.
+
+   Do not use an unpinned/latest package. A Databricks Python restart clears all imports,
+   variables, and callable bindings; resume this workflow at step 2 in the restarted process.
+   If the exact distribution is already active, do not reinstall it.
+3. Verify `importlib.metadata.version("odibi-anchor") == odibi_anchor.__version__ == "0.3.5"`
+   and verify that `odibi_anchor.__file__` is under the active environment's site-packages.
+   Never continue through a source checkout when an installed release was requested.
 4. If no portfolio exists, create a launch-ready PortfolioV1 without manual TOML surgery:
 
    ```bash
