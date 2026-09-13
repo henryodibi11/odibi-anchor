@@ -892,12 +892,57 @@ def test_retry_latest_cannot_cross_a_new_active_obligation(ledger: Path) -> None
 
 def test_capture_hash_includes_authoritative_obligation_provenance(ledger: Path) -> None:
     obligation = activate()
-    item = capture(obligation)["item"]
+    result = capture(obligation)
+    item = result["item"]
     provenance = json.loads(item["provenance"])
     assert provenance["learning_obligation_id"] == obligation["obligation_id"]
     assert provenance["task_window_id"] == "ltw_1"
     assert provenance["session_id"] == "session:1"
     assert "session_ref" not in provenance
+    assert result["next_operation"]["kwargs"] == {
+        "outcome": "observations_recorded", "observation_ids": [item["item_id"]],
+    }
+
+
+def test_capture_evidence_error_exposes_schema_and_help_operation(ledger: Path) -> None:
+    obligation = activate()
+
+    with pytest.raises(ValueError, match="expected a non-empty list") as captured:
+        capture(obligation, evidence="not-a-list")
+
+    recovery = vars(captured.value)
+    assert recovery["error_code"] == "learning_evidence_invalid"
+    assert recovery["context"]["expected_schema"]["item"]["required"] == [
+        "reference_type", "reference",
+    ]
+    assert recovery["next_operation"]["copy_ready"] == "anchor('help', 'learning')"
+
+
+def test_reassessed_observation_explains_completed_state_and_next_operation(ledger: Path) -> None:
+    old_obligation = activate(1)
+    observation = capture(old_obligation)["item"]
+    learning.structured_learning_context(
+        command="assess",
+        _obligation_id=old_obligation["obligation_id"],
+        outcome="observations_recorded",
+        observation_ids=[observation["item_id"]],
+    )
+    current_obligation = activate(2)
+
+    with pytest.raises(ValueError, match="invalid assessment observation") as captured:
+        learning.structured_learning_context(
+            command="assess",
+            _obligation_id=current_obligation["obligation_id"],
+            outcome="observations_recorded",
+            observation_ids=[observation["item_id"]],
+        )
+
+    recovery = vars(captured.value)
+    assert recovery["error_code"] == "learning_observation_already_assessed"
+    assert recovery["context"]["observation_id"] == observation["item_id"]
+    assert recovery["next_operation"]["copy_ready"] == (
+        "anchor('learning', 'list', kind='observation', status='open')"
+    )
 
 
 def test_assessment_key_first_retry_conflict_and_no_learning(ledger: Path) -> None:

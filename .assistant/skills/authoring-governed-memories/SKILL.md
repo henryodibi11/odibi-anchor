@@ -73,7 +73,8 @@ own the information instead.
   repeated use. On an interactive Windows host with no Slack configuration, the command opens
   a local Yes/No owner-presence dialog. In a single-user Databricks session it first returns an
   exact challenge without granting authority; stop until the owner personally sends that phrase
-  in a new Genie message, then pass only that reply as `in_session_approval`. If configured Slack
+  in a new Genie message, then execute `next_operation.copy_ready`, which maps the returned
+  `approval_response` to the required `in_session_approval` parameter. If configured Slack
   is unavailable, the owner may explicitly choose this lane with
   `provider="databricks_in_session"`; never fall back automatically. This lower-assurance
   lane records an in-session assertion, not authenticated identity; workspace login or Genie tool
@@ -82,6 +83,9 @@ own the information instead.
   `anchor("memory", "promotion", command="request_owner_activation", memory_id=...)`; after
   activation, request confirmation separately with
   `anchor("memory", "promotion", command="request_owner_confirmation", memory_id=...)`.
+- Reject an unpromoted candidate with `anchor("reject", "<memory_id>")`. `withdraw` and
+  `quarantine` are rollback operations for an existing promotion event, not candidate-rejection
+  commands. Prefer each result's state-valid `available_operations` over guessed subcommands.
 - Record applications and evidence-backed evaluations when a selected memory materially
   influenced work. These immutable lifecycle records—not legacy mutable counters—inform
   retrieval ranking. Verify against current authority even when the memory is active.

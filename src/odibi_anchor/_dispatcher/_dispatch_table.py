@@ -12,14 +12,18 @@ it closes over ~20 session-state variables and is the natural product of init().
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
+from odibi_anchor._dispatcher._effects import BUILTIN_ACTION_NAMES
 
 # ─── Dispatch Signatures ─────────────────────────────────────────────────────
 # Each entry maps an action name to its canonical usage string.
 # Used by anchor("help") to display the API reference.
 
-DISPATCH_SIGS: dict[str, str] = {
+_ACTION_SIGNATURES: dict[str, str] = {
     "memory":       'anchor("memory", query="...")  # or recovery action=inspect|declare_abandoned|recover',
     "context":      'anchor("context", view="compact|summary|full")  # verified read-only agent context',
     "prepare":      'anchor("prepare", operation="task.create|problem.create|problem.update|work_item.create|work_item.update|gate.qualify|handoff.prepare|learning.assess", inputs={...})',
@@ -33,6 +37,8 @@ DISPATCH_SIGS: dict[str, str] = {
     "import_resolve": 'anchor("import_resolve", symbol="MyClass")',
     "known_bad":    'anchor("known_bad", changed_files=[...])',
     "task":         'anchor("task", "description", goal="...", mode="...", problem="PRB-...", spec="...", work_item="WI-YYYY-NNNN")',
+    "task_rebind":  'anchor("task_rebind", task_window_id="ltw_...")  # exact ID resolves interrupted-task ambiguity',
+    "task_adoption": 'anchor("task_adoption", "inspect|request|withdraw", ...)  # authenticated takeover of dirty work only',
     "gate":         'anchor("gate")  # no args — gate derives ALL evidence from session state',
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',
@@ -60,6 +66,7 @@ DISPATCH_SIGS: dict[str, str] = {
     "contract":     'anchor("contract", df, subject="t", candidate_key_columns=[...])',
     "transform":    'anchor("transform", profile_or_ctx, subject="table")',
     "apply_transform": 'anchor("apply_transform", df, plan_ctx, checkpoint=True)',
+    "apply_sql":    'anchor("apply_sql", "SELECT ...", mode="view|table", target="catalog.schema.table")',
     "rollback":     'anchor("rollback", result, to="step_name")',
     "unpersist":    'anchor("unpersist", result)',
     "coerce_check": 'anchor("coerce_check", old_df, new_df, keys=["id"], columns=["col"])',
@@ -90,6 +97,7 @@ DISPATCH_SIGS: dict[str, str] = {
     "register_tool": 'anchor("register_tool", name="...", callable_path="module:func")',
     "frame":        'anchor("frame")',
     "touched":      'anchor("touched", "path/to/file.py", created=False)',
+    "skill_loaded": 'anchor("skill_loaded", "skill-name")',
     "snapshot":     'anchor("snapshot", decisions=[...], next_steps=[...])',
     "save_snap":    'anchor("save_snap", snapshot, path)',
     "load_snap":    'anchor("load_snap", path)',
@@ -101,6 +109,7 @@ DISPATCH_SIGS: dict[str, str] = {
     "session_log":  'anchor("session_log")',
     "new_session":  'anchor("new_session", name="feature_name", features=3, inline=True)  # inline=False creates a notebook',
     "orient":       'anchor("orient")  # status + audit_history; task memory is deferred',
+    "quick":        'UNAVAILABLE — every task uses full planning; call anchor("task", ...) instead',
     "manifest":     'anchor("manifest")',
     "help":         'anchor("help")  # or anchor("help", "action_name") for details',
     # Registry tools (auto-discovered from tools/ directory)
@@ -121,19 +130,20 @@ DISPATCH_SIGS: dict[str, str] = {
 # ─── Action Groups ────────────────────────────────────────────────────────────
 # Categorized action lists for the grouped help overview.
 
-ACTION_GROUPS: dict[str, list[str]] = {
+_ACTION_GROUP_MEMBERS: dict[str, list[str]] = {
     "Codebase & Memory": [
         "memory", "context", "map", "impact", "consistency", "convention",
         "safe", "semantic", "import_resolve", "known_bad",
     ],
     "Planning & Workflow": [
-        "task", "prepare", "gate", "preflight",
+        "task", "task_rebind", "task_adoption", "prepare", "gate", "preflight",
         "test", "checkpoint", "spec", "problem", "work_item",
     ],
     "Data & Profiling": [
         "profile_table", "microscope", "case_file",
         "quality", "validate", "duplicate", "diff", "schema_diff",
         "contract", "transform", "apply_transform", "rollback", "unpersist",
+        "apply_sql",
         "coerce_check", "coerce_fix", "pre_join", "pre_merge", "diagnose_empty",
         "explain_row",
     ],
@@ -151,11 +161,68 @@ ACTION_GROUPS: dict[str, list[str]] = {
         "concurrency", "memory_stats", "memory_tags", "db_migrate", "memory_hygiene", "session_files", "session_diff",
         "session_delta", "review", "status", "audit_history", "config",
         "project", "skills", "references", "tools", "register_tool", "frame", "manifest",
+        "help", "sync", "orient", "quick",
     ],
-    "File Tracking": ["touched", "log", "session_log"],
+    "File Tracking": ["touched", "skill_loaded", "log", "session_log"],
     "Session Notebooks": ["new_session"],
     "Testing": ["dogfood"],
     "Composed Workflows": ["reconcile", "investigate", "debug", "trace_row", "evolve", "chain"],
+}
+
+
+@dataclass(frozen=True)
+class PublicActionMetadata:
+    """One canonical public action classification consumed by help and transports."""
+
+    name: str
+    usage: str
+    category: str
+    kind: str
+
+
+_PACKAGED_TOOL_ACTION_NAMES = frozenset({
+    "coerce_fix", "diagnose_empty", "explain_row", "pre_join", "pre_merge",
+})
+
+
+def _public_action_metadata() -> MappingProxyType[str, PublicActionMetadata]:
+    expected = BUILTIN_ACTION_NAMES | _PACKAGED_TOOL_ACTION_NAMES
+    grouped = [action for actions in _ACTION_GROUP_MEMBERS.values() for action in actions]
+    duplicates = sorted({action for action in grouped if grouped.count(action) > 1})
+    if duplicates:
+        raise AssertionError(f"public actions occur in multiple help groups: {duplicates}")
+    if set(_ACTION_SIGNATURES) != expected or set(grouped) != expected:
+        raise AssertionError(
+            "public action metadata differs from runtime contracts: "
+            f"signature_missing={sorted(expected - set(_ACTION_SIGNATURES))}, "
+            f"signature_extra={sorted(set(_ACTION_SIGNATURES) - expected)}, "
+            f"group_missing={sorted(expected - set(grouped))}, "
+            f"group_extra={sorted(set(grouped) - expected)}"
+        )
+    categories = {
+        action: category
+        for category, actions in _ACTION_GROUP_MEMBERS.items()
+        for action in actions
+    }
+    return MappingProxyType({
+        action: PublicActionMetadata(
+            name=action,
+            usage=_ACTION_SIGNATURES[action],
+            category=categories[action],
+            kind="registered_tool" if action in _PACKAGED_TOOL_ACTION_NAMES else "builtin",
+        )
+        for action in grouped
+    })
+
+
+PUBLIC_ACTION_METADATA = _public_action_metadata()
+DISPATCH_SIGS = {name: metadata.usage for name, metadata in PUBLIC_ACTION_METADATA.items()}
+ACTION_GROUPS = {
+    category: [
+        name for name, metadata in PUBLIC_ACTION_METADATA.items()
+        if metadata.category == category
+    ]
+    for category in _ACTION_GROUP_MEMBERS
 }
 
 
@@ -675,7 +742,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`reusable_practice`, or `evidence_gap`), non-empty `summary` and `signal_key`; optional '
         '`impact` (`low`, `medium`, `high`, or `critical`, default `medium`), '
         '`applicability_scope` (`project_local`, `workbench`, or `cross_project`, default '
-        '`workbench`), references, provenance, evidence, and `retry_latest=True`.',
+        '`workbench`), references, provenance, and `retry_latest=True`. `evidence` is required '
+        'and must be a non-empty list of objects with `reference_type` and `reference`; each may '
+        'also include `summary` and UTC `observed_at` ending in `Z`.',
         '`assess`: provide `outcome="observations_recorded"` with `observation_ids`, or '
         '`outcome="nothing_reusable_learned"` without them; optional `notes`, `actor_kind` '
         '(`agent` or `human`), `actor_ref`, and `retry_latest=True`. The result explains each '
@@ -705,6 +774,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'request_owner_confirmation|withdraw|quarantine"`. On Databricks, explicitly set '
         '`provider="databricks_in_session"` to choose the lower-assurance two-step challenge '
         'even when Slack is configured; omitted `provider` preserves the default provider order.',
+        'For a candidate with no promotion event, reject it directly with '
+        '`anchor("reject", "<memory_id>")`; `withdraw` and `quarantine` only reverse an existing '
+        'promotion event. A Databricks approval result includes the exact second call under '
+        '`next_operation.copy_ready`, mapping `approval_response` to `in_session_approval`.',
         '`project="all"` means relevance-ranked eligibility across managed projects, not '
         'unconditional injection into every task. Owner promotion of such shared memories is '
         'bound to the boot-verified portfolio work authority.',
@@ -834,9 +907,8 @@ def _match_intent(query: str) -> str | None:
     # Keyword match -- collect all matching intents
     matches: list[str] = []
     for keywords, intent_key in _INTENT_KEYWORDS:
-        if any(kw in query_lower for kw in keywords):
-            if intent_key not in matches:
-                matches.append(intent_key)
+        if any(kw in query_lower for kw in keywords) and intent_key not in matches:
+            matches.append(intent_key)
 
     if not matches:
         return None

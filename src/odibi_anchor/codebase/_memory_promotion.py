@@ -978,6 +978,20 @@ def request_owner_promotion(
         f"Claim: {subject['content']}\n\nReply exactly: {expected_response}"
     )
     if prepare_databricks:
+        from odibi_anchor._recovery import dispatcher_operation
+
+        next_operation = dispatcher_operation(
+            "memory", "promotion",
+            kwargs={
+                "command": f"request_owner_{transition}",
+                "memory_id": memory_id,
+                "provider": "databricks_in_session",
+                "in_session_approval": expected_response,
+            },
+            reason="complete the prepared in-session owner approval",
+            requires_owner=True,
+            retry_safety="single_use_challenge",
+        )
         return {
             "kind": "memory_human_authority",
             "status": "approval_required",
@@ -996,6 +1010,8 @@ def request_owner_promotion(
                 "the command is rerun with provider='databricks_in_session' and "
                 "in_session_approval."
             ),
+            "next_operation": next_operation,
+            "available_operations": [next_operation],
             "write_performed": False,
         }
     assert selected_provider is not None
@@ -1203,6 +1219,24 @@ def withdraw_candidate_activation(
                 final_status=target_status,
             )
             if event is None:
+                status_row = connection.execute(
+                    "SELECT status FROM memories WHERE id=?", (memory_id,),
+                ).fetchone()
+                status = None if status_row is None else status_row[0]
+                if status == "candidate":
+                    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+                    raise attach_recovery(
+                        ValueError("memory has no promotion event to withdraw"),
+                        error_code="memory_candidate_not_promoted",
+                        context={"memory_id": memory_id, "status": status},
+                        next_operations=[
+                            dispatcher_operation(
+                                "reject", memory_id,
+                                reason="reject this unpromoted candidate",
+                            ),
+                        ],
+                    )
                 raise ValueError("memory has no promotion event to withdraw")
             connection.commit()
         except Exception:

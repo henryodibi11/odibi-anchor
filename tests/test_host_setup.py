@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -575,6 +577,35 @@ def test_databricks_workspace_install_uses_api_without_staging(tmp_path, monkeyp
     )
     assert not any(".anchor-host-stage-" in path for _operation, path in workspace.calls)
     assert not any("__pycache__" in path or path.endswith(".pyc") for path in workspace.files)
+
+
+def test_databricks_workspace_reads_are_bounded_concurrent_complete_and_ordered(
+    tmp_path, monkeypatch,
+):
+    active = 0
+    maximum = 0
+    lock = threading.Lock()
+
+    def read(_workspace, path):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.01)
+        with lock:
+            active -= 1
+        return path.encode()
+
+    monkeypatch.setattr(module, "_workspace_read", read)
+    relative_paths = [f"guidance/{index:02d}.md" for index in range(24)]
+
+    result = module._workspace_read_many(object(), tmp_path, relative_paths)
+
+    assert list(result) == relative_paths
+    last = result[relative_paths[-1]]
+    assert last is not None
+    assert last.endswith(relative_paths[-1].encode())
+    assert 1 < maximum <= module._DATABRICKS_READ_WORKERS
 
 
 def test_databricks_workspace_reconciles_legacy_files_and_preserves_custom_instructions(

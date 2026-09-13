@@ -181,6 +181,7 @@ class TestBootResult:
 def test_boot_defers_memory_store_access_and_does_not_print_totals(
     tmp_path, monkeypatch, capsys,
 ):
+    from odibi_anchor._dispatcher._effects import BUILTIN_ACTION_NAMES
     from odibi_anchor.codebase import _memory_db
 
     def fail_store_access(*_args, **_kwargs):
@@ -201,6 +202,7 @@ def test_boot_defers_memory_store_access_and_does_not_print_totals(
     assert result.mem_total == 0
     assert "total" not in output.lower()
     assert "bounded retrieval deferred to task acceptance" in output
+    assert f"— {len(BUILTIN_ACTION_NAMES)} actions" in output
 
 
 def test_boot_skips_learning_lookup_without_exact_task_owner(tmp_path, monkeypatch):

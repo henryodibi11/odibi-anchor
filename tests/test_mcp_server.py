@@ -1352,6 +1352,8 @@ class TestGatewayCompatibility:
         assert set(mcp_server._COMPACT_TASK_KEYS) <= set(compact)
         assert compact["artifact_contract"] == full["artifact_contract"]
         assert compact["capture_guidance"] == full["capture_guidance"]
+        assert compact["task_window_id"] == full["task_window_id"]
+        assert compact["memory_context"] == full["memory_context"]
         assert compact["operating_protocol"] == full["operating_protocol"]
         assert compact["agent_context"] == full["agent_context"]
         assert compact["transport"]["response_detail"] == "compact"
@@ -1454,6 +1456,30 @@ class TestGatewayCompatibility:
             "ok": False,
             "error": {"type": "ValueError", "message": "token=<redacted>"},
         }
+
+    def test_v2_error_preserves_structured_recovery_metadata(self, monkeypatch):
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        def fail(*_args, **_kwargs):
+            raise attach_recovery(
+                ValueError("candidate cannot be withdrawn"),
+                error_code="memory_candidate_not_promoted",
+                context={"memory_id": "memory-1", "status": "candidate"},
+                next_operations=[
+                    dispatcher_operation(
+                        "reject", "memory-1", reason="reject the candidate",
+                    ),
+                ],
+            )
+
+        monkeypatch.setattr(mcp_server, "_boot", lambda: fail)
+        result = json.loads(mcp_server.anchor_execute("memory", response_version=2))
+
+        assert result["ok"] is False
+        assert result["error"]["error_code"] == "memory_candidate_not_promoted"
+        assert result["error"]["next_operation"]["copy_ready"] == (
+            "anchor('reject', 'memory-1')"
+        )
 
     def test_v2_success_is_explicit_envelope(self, monkeypatch):
         monkeypatch.setattr(mcp_server, "_boot", lambda: lambda *_a, **_k: ["raw", "shape"])

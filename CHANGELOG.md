@@ -2,6 +2,31 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.16] - 2026-09-13
+
+### Added
+
+- Agent-facing memory, task, and learning results now expose state-valid operations, including
+  copy-ready candidate rejection, governed owner approval, and completed-observation recovery.
+- CLI and MCP v2 errors now preserve bounded, recursively redacted recovery metadata without
+  changing direct Python exception classes or messages.
+- One canonical public-action registry validates runtime contracts, help signatures, grouping,
+  transport classification, and the startup action count against drift.
+
+### Changed
+
+- Databricks guidance drift checks read complete files with bounded concurrency while preserving
+  deterministic hashing, ordering, and fail-closed behavior.
+- Managed orientation advances past the status and audit checks it performs, avoiding redundant
+  startup calls.
+- Memory and learning help now documents unpromoted-candidate rejection, exact Databricks
+  in-session approval handoff, and the evidence object schema.
+
+### Fixed
+
+- Compact MCP task responses retain `task_window_id` and bounded `memory_context` from Python
+  results.
+
 ## [0.3.15] - 2026-09-13
 
 ### Added
@@ -294,3 +319,5 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.12]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.12
 [0.3.13]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.13
 [0.3.14]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.14
+[0.3.15]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.15
+[0.3.16]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.16

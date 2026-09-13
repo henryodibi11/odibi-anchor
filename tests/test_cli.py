@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from odibi_anchor import cli
+from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
 
 def test_request_maps_json_to_core_dict_and_classifies_errors():
@@ -39,6 +40,28 @@ def test_request_maps_json_to_core_dict_and_classifies_errors():
         shared=True,
     )
     assert code == cli.EXIT_ACTION
+
+
+def test_cli_preserves_structured_recovery_metadata():
+    def dispatch(*_args, **_kwargs):
+        raise attach_recovery(
+            ValueError("candidate cannot be withdrawn"),
+            error_code="memory_candidate_not_promoted",
+            context={"memory_id": "memory-1", "status": "candidate"},
+            next_operations=[
+                dispatcher_operation(
+                    "reject", "memory-1", reason="reject the candidate",
+                ),
+            ],
+        )
+
+    response, code = cli._request({"action": "memory"}, dispatch, shared=False)
+
+    assert code == cli.EXIT_ACTION
+    assert response["error"]["error_code"] == "memory_candidate_not_promoted"
+    assert response["error"]["next_operation"]["copy_ready"] == (
+        "anchor('reject', 'memory-1')"
+    )
 
 
 def test_batch_boots_once_preserves_dispatcher_and_emits_json_lines(monkeypatch, capsys):

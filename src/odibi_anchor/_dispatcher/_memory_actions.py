@@ -14,7 +14,46 @@ from numbers import Real
 from pathlib import Path
 from typing import Any
 
+from odibi_anchor._recovery import dispatcher_operation
+
 _MEMORY_HELP_HINT = 'Run anchor("help", "memory") for lifecycle schemas and examples.'
+
+
+def _memory_entry_operations(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return only lifecycle operations valid for the entry's current status."""
+    memory_id = entry.get("id") or entry.get("memory_id")
+    status = entry.get("status")
+    if not isinstance(memory_id, str):
+        return []
+    if status == "candidate":
+        return [
+            dispatcher_operation(
+                "reject", memory_id,
+                reason="reject this unpromoted candidate",
+            ),
+            dispatcher_operation(
+                "memory", "promotion",
+                kwargs={
+                    "command": "request_owner_activation", "memory_id": memory_id,
+                },
+                reason="request governed owner activation of this candidate",
+                requires_owner=True,
+                retry_safety="state_checked",
+            ),
+        ]
+    if status == "active":
+        return [
+            dispatcher_operation(
+                "memory", "promotion",
+                kwargs={
+                    "command": "request_owner_confirmation", "memory_id": memory_id,
+                },
+                reason="request governed owner confirmation of this active memory",
+                requires_owner=True,
+                retry_safety="state_checked",
+            ),
+        ]
+    return []
 
 
 def _validate_json_object(value: Any, name: str, *, nonempty: bool = False) -> None:
@@ -926,6 +965,18 @@ def build_task_memory_context(
             "confidence": entry.get("confidence"),
             "source": entry.get("source"),
             "reason": reason,
+            "available_operations": [
+                {
+                    "action": "memory",
+                    "selector": "disposition",
+                    "memory_id": entry["id"],
+                    "allowed_dispositions": ["applied", "irrelevant", "suspect", "superseded"],
+                    "required_inputs": ["disposition", "reason"],
+                    "requires_owner": False,
+                    "retry_safety": "state_checked",
+                },
+                *_memory_entry_operations(entry),
+            ],
         })
     session_state.memory_selections = [item["selection_id"] for item in selections]
     return {
@@ -964,6 +1015,10 @@ def memory_action(
             raise ValueError("memory queries are restricted to the active project/trust boundary")
         query_kwargs["project"] = active_project or "all"
         result = query_fn(root, *args, **query_kwargs)
+        if isinstance(result, dict):
+            for entry in result.get("entries", []):
+                if isinstance(entry, dict):
+                    entry["available_operations"] = _memory_entry_operations(entry)
         return render_fn(result) if saved_format == "markdown" else result
 
     payload = dict(kwargs)

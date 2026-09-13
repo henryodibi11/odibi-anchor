@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -39,6 +40,7 @@ _POINTERS = {
     ),
 }
 _CUSTOM_INSTRUCTIONS = ".assistant_instructions.md"
+_DATABRICKS_READ_WORKERS = 8
 _LEGACY_MANAGED_HASHES = {
     ".assistant/agent_bootstrap.py": {
         "8dfc8b467e29df34c5a48c8d9b3357c5ccd67c5ad93aad42297bd2d3adb536ad",
@@ -317,6 +319,23 @@ def _workspace_read(workspace: Any, path: str) -> bytes | None:
     return content
 
 
+def _workspace_read_many(
+    workspace: Any, target: Path, relative_paths: list[str],
+) -> dict[str, bytes | None]:
+    """Read complete Workspace files concurrently while preserving input order."""
+    ordered = list(dict.fromkeys(relative_paths))
+    if not ordered:
+        return {}
+
+    def read(relative: str) -> bytes | None:
+        return _workspace_read(workspace, _workspace_api_path(target, relative))
+
+    workers = min(_DATABRICKS_READ_WORKERS, len(ordered))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anchor-guidance") as executor:
+        contents = list(executor.map(read, ordered))
+    return dict(zip(ordered, contents, strict=True))
+
+
 def _workspace_write(workspace: Any, path: str, content: bytes, import_format: Any) -> None:
     workspace.mkdirs(PurePosixPath(path).parent.as_posix())
     workspace.upload(path, content, format=import_format, overwrite=True)
@@ -375,10 +394,9 @@ def _setup_databricks_workspace(
         )
     previous: dict[str, str] = {} if manifest is None else manifest["files"]
     compatible_unmanaged: list[str] = []
-    existing: dict[str, bytes | None] = {
-        relative: _workspace_read(workspace, _workspace_api_path(target, relative))
-        for relative in desired
-    }
+    existing = _workspace_read_many(
+        workspace, target, sorted(set(previous) | set(desired)),
+    )
     legacy_managed: list[str] = []
     if manifest is None:
         desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
@@ -395,9 +413,6 @@ def _setup_databricks_workspace(
             compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
     for relative in sorted(set(previous) | set(desired)):
         content = existing.get(relative)
-        if relative not in existing:
-            content = _workspace_read(workspace, _workspace_api_path(target, relative))
-        existing[relative] = content
         expected = previous.get(relative)
         if content is not None:
             actual = _sha256(content)

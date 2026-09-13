@@ -570,6 +570,10 @@ def test_databricks_in_session_requires_two_explicit_separate_challenges(tmp_pat
         db, memory_id=memory["id"], project_id="project:test", transition="activation",
     )
     assert activation_request["status"] == "approval_required"
+    assert activation_request["next_operation"]["kwargs"]["in_session_approval"] == (
+        activation_request["approval_response"]
+    )
+    assert "in_session_approval=" in activation_request["next_operation"]["copy_ready"]
     assert activation_request["write_performed"] is False
     assert "No owner identity was authenticated" in activation_request["warning"]
     with sqlite3.connect(db) as connection:
@@ -608,6 +612,26 @@ def test_databricks_in_session_requires_two_explicit_separate_challenges(tmp_pat
         assert connection.execute(
             "SELECT count(*) FROM memory_human_authority_receipts"
         ).fetchone()[0] == 2
+
+
+def test_unpromoted_candidate_withdrawal_directs_caller_to_reject(tmp_path):
+    db = tmp_path / "memory.db"
+    memory = append_memory(
+        tmp_path, entry_type="convention", content="Candidate awaiting a decision.",
+        project="project:test", db_path=str(db),
+    )
+
+    with pytest.raises(ValueError, match="no promotion event") as captured:
+        promotion_module.withdraw_candidate_activation(
+            db, memory_id=memory["id"], project_id="project:test",
+        )
+
+    recovery = vars(captured.value)
+    assert recovery["error_code"] == "memory_candidate_not_promoted"
+    assert recovery["context"] == {"memory_id": memory["id"], "status": "candidate"}
+    assert recovery["next_operation"]["copy_ready"] == (
+        f"anchor('reject', {memory['id']!r})"
+    )
 
 
 def test_explicit_databricks_provider_prepares_with_complete_slack(tmp_path, monkeypatch):

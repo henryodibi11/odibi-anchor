@@ -52,11 +52,11 @@ _ROUTE_BINDING = None
 _GATEWAY_LOCK = threading.RLock()
 
 _COMPACT_TASK_KEYS = (
-    "kind", "version", "subject", "summary", "status", "mode", "readiness",
+    "kind", "version", "subject", "summary", "status", "mode", "task_window_id", "readiness",
     "intent", "background", "scope", "resources", "context", "constraints",
     "context_plan", "verification", "guardrails", "risks", "findings",
     "required_skills", "suggested_next_actions", "task_profile", "work_item_policy",
-    "artifact_contract", "capture_guidance", "operating_protocol", "agent_context",
+    "artifact_contract", "capture_guidance", "memory_context", "operating_protocol", "agent_context",
 )
 
 _TELEMETRY_STAGES = (

@@ -19,6 +19,8 @@ def test_orient_aggregates_status_audit_and_defers_memory(tmp_path, monkeypatch)
         "status": "deferred",
         "reason": "bounded task-aware retrieval occurs at task acceptance",
     }
+    assert o["metrics"]["next_required_action"] == 'anchor("new_session")'
+    assert o["status"]["metrics"]["next_required_action"] == 'anchor("new_session")'
     assert o["artifact_contract"]["scope"] == "all_managed_projects"
     assert o["artifact_contract"]["existing_record_rewrites_required"] is False
     assert {item["path"] for item in o["artifact_contract"]["artifacts"]} == {

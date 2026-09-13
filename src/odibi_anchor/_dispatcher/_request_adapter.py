@@ -22,6 +22,9 @@ _AUTHORIZATION = re.compile(
     r"(?i)(?P<prefix>['\"]?authorization['\"]?\s*[:=]\s*)"
     r"(?P<quote>['\"]?)(?:bearer|basic)\s+[^\s,;}\]'\"]+(?P=quote)"
 )
+_SECRET_FIELD = re.compile(
+    r"(?i)^(?:password|passwd|token|secret|api[_-]?key|authorization)$"
+)
 
 
 class RequestError(ValueError):
@@ -176,10 +179,38 @@ def redact_message(message: str) -> str:
     )
 
 
-def error_information(exc: Exception) -> dict[str, str]:
+def _safe_error_metadata(value: Any, *, depth: int = 0) -> Any:
+    """Copy bounded JSON recovery metadata while redacting every string."""
+    if depth > 8:
+        return "<metadata-depth-exceeded>"
+    if isinstance(value, str):
+        return redact_message(value)
+    if value is None or type(value) in (bool, int, float):
+        return value
+    if isinstance(value, Mapping):
+        return {
+            str(key): (
+                "<redacted>" if _SECRET_FIELD.fullmatch(str(key))
+                else _safe_error_metadata(item, depth=depth + 1)
+            )
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_error_metadata(item, depth=depth + 1) for item in value[:100]]
+    return redact_message(str(value))
+
+
+def error_information(exc: Exception) -> dict[str, Any]:
     """Return stable, traceback-free error information safe for transports."""
     message = redact_message(str(exc)).replace("\r\n", "\n").replace("\r", "\n")
-    return {"type": type(exc).__name__, "message": message}
+    result: dict[str, Any] = {"type": type(exc).__name__, "message": message}
+    for field in (
+        "error_code", "context", "next_operation", "next_operations", "copy_ready",
+        "requires_owner", "retry_safety",
+    ):
+        if hasattr(exc, field):
+            result[field] = _safe_error_metadata(getattr(exc, field))
+    return result
 
 
 def execute_request(dispatcher: Callable[..., Any], request: NormalizedRequest) -> dict[str, Any]:

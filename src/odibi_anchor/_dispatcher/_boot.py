@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from odibi_anchor._dispatcher._effects import BUILTIN_ACTION_NAMES
 from odibi_anchor._runtime_paths import RuntimePaths, resolve_resource_root, resolve_runtime_paths
 
 _INSTALL_ROOT = str(resolve_resource_root())
@@ -827,7 +828,7 @@ def run_boot(
             print('[Anchor]    BLOCKED: historical debt requires compatibility anchor("learn") recovery.')
         else:
             print('[Anchor]    BLOCKED: anchor("task") locked until structured assessment closes it.')
-    print("[Anchor] Dispatch: anchor('action', ...) — 49 actions")
+    print(f"[Anchor] Dispatch: anchor('action', ...) — {len(BUILTIN_ACTION_NAMES)} actions")
     print("[Anchor]")
     print(f"[Anchor] {'='*55}")
     print('[Anchor] ** MANDATORY SEQUENCE (enforced with RuntimeError):')

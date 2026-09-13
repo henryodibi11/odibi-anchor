@@ -1113,26 +1113,62 @@ def _read(command: str, payload: dict[str, Any]) -> dict:
 
 
 def _evidence(value: Any) -> list[dict]:
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    schema = {
+        "type": "non_empty_list",
+        "item": {
+            "required": ["reference_type", "reference"],
+            "optional": ["summary", "observed_at"],
+            "reference_type_values": sorted(REFS),
+            "observed_at_format": "UTC ISO-8601 ending in Z",
+        },
+    }
+
+    def invalid(detail: str) -> ValueError:
+        return attach_recovery(
+            ValueError(f"invalid evidence: {detail}"),
+            error_code="learning_evidence_invalid",
+            context={"expected_schema": schema},
+            next_operations=[
+                dispatcher_operation(
+                    "help", "learning",
+                    reason="inspect the complete learning capture contract",
+                ),
+            ],
+        )
+
     if not isinstance(value, list) or not value:
-        raise ValueError("invalid evidence")
+        raise invalid("expected a non-empty list of evidence objects")
     out = []
     for e in value:
         if not isinstance(e, dict) or set(e) - {"reference_type", "reference", "summary", "observed_at"}:
-            raise ValueError("invalid evidence")
+            raise invalid("each item must contain only documented evidence fields")
         typ = e.get("reference_type")
-        ref = _text(e.get("reference"), "evidence.reference", 512)
+        try:
+            ref = _text(e.get("reference"), "evidence.reference", 512)
+        except ValueError as exc:
+            raise invalid(str(exc)) from exc
         if typ not in REFS or not REFS[typ].fullmatch(ref):
-            raise ValueError("invalid evidence.reference")
-        summary = _text(e.get("summary", ""), "evidence.summary", 500, empty=True, free=True)
+            raise invalid("reference_type or reference does not match an allowed form")
+        try:
+            summary = _text(
+                e.get("summary", ""), "evidence.summary", 500, empty=True, free=True,
+            )
+        except ValueError as exc:
+            raise invalid(str(exc)) from exc
         observed = e.get("observed_at")
         if observed is not None:
-            observed = _text(observed, "evidence.observed_at", 32)
+            try:
+                observed = _text(observed, "evidence.observed_at", 32)
+            except ValueError as exc:
+                raise invalid(str(exc)) from exc
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", observed):
-                raise ValueError("invalid evidence.observed_at")
+                raise invalid("observed_at must be UTC ISO-8601 ending in Z")
             try:
                 datetime.fromisoformat(observed[:-1] + "+00:00")
             except ValueError as exc:
-                raise ValueError("invalid evidence.observed_at") from exc
+                raise invalid("observed_at is not a valid timestamp") from exc
         out.append(
             {
                 "reference_type": typ,
@@ -1144,8 +1180,22 @@ def _evidence(value: Any) -> list[dict]:
         )
     result = sorted(out, key=lambda x: x["reference_sha256"])
     if len({entry["reference_sha256"] for entry in result}) != len(result):
-        raise ValueError("invalid evidence")
+        raise invalid("duplicate evidence references are not allowed")
     return result
+
+
+def _capture_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Attach the exact assessment operation enabled by a captured observation."""
+    from odibi_anchor._recovery import dispatcher_operation
+
+    item_id = result["item"]["item_id"]
+    operation = dispatcher_operation(
+        "learning", "assess",
+        kwargs={"outcome": "observations_recorded", "observation_ids": [item_id]},
+        reason="assess this observation after all intended captures are complete",
+        retry_safety="state_checked",
+    )
+    return {**result, "next_operation": operation, "available_operations": [operation]}
 
 
 def _obligation_for_operation(
@@ -1275,13 +1325,13 @@ def _capture(payload: dict[str, Any]) -> dict:
                 (recurrence,),
             ).fetchone()[0]
             c.commit()
-            return {
+            return _capture_result({
                 "message": "Observation recorded",
                 "item": dict(old),
                 "deduped": True,
                 "recurrence_count": count,
                 "attention_due": count >= 3 or old["impact"] in ("high", "critical"),
-            }
+            })
         obligation = c.execute(
             "SELECT status FROM learning_obligations WHERE obligation_id=? "
             "AND project_id=? AND task_window_id=? AND owner_state='owned'",
@@ -1335,13 +1385,13 @@ def _capture(payload: dict[str, Any]) -> dict:
         ).fetchone()[0]
         result_item = dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item,)).fetchone())
         c.commit()
-        return {
+        return _capture_result({
             "message": "Observation recorded",
             "item": result_item,
             "deduped": False,
             "recurrence_count": count,
             "attention_due": count >= 3 or impact in ("high", "critical"),
-        }
+        })
     except Exception:
         c.rollback()
         raise
@@ -1421,6 +1471,36 @@ def _assess(payload: dict[str, Any]) -> dict:
         for item in ids:
             row = c.execute("SELECT kind,provenance FROM learning_items WHERE item_id=?", (item,)).fetchone()
             if not row or row[0] != "observation" or json.loads(row[1]).get("learning_obligation_id") != oid:
+                assessed = c.execute(
+                    "SELECT a.assessment_id,a.obligation_id "
+                    "FROM learning_assessment_observations o "
+                    "JOIN learning_assessments a ON a.assessment_id=o.assessment_id "
+                    "WHERE o.observation_id=?",
+                    (item,),
+                ).fetchone()
+                if assessed is not None:
+                    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+                    raise attach_recovery(
+                        ValueError("invalid assessment observation"),
+                        error_code="learning_observation_already_assessed",
+                        context={
+                            "observation_id": item,
+                            "assessment_id": assessed["assessment_id"],
+                            "assessment_obligation_id": assessed["obligation_id"],
+                            "current_obligation_id": oid,
+                        },
+                        next_operations=[
+                            dispatcher_operation(
+                                "learning", "list",
+                                kwargs={"kind": "observation", "status": "open"},
+                                reason=(
+                                    "inspect observations still valid for the current assessment; "
+                                    "do not reassess the completed observation"
+                                ),
+                            ),
+                        ],
+                    )
                 raise ValueError("invalid assessment observation")
         aid = _uid("las_")
         now = _now()

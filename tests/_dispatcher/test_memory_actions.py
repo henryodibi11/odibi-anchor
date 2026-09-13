@@ -697,6 +697,26 @@ def test_unresolved_ordinary_query_is_forced_global(tmp_path):
     assert called[0]["project"] == "all"
 
 
+def test_memory_query_surfaces_state_valid_candidate_operations(tmp_path):
+    state = _state(tmp_path)
+    result = memory_action(
+        tmp_path, (), {}, session_state=state,
+        query_fn=lambda *_args, **_kwargs: {
+            "entries": [{"id": "candidate-1", "status": "candidate"}],
+        },
+        render_fn=lambda value: value,
+    )
+
+    assert isinstance(result, dict)
+    operations = result["entries"][0]["available_operations"]
+    assert [operation["action"] for operation in operations] == ["reject", "memory"]
+    assert operations[0]["copy_ready"] == "anchor('reject', 'candidate-1')"
+    assert operations[1]["kwargs"] == {
+        "command": "request_owner_activation", "memory_id": "candidate-1",
+    }
+    assert operations[1]["requires_owner"] is True
+
+
 @pytest.mark.parametrize(
     "injected",
     ("owner_user_id", "challenge", "receipt", "response_message_id"),
@@ -765,13 +785,24 @@ def test_dispatcher_passes_only_exact_prepared_databricks_approval(tmp_path, mon
         tmp_path, ("promotion",), payload,
         session_state=state, query_fn=None, render_fn=None,
     )
-    recorded = memory_action(
-        tmp_path, ("promotion",), {
-            **payload, "in_session_approval": prepared["approval_response"],
-        }, session_state=state, query_fn=None, render_fn=None,
-    )
+    assert isinstance(prepared, dict)
+
+    def anchor(action, *args, **kwargs):
+        assert action == "memory"
+        return memory_action(
+            tmp_path, args, {**kwargs, "db_path": str(db)},
+            session_state=state, query_fn=None, render_fn=None,
+        )
+
+    recorded = eval(prepared["next_operation"]["copy_ready"], {"anchor": anchor})
+    assert isinstance(recorded, dict)
 
     assert prepared["status"] == "approval_required"
+    assert prepared["next_operation"]["kwargs"]["in_session_approval"] == (
+        prepared["approval_response"]
+    )
+    assert "in_session_approval=" in prepared["next_operation"]["copy_ready"]
+    assert prepared["next_operation"]["requires_owner"] is True
     assert recorded["status"] == "recorded"
     assert recorded["receipt"]["challenge_sha256"] == prepared["challenge_sha256"]
 

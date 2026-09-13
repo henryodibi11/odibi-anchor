@@ -183,8 +183,15 @@ Use one truthful route:
 # No bounded reusable observation
 anchor("learning", "assess", outcome="nothing_reusable_learned")
 
-# Reusable observation: capture content first, then assess returned IDs
-observation = anchor("learning", "capture", ...)
+# Reusable observation: capture evidence-backed content first, then assess returned IDs
+observation = anchor("learning", "capture",
+   observation_type="reusable_practice", summary="...", signal_key="...",
+   evidence=[{
+      "reference_type": "file",  # file|git_commit|problem|spec|test|session
+      "reference": "src/pkg/file.py#L10-L20",
+      "summary": "Optional bounded explanation",
+      "observed_at": "2026-09-13T20:00:00Z",  # optional UTC timestamp
+   }])
 anchor("learning", "assess", outcome="observations_recorded",
    observation_ids=[observation["item"]["item_id"]])
 ```

@@ -10,6 +10,7 @@ from odibi_anchor._dispatcher._request_adapter import (
     normalize_request,
     redact_message,
 )
+from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
 
 def test_bounds_size_and_depth():
@@ -88,6 +89,32 @@ def test_redaction_is_stable_and_execution_does_not_catch_base_exception():
     }
     with pytest.raises(KeyboardInterrupt):
         execute_request(lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()), request)
+
+
+def test_structured_recovery_is_additive_redacted_and_backward_compatible():
+    operation = dispatcher_operation(
+        "reject", "memory-1", reason="reject the unpromoted candidate",
+    )
+    exc = attach_recovery(
+        ValueError("memory has no promotion event to withdraw"),
+        error_code="memory_candidate_not_promoted",
+        context={"memory_id": "memory-1", "status": "candidate", "token": "secret-value"},
+        next_operations=[operation],
+    )
+
+    assert type(exc) is ValueError
+    assert str(exc) == "memory has no promotion event to withdraw"
+    error = error_information(exc)
+    assert error["type"] == "ValueError"
+    assert error["message"] == "memory has no promotion event to withdraw"
+    assert error["error_code"] == "memory_candidate_not_promoted"
+    assert error["context"] == {
+        "memory_id": "memory-1", "status": "candidate", "token": "<redacted>",
+    }
+    assert error["next_operation"] == error["next_operations"][0]
+    assert error["copy_ready"] == "anchor('reject', 'memory-1')"
+    assert error["requires_owner"] is False
+    assert error["retry_safety"] == "idempotent"
 
 
 def test_redacts_realistic_authorization_and_quoted_multiline_assignments():

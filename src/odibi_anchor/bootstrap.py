@@ -747,6 +747,14 @@ def init(
                 _parts[_step] = anchor(_step, output_format="dict")
             except Exception as _e:  # orientation must never crash
                 _parts[_step] = {"error": f"{type(_e).__name__}: {_e}"}
+        # The nested status call is evaluated before status and audit_history are
+        # recorded. Refresh the local projection so orientation points past the
+        # obligations it just satisfied instead of asking callers to repeat them.
+        if "error" not in _parts.get("status", {}):
+            _parts["status"] = _status_impl(
+                ROOT, MANIFEST, _SESSION_FRAME_holder[0], _SESSION_CONTEXT,
+                output_format="dict",
+            )
         from odibi_anchor._dispatcher._capture_standards import (
             capture_standards_contract,
             render_capture_standards_markdown,
