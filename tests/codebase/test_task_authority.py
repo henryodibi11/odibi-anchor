@@ -181,6 +181,12 @@ def test_rebind_fails_closed_when_multiple_exact_open_tasks_match(tmp_path):
     assert "ltw_durable" in str(exc.value)
     assert "ltw_second" in str(exc.value)
     assert "task_rebind" in str(exc.value)
+    assert "accepted_at=" in str(exc.value)
+    assert "session=" in str(exc.value)
+    assert "mode=source_change" in str(exc.value)
+    assert "goal=Preserve accepted authority" in str(exc.value)
+    assert "all_pending=True" in str(exc.value)
+    assert "task_adoption is only for authenticated takeover" in str(exc.value)
     assert restarted.task_window_id == "ltw_new"
 
     selected = rebind_latest_open_task(

@@ -90,12 +90,13 @@ def test_safe_stop_rejects_active_learning_and_successful_gate(monkeypatch):
         learning, "latest_closed_learning_obligation",
         lambda **_owner: {"status": "assessed"},
     )
-    with pytest.raises(RuntimeError, match="successful delivery gate"):
+    with pytest.raises(RuntimeError, match="successful delivery gate") as exc:
         safe_stop_task(
             status="failed", reason="Failed", unavailable_evidence=None,
             learning_project_id="project-safe-stop",
             session_state=state, session_timings=[{"action": "gate", "passed": True}],
         )
+    assert "anchor('learning', 'assess'" in str(exc.value)
 
 
 def test_explicit_continuation_creates_fresh_task_without_new_session(tmp_path, monkeypatch):

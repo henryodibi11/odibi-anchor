@@ -836,12 +836,13 @@ def run_boot(
         STARTUP_SEQUENCE,
         protocol_invocation,
     )
-    for i, step in enumerate(STARTUP_SEQUENCE, 1):
+    print('[Anchor]   1. anchor("orient")  # status + audit_history in one call; managed bootstrap already did this')
+    for i, step in enumerate(STARTUP_SEQUENCE[2:], 2):
         print(f'[Anchor]   {i}. {protocol_invocation(step)}')
     print('[Anchor]   ... edit files ...')
-    for i, step in enumerate(PRE_DELIVERY_SEQUENCE, len(STARTUP_SEQUENCE) + 1):
+    for i, step in enumerate(PRE_DELIVERY_SEQUENCE, len(STARTUP_SEQUENCE)):
         print(f'[Anchor]   {i}. {protocol_invocation(step)}')
-    print(f'[Anchor]   Repeat {len(STARTUP_SEQUENCE)}-{len(STARTUP_SEQUENCE) + len(PRE_DELIVERY_SEQUENCE)} for each feature.')
+    print(f'[Anchor]   Repeat 3-{len(STARTUP_SEQUENCE) + len(PRE_DELIVERY_SEQUENCE) - 1} for each feature.')
     print(f"[Anchor] {'='*55}")
 
     return result

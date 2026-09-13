@@ -26,6 +26,7 @@ def test_init_explicitly_rebinds_open_task_without_task_dispatch(tmp_path, monke
         acceptance_criteria=["The same task window is restored after initialization."],
         output_format="dict",
     )
+    assert accepted["task_window_id"] == accepted["accepted_task_authority"]["task_window_id"]
     window = accepted["accepted_task_authority"]["task_window_id"]
 
     rebound, _, _ = init(root=tmp_path, rebind_task=True, output_format="dict")

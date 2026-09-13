@@ -25,10 +25,12 @@ from typing import Any
 from odibi_anchor.codebase._migration_backup import logical_digest
 
 _MANIFEST_SUFFIX = ".manifest.json"
+_INDEX_SUFFIX = ".index.json"
 _SNAPSHOT_SUFFIX = ".sqlite3"
 _ARTIFACTS_SUFFIX = ".artifacts.tar"
 _FORMAT_V1 = "odibi-anchor-durable-snapshot-v1"
 _FORMAT_V2 = "odibi-anchor-durable-snapshot-v2"
+_INDEX_FORMAT = "odibi-anchor-durable-snapshot-index-v1"
 _SUPPORTED_FORMATS = frozenset({_FORMAT_V1, _FORMAT_V2})
 _DURABLE_LIVE_PREFIXES = (Path("/Workspace"), Path("/Volumes"), Path("/dbfs"))
 _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
@@ -452,24 +454,19 @@ def _extract_artifact_bundle(bundle: Path, destination: Path) -> dict[str, int]:
     }
 
 
-def _load_manifest(path: Path) -> dict[str, Any]:
-    try:
-        raw = path.read_bytes()
-        value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"invalid canonical manifest: {path.name}") from exc
-    if not isinstance(value, dict) or raw != _canonical_bytes(value):
-        raise RuntimeError(f"non-canonical manifest: {path.name}")
+def _validate_manifest(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"invalid canonical manifest: {name}")
     checksum = value.get("manifest_sha256")
     body = {key: item for key, item in value.items() if key != "manifest_sha256"}
     if checksum != hashlib.sha256(_canonical_bytes(body)).hexdigest():
-        raise RuntimeError(f"manifest checksum mismatch: {path.name}")
+        raise RuntimeError(f"manifest checksum mismatch: {name}")
     if value.get("format") not in _SUPPORTED_FORMATS:
-        raise RuntimeError(f"unsupported manifest: {path.name}")
+        raise RuntimeError(f"unsupported manifest: {name}")
     if value["format"] == _FORMAT_V2:
         artifacts = value.get("artifacts")
         if not isinstance(artifacts, dict):
-            raise RuntimeError(f"manifest artifacts mismatch: {path.name}")
+            raise RuntimeError(f"manifest artifacts mismatch: {name}")
         artifacts_sha256 = artifacts.get("sha256")
         if (
             not isinstance(artifacts_sha256, str)
@@ -484,8 +481,19 @@ def _load_manifest(path: Path) -> dict[str, Any]:
             or not isinstance(artifacts.get("content_size_bytes"), int)
             or artifacts["content_size_bytes"] < 0
         ):
-            raise RuntimeError(f"manifest artifacts mismatch: {path.name}")
+            raise RuntimeError(f"manifest artifacts mismatch: {name}")
     return value
+
+
+def _load_manifest(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid canonical manifest: {path.name}") from exc
+    if not isinstance(value, dict) or raw != _canonical_bytes(value):
+        raise RuntimeError(f"non-canonical manifest: {path.name}")
+    return _validate_manifest(value, path.name)
 
 
 def _remote_entry_size(entry: Any) -> int | None:
@@ -546,19 +554,26 @@ def _validated_manifests(
     for path in manifests:
         manifest = _load_manifest(path)
         snapshot_id = path.name.removesuffix(_MANIFEST_SUFFIX)
-        content_sha256 = manifest.get("sha256")
-        if not isinstance(content_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
-            raise RuntimeError(f"manifest identity mismatch: {path.name}")
-        snapshot_file = manifest.get("snapshot_file")
-        expected_file = f"{content_sha256}{_SNAPSHOT_SUFFIX}"
-        if manifest.get("snapshot_id") != snapshot_id or snapshot_file != expected_file:
-            raise RuntimeError(f"manifest identity mismatch: {path.name}")
+        _validate_manifest_identity(manifest, snapshot_id, path.name)
         if remote_entries is None:
             _validate_manifest_payloads(root, manifest)
         else:
             _validate_remote_manifest_references(manifest, remote_entries)
         validated.append(manifest)
     return validated
+
+
+def _validate_manifest_identity(
+    manifest: dict[str, Any], snapshot_id: str, name: str,
+) -> None:
+    content_sha256 = manifest.get("sha256")
+    if not isinstance(content_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+        raise RuntimeError(f"manifest identity mismatch: {name}")
+    if (
+        manifest.get("snapshot_id") != snapshot_id
+        or manifest.get("snapshot_file") != f"{content_sha256}{_SNAPSHOT_SUFFIX}"
+    ):
+        raise RuntimeError(f"manifest identity mismatch: {name}")
 
 
 def _databricks_files_api() -> Any:
@@ -588,7 +603,9 @@ def _remote_snapshot_entries(files: Any, remote_root: str) -> dict[str, Any]:
         name = remote_path.rsplit("/", 1)[-1]
         if remote_path != _remote_child(remote_root, name):
             raise RuntimeError("invalid Databricks snapshot entry")
-        if not name.endswith((_MANIFEST_SUFFIX, _SNAPSHOT_SUFFIX, _ARTIFACTS_SUFFIX)):
+        if not name.endswith((
+            _MANIFEST_SUFFIX, _INDEX_SUFFIX, _SNAPSHOT_SUFFIX, _ARTIFACTS_SUFFIX,
+        )):
             continue
         if not name or "/" in name or "\\" in name:
             raise RuntimeError("invalid Databricks snapshot entry")
@@ -604,10 +621,13 @@ def _download_remote_snapshot_files(
     local_root: Path,
     *,
     latest_manifest_only: bool,
+    download_manifests: bool,
 ) -> dict[str, Any]:
     local_root.mkdir(exist_ok=True)
     entries = _remote_snapshot_entries(files, remote_root)
     manifests = sorted(name for name in entries if name.endswith(_MANIFEST_SUFFIX))
+    if not download_manifests:
+        manifests = []
     if latest_manifest_only and manifests:
         manifests = manifests[-1:]
     for name in manifests:
@@ -618,6 +638,79 @@ def _download_remote_snapshot_files(
             use_parallel=False,
         )
     return entries
+
+
+def _load_snapshot_index(
+    path: Path,
+    *,
+    authority: str,
+    remote_entries: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid durable snapshot index: {path.name}") from exc
+    if not isinstance(value, dict) or raw != _canonical_bytes(value):
+        raise RuntimeError(f"non-canonical durable snapshot index: {path.name}")
+    checksum = value.get("index_sha256")
+    body = {key: item for key, item in value.items() if key != "index_sha256"}
+    if checksum != hashlib.sha256(_canonical_bytes(body)).hexdigest():
+        raise RuntimeError(f"durable snapshot index checksum mismatch: {path.name}")
+    if value.get("format") != _INDEX_FORMAT or value.get("authority_id") != authority:
+        raise RuntimeError(f"durable snapshot index authority mismatch: {path.name}")
+    entries = value.get("snapshots")
+    if not isinstance(entries, list):
+        raise RuntimeError(f"durable snapshot index entries mismatch: {path.name}")
+    indexed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in entries:
+        manifest = _validate_manifest(candidate, path.name)
+        snapshot_id = manifest.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or snapshot_id in seen:
+            raise RuntimeError(f"durable snapshot index entries mismatch: {path.name}")
+        seen.add(snapshot_id)
+        _validate_manifest_identity(manifest, snapshot_id, path.name)
+        manifest_name = f"{snapshot_id}{_MANIFEST_SUFFIX}"
+        if manifest_name not in remote_entries:
+            continue
+        _validate_remote_manifest_references(manifest, remote_entries)
+        indexed.append(manifest)
+    return indexed
+
+
+def _indexed_remote_manifests(
+    *,
+    snapshot_root: Path,
+    files: Any,
+    publication_root: str,
+    remote_entries: Mapping[str, Any],
+    authority: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Load one verified index and only canonical manifests not represented by it."""
+    index_names = sorted(name for name in remote_entries if name.endswith(_INDEX_SUFFIX))
+    indexed: list[dict[str, Any]] = []
+    if index_names:
+        index_path = _download_remote_file(
+            files, publication_root, snapshot_root, index_names[-1],
+        )
+        indexed = _load_snapshot_index(
+            index_path, authority=authority, remote_entries=remote_entries,
+        )
+    represented = {item["snapshot_id"] for item in indexed}
+    missing_names = sorted(
+        name
+        for name in remote_entries
+        if name.endswith(_MANIFEST_SUFFIX)
+        and name.removesuffix(_MANIFEST_SUFFIX) not in represented
+    )
+    for name in missing_names:
+        if not (snapshot_root / name).is_file():
+            _download_remote_file(files, publication_root, snapshot_root, name)
+    missing = _validated_manifests(snapshot_root, remote_entries=remote_entries)
+    combined = {item["snapshot_id"]: item for item in indexed}
+    combined.update({item["snapshot_id"]: item for item in missing})
+    return list(combined.values()), not index_names
 
 
 def _download_remote_file(files: Any, remote_root: str, local_root: Path, name: str) -> Path:
@@ -639,6 +732,7 @@ def _snapshot_view(
     databricks: bool,
     create: bool = False,
     latest_manifest_only: bool = False,
+    download_manifests: bool = True,
 ) -> Iterator[tuple[Path, Any | None, str, Mapping[str, Any] | None]]:
     snapshot_root = root / authority / "snapshots"
     if not databricks:
@@ -660,6 +754,7 @@ def _snapshot_view(
                 remote_root,
                 local_root,
                 latest_manifest_only=latest_manifest_only,
+                download_manifests=download_manifests,
             )
         except Exception as exc:
             if _is_databricks_not_found(exc):
@@ -715,10 +810,15 @@ def _delete_publication(
     files: Any | None,
     publication_root: str,
 ) -> None:
-    if files is None:
-        path.unlink()
-    else:
-        files.delete(_remote_child(publication_root, path.name))
+    try:
+        if files is None:
+            path.unlink()
+        else:
+            files.delete(_remote_child(publication_root, path.name))
+    except Exception as exc:
+        if isinstance(exc, FileNotFoundError) or _is_databricks_not_found(exc):
+            return
+        raise
 
 
 def _apply_retention(
@@ -729,7 +829,7 @@ def _apply_retention(
     manifests: list[dict[str, Any]],
     retention_days: int,
     minimum_snapshots: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Remove expired manifests, then blobs no retained manifest can reach."""
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     ordered = sorted(
@@ -775,14 +875,92 @@ def _apply_retention(
                 publication_root=publication_root,
             )
             removed_blobs.append(name)
-    return {
-        "status": "applied",
-        "days": retention_days,
-        "minimum_snapshots": minimum_snapshots,
-        "removed_snapshots": len(expired),
-        "removed_blobs": len(removed_blobs),
-        "retained_snapshots": len(retained),
+    return (
+        {
+            "status": "applied",
+            "days": retention_days,
+            "minimum_snapshots": minimum_snapshots,
+            "removed_snapshots": len(expired),
+            "removed_blobs": len(removed_blobs),
+            "retained_snapshots": len(retained),
+        },
+        retained,
+    )
+
+
+def _publish_snapshot_index(
+    *,
+    snapshot_root: Path,
+    files: Any,
+    publication_root: str,
+    authority: str,
+    manifests: list[dict[str, Any]],
+    prior_index_names: list[str],
+    migrated: bool,
+) -> dict[str, Any]:
+    generated_at = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    body = {
+        "authority_id": authority,
+        "format": _INDEX_FORMAT,
+        "generated_at": generated_at,
+        "snapshots": sorted(
+            manifests, key=lambda item: (item["created_at"], item["snapshot_id"]),
+        ),
     }
+    index = dict(body)
+    index["index_sha256"] = hashlib.sha256(_canonical_bytes(body)).hexdigest()
+    checkpoint = re.sub(r"[^0-9TZ]", "", generated_at)
+    name = f"snapshot-index-{checkpoint}-{index['index_sha256'][:16]}{_INDEX_SUFFIX}"
+    staged = snapshot_root / name
+    staged.write_bytes(_canonical_bytes(index))
+    _publish_remote_file(files, staged, _remote_child(publication_root, name))
+    for prior in prior_index_names:
+        if prior != name:
+            _delete_publication(
+                snapshot_root / prior,
+                files=files,
+                publication_root=publication_root,
+            )
+    return {
+        "status": "migrated" if migrated else "updated",
+        "file": name,
+        "snapshot_count": len(manifests),
+    }
+
+
+def _enforce_retention(
+    *,
+    snapshot_root: Path,
+    files: Any | None,
+    publication_root: str,
+    manifests: list[dict[str, Any]],
+    retention_policy: tuple[int, int],
+    authority: str,
+    remote_entries: Mapping[str, Any] | None,
+    index_migrated: bool,
+) -> dict[str, Any]:
+    retention, retained = _apply_retention(
+        snapshot_root=snapshot_root,
+        files=files,
+        publication_root=publication_root,
+        manifests=manifests,
+        retention_days=retention_policy[0],
+        minimum_snapshots=retention_policy[1],
+    )
+    if files is not None:
+        assert remote_entries is not None
+        retention["index"] = _publish_snapshot_index(
+            snapshot_root=snapshot_root,
+            files=files,
+            publication_root=publication_root,
+            authority=authority,
+            manifests=retained,
+            prior_index_names=sorted(
+                name for name in remote_entries if name.endswith(_INDEX_SUFFIX)
+            ),
+            migrated=index_migrated,
+        )
+    return retention
 
 
 def list_snapshots(
@@ -907,6 +1085,7 @@ def snapshot_state(
             databricks=databricks,
             create=True,
             latest_manifest_only=retention_policy is None,
+            download_manifests=retention_policy is None,
         ) as (snapshot_root, files, publication_root, remote_entries):
             if databricks:
                 assert files is not None
@@ -922,10 +1101,21 @@ def snapshot_state(
                 if artifacts_path is not None
                 else None
             )
-            manifests = _validated_manifests(
-                snapshot_root,
-                remote_entries=remote_entries,
-            )
+            if databricks and retention_policy is not None:
+                assert files is not None and remote_entries is not None
+                manifests, index_migrated = _indexed_remote_manifests(
+                    snapshot_root=snapshot_root,
+                    files=files,
+                    publication_root=publication_root,
+                    remote_entries=remote_entries,
+                    authority=qualified["authority_id"],
+                )
+            else:
+                manifests = _validated_manifests(
+                    snapshot_root,
+                    remote_entries=remote_entries,
+                )
+                index_migrated = False
             if manifests:
                 latest_created = max(str(item["created_at"]) for item in manifests)
                 latest = [item for item in manifests if item["created_at"] == latest_created]
@@ -987,13 +1177,15 @@ def snapshot_state(
                     ),
                 }
                 if retention_policy is not None:
-                    result["retention"] = _apply_retention(
+                    result["retention"] = _enforce_retention(
                         snapshot_root=snapshot_root,
                         files=files,
                         publication_root=publication_root,
                         manifests=manifests,
-                        retention_days=retention_policy[0],
-                        minimum_snapshots=retention_policy[1],
+                        retention_policy=retention_policy,
+                        authority=qualified["authority_id"],
+                        remote_entries=remote_entries,
+                        index_migrated=index_migrated,
                     )
                 return result
             created = datetime.now(UTC)
@@ -1089,13 +1281,15 @@ def snapshot_state(
                 ),
             }
             if retention_policy is not None:
-                result["retention"] = _apply_retention(
+                result["retention"] = _enforce_retention(
                     snapshot_root=snapshot_root,
                     files=files,
                     publication_root=publication_root,
                     manifests=[*manifests, manifest],
-                    retention_days=retention_policy[0],
-                    minimum_snapshots=retention_policy[1],
+                    retention_policy=retention_policy,
+                    authority=qualified["authority_id"],
+                    remote_entries=remote_entries,
+                    index_migrated=index_migrated,
                 )
             return result
 

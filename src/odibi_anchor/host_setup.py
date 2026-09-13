@@ -420,7 +420,9 @@ def _setup_databricks_workspace(
         indent=2, sort_keys=True,
     ) + "\n").encode()
     if manifest is not None and previous == hashes:
-        _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+        # The reads above already verified every managed file against the prior
+        # manifest. Re-reading the same publication doubles Workspace API traffic
+        # without adding drift evidence; post-mutation verification remains below.
         return _result(
             target, "databricks", "unchanged", hashes, compatible_unmanaged,
             legacy_managed,

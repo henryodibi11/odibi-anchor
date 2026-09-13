@@ -1817,6 +1817,7 @@ def init(
                         prepared_adoption=prepared_adoption,
                     )
                     _final["accepted_task_authority"] = authority
+                    _final["task_window_id"] = authority["task_window_id"]
                     _save_session_state({
                         "stage": "planned",
                         "files_changed": sorted(_SESSION_FILES_CHANGED),

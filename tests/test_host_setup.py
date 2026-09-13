@@ -560,14 +560,19 @@ def test_databricks_workspace_install_uses_api_without_staging(tmp_path, monkeyp
     first = setup_host(
         "/Workspace/Users/test@example.invalid/anchor-host", adapter="databricks"
     )
+    before_repeated = len(workspace.calls)
     repeated = setup_host(
         "/Workspace/Users/test@example.invalid/anchor-host", adapter="databricks"
     )
+    repeated_calls = workspace.calls[before_repeated:]
 
     assert first["status"] == "installed"
     assert repeated["status"] == "unchanged"
     assert first["verified_skill_count"] == 18
     assert first["verified_file_count"] == len(first["managed_files"])
+    assert sum(operation == "download" for operation, _path in repeated_calls) == (
+        repeated["verified_file_count"] + 1
+    )
     assert not any(".anchor-host-stage-" in path for _operation, path in workspace.calls)
     assert not any("__pycache__" in path or path.endswith(".pyc") for path in workspace.files)
 

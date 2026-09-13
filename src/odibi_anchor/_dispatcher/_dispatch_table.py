@@ -639,7 +639,7 @@ _WORKFLOWS: dict[str, dict[str, str | list[str]]] = {
     "Implementation task": {
         "when": "Starting a code change — full planning-to-completion flow.",
         "steps": [
-            'anchor("status"); anchor("audit_history")  # orient and check prior evidence',
+            '# Managed bootstrap orientation already includes status + audit_history; do not repeat them',
             'anchor("new_session", name="feature_name", inline=True)',
             'task_result = anchor("task", "description", goal="intended outcome", mode="implementation", acceptance_criteria=["completion check"])',
             '# Review task_result["memory_context"]; acknowledge bounded selections or none',

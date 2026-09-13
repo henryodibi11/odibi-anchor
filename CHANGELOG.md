@@ -2,6 +2,25 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.15] - 2026-09-13
+
+### Added
+
+- Databricks retention now maintains an immutable, authority-bound, checksummed snapshot index.
+  Existing histories migrate on their first retention run; later runs fetch one index and only
+  canonical manifests published since it instead of downloading the full history.
+- Accepted task results expose `task_window_id` prominently, and ambiguous rebind failures include
+  bounded task context plus copy-ready orphan-recovery guidance that distinguishes rebinding from
+  authenticated dirty-task adoption.
+
+### Changed
+
+- Unchanged Databricks guidance setup reuses the file bytes already read for drift detection rather
+  than downloading every managed file a second time. Mutation paths retain post-write verification.
+- Startup and workflow guidance now treats managed orientation as the source of `status` and
+  `audit_history`, avoiding ceremonial duplicate calls.
+- Safe-stop prerequisite failures include the exact learning-assessment call needed to recover.
+
 ## [0.3.14] - 2026-09-13
 
 ### Changed

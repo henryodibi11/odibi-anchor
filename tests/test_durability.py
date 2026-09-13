@@ -26,6 +26,7 @@ class FakeDatabricksFiles:
         self.uploads: list[tuple[str, bool, bool]] = []
         self.downloads: list[tuple[str, bool, bool]] = []
         self.fail_manifest_upload = False
+        self.fail_index_upload = False
 
     def create_directory(self, path: str) -> None:
         self.directories.add(path)
@@ -49,6 +50,8 @@ class FakeDatabricksFiles:
         self.uploads.append((path, overwrite, use_parallel))
         if self.fail_manifest_upload and path.endswith(".manifest.json"):
             raise OSError("simulated remote manifest publication failure")
+        if self.fail_index_upload and path.endswith(".index.json"):
+            raise OSError("simulated remote index publication failure")
         if path in self.files and not overwrite:
             raise FileExistsError(path)
         self.files[path] = Path(source).read_bytes()
@@ -345,6 +348,141 @@ def test_databricks_retention_deletes_expired_manifest_and_unreferenced_blobs(
     assert len([name for name in files.files if name.endswith(".manifest.json")]) == 1
     assert len([name for name in files.files if name.endswith(".artifacts.tar")]) == 1
     assert len([name for name in files.files if name.endswith(".sqlite3")]) == 1
+
+
+def test_databricks_retention_migrates_legacy_history_then_reads_constant_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    artifacts.mkdir()
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    for index in range(205):
+        (artifacts / "record.md").write_text(f"state {index}\n", encoding="utf-8")
+        durability.snapshot_state(
+            source_db=source, source_artifacts=artifacts, durable_root=durable,
+            authority_id="work", databricks=True,
+        )
+
+    before_migration = len(files.downloads)
+    migrated = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable,
+        authority_id="work", databricks=True,
+        retention_days=3650, minimum_snapshots=300,
+    )
+    migration_downloads = files.downloads[before_migration:]
+    assert sum(path.endswith(".manifest.json") for path, _, _ in migration_downloads) == 205
+    assert migrated["retention"]["index"]["status"] == "migrated"
+
+    (artifacts / "record.md").write_text("post-index state\n", encoding="utf-8")
+    durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable,
+        authority_id="work", databricks=True,
+    )
+    before_steady = len(files.downloads)
+    steady = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable,
+        authority_id="work", databricks=True,
+        retention_days=3650, minimum_snapshots=300,
+    )
+    steady_downloads = files.downloads[before_steady:]
+
+    assert steady["retention"]["index"]["status"] == "updated"
+    assert sum(path.endswith(".manifest.json") for path, _, _ in steady_downloads) == 1
+    assert len([name for name in files.files if name.endswith(".index.json")]) == 1
+
+
+def test_databricks_retention_fails_closed_on_corrupt_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    arguments = {
+        "source_db": source,
+        "durable_root": "/Volumes/catalog/schema/anchor/odibi-anchor",
+        "authority_id": "work",
+        "databricks": True,
+        "retention_days": 7,
+        "minimum_snapshots": 1,
+    }
+    durability.snapshot_state(**arguments)
+    index_name = next(name for name in files.files if name.endswith(".index.json"))
+    files.files[index_name] = files.files[index_name].replace(b'"work"', b'"evil"')
+
+    with pytest.raises(RuntimeError, match="snapshot index"):
+        durability.snapshot_state(**arguments)
+
+
+def test_databricks_interrupted_index_publication_recovers_from_canonical_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    arguments = {
+        "source_db": source,
+        "durable_root": "/Volumes/catalog/schema/anchor/odibi-anchor",
+        "authority_id": "work",
+        "databricks": True,
+        "retention_days": 7,
+        "minimum_snapshots": 1,
+    }
+    files.fail_index_upload = True
+    with pytest.raises(OSError, match="index publication"):
+        durability.snapshot_state(**arguments)
+    assert len([name for name in files.files if name.endswith(".manifest.json")]) == 1
+    assert not any(name.endswith(".index.json") for name in files.files)
+
+    files.fail_index_upload = False
+    recovered = durability.snapshot_state(**arguments)
+    assert recovered["action"] == "reused"
+    assert recovered["retention"]["index"]["status"] == "migrated"
+
+
+def test_databricks_retention_reconciles_manifest_published_by_concurrent_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    retained = {
+        "source_db": source, "durable_root": durable, "authority_id": "work",
+        "databricks": True, "retention_days": 7, "minimum_snapshots": 2,
+    }
+    durability.snapshot_state(**retained)
+    real_publish_index = durability._publish_snapshot_index
+    interleaved = False
+
+    def publish_with_concurrent_manifest(**kwargs):
+        nonlocal interleaved
+        if not interleaved:
+            interleaved = True
+            with sqlite3.connect(source) as connection:
+                connection.execute("INSERT INTO example(value) VALUES ('concurrent')")
+            durability.snapshot_state(
+                source_db=source, durable_root=durable, authority_id="work",
+                databricks=True,
+            )
+        return real_publish_index(**kwargs)
+
+    monkeypatch.setattr(durability, "_publish_snapshot_index", publish_with_concurrent_manifest)
+    durability.snapshot_state(**retained)
+    monkeypatch.setattr(durability, "_publish_snapshot_index", real_publish_index)
+    before_reconcile = len(files.downloads)
+    reconciled = durability.snapshot_state(**retained)
+    downloads = files.downloads[before_reconcile:]
+
+    assert reconciled["action"] == "reused"
+    assert sum(path.endswith(".manifest.json") for path, _, _ in downloads) == 1
+    assert reconciled["retention"]["retained_snapshots"] == 2
 
 
 @pytest.mark.parametrize(

@@ -38,14 +38,20 @@ def safe_stop_task(
         )
     closed = latest_closed_learning_obligation(**owner)
     if closed is None or closed["status"] != "assessed":
-        raise RuntimeError("safe_stop requires a closed structured-learning assessment")
+        raise RuntimeError(
+            "safe_stop requires a closed structured-learning assessment; call "
+            "anchor('learning', 'assess', outcome='nothing_reusable_learned') first"
+        )
 
     from odibi_anchor._dispatcher._operating_protocol import latest_delivery_gate_passed
 
     if latest_delivery_gate_passed(
         session_timings, epoch=session_state.task_verification_epoch,
     ):
-        raise RuntimeError("safe_stop is invalid after a successful delivery gate")
+        raise RuntimeError(
+            "safe_stop is invalid after a successful delivery gate; close the task with "
+            "anchor('learning', 'assess', outcome='nothing_reusable_learned') instead"
+        )
 
     normalized_reason = " ".join(reason.split())
     normalized_evidence = [" ".join(item.split()) for item in evidence]

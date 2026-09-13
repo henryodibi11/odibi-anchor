@@ -184,6 +184,7 @@ def build_accepted_task_record(
         "identity": {
             "task_window_id": session_state.task_window_id,
             "session_id": session_state.session_id,
+            "session_name": getattr(session_state, "session_name", None),
             "project_id": session_state.active_project,
             "anchor_home": _canonical_path(session_state.anchor_home),
             "project_root": _canonical_path(session_state.project_root),
@@ -630,10 +631,16 @@ def rebind_latest_open_task(
         if all(candidate["identity"].get(key) == current for key, current in current_identity.items())
     ]
     if task_window_id is not None and not isinstance(task_window_id, str):
-        raise TaskAuthorityUnavailable("task_window_id must be a non-empty string")
+        raise TaskAuthorityUnavailable(
+            "task_window_id must be a non-empty string; call "
+            "anchor('task_rebind', task_window_id='<exact-id>')"
+        )
     requested = task_window_id.strip() if task_window_id is not None else None
     if task_window_id is not None and not requested:
-        raise TaskAuthorityUnavailable("task_window_id must be a non-empty string")
+        raise TaskAuthorityUnavailable(
+            "task_window_id must be a non-empty string; call "
+            "anchor('task_rebind', task_window_id='<exact-id>')"
+        )
     if requested is not None:
         matches = [
             candidate for candidate in matches
@@ -645,13 +652,30 @@ def rebind_latest_open_task(
         )
         raise TaskAuthorityUnavailable(
             "no open accepted task matches the exact project, Anchor home, project root, "
-            "artifact root, target, repository provider, and trust domain" + detail
+            "artifact root, target, repository provider, and trust domain" + detail + "; call "
+            "anchor('task_rebind') to list matching open tasks or use an exact reported ID"
         )
     if len(matches) > 1:
-        bounded = sorted(item["identity"]["task_window_id"] for item in matches)[:10]
+        bounded = sorted(matches, key=lambda item: item["identity"]["task_window_id"])[:10]
+        context = "; ".join(
+            "id={id}, accepted_at={accepted}, session={session}, mode={mode}, goal={goal}".format(
+                id=item["identity"]["task_window_id"],
+                accepted=item.get("accepted_at", "unknown"),
+                session=item["identity"].get("session_name")
+                or item["identity"].get("session_id", "unknown"),
+                mode=item["task"].get("profile", {}).get("execution_mode", "unknown"),
+                goal=str(item["task"].get("goal") or "unspecified")[:120],
+            )
+            for item in bounded
+        )
         raise TaskAuthorityUnavailable(
             "multiple open accepted tasks match the exact owner; select one with "
-            "anchor('task_rebind', task_window_id='<exact-id>'): " + ", ".join(bounded)
+            "anchor('task_rebind', task_window_id='<exact-id>'). Open tasks: " + context + ". "
+            "To close an abandoned task, rebind it, dispose pending memories in one "
+            "all_pending=True call when all are irrelevant, then run review, gate, and "
+            "learning assess; if delivery is blocked, assess learning and use learning "
+            "safe_stop. task_adoption is only for authenticated takeover of dirty work, "
+            "not orphan recovery."
         )
     record = matches[0]
     identity = record["identity"]
