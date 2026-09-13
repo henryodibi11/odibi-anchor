@@ -184,6 +184,15 @@ def _memory(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSeman
     return InvocationSemantics("read", "context_collection")
 
 
+def _task_adoption(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSemantics:
+    command = str(args[0] if args else kwargs.get("command", "inspect")).strip().lower()
+    if command == "inspect":
+        return InvocationSemantics("read", "safe_orientation")
+    if command in {"request", "withdraw"}:
+        return InvocationSemantics("artifact_write", "safe_orientation")
+    raise ValueError(f"unknown task_adoption command: {command!r}")
+
+
 def _concurrency(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSemantics:
     positional = _selector(args, kwargs)
     keyword = kwargs.get("command")
@@ -423,7 +432,6 @@ _FIXED_INVOCATIONS: dict[str, InvocationSemantics] = {
     "sync": InvocationSemantics("external_mutation", "task_required"),
     "table_trend": InvocationSemantics("read", "task_required"),
     "task": InvocationSemantics("artifact_write", "safe_orientation"),
-    "task_adoption": InvocationSemantics("artifact_write", "safe_orientation"),
     "task_rebind": InvocationSemantics("artifact_write", "context_collection"),
     "test": InvocationSemantics("read", "task_required"),
     "tools": InvocationSemantics("read", "safe_orientation"),
@@ -465,6 +473,11 @@ def build_static_action_contracts(
         frozenset({"read", "governance_write", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _memory,
+    )
+    contracts["task_adoption"] = ActionContract(
+        frozenset({"read", "artifact_write"}),
+        frozenset({"safe_orientation"}),
+        _task_adoption,
     )
     contracts["concurrency"] = ActionContract(
         frozenset({"read", "artifact_write"}),

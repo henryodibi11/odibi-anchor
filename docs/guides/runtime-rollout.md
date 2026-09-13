@@ -128,8 +128,9 @@ escalate. Never delete or rewrite history to make a rollback appear eligible.
 1. Run `anchor("concurrency", command="inspect")`. Confirm the exact project, target, artifact root,
    runtime ID, binding source, and schema checksums. A stale or ambiguous binding requires process
    restart/rebootstrap before mutation.
-2. Run `anchor("task_rebind")` first. It rebinds only the latest open task matching the immutable
-   route/session authority; it accepts no caller-supplied task ID.
+2. Run `anchor("task_rebind")` first. It rebinds the only open task matching immutable authority;
+   when multiple exact matches are reported, select one with
+   `anchor("task_rebind", task_window_id="<exact-id>")`.
 3. In a current accepted exact-owner task, inspect selections with
    `anchor("memory", "recovery", action="inspect")`. Treat `active_pending`,
    `terminal_unresolved`, `abandoned`, `recovered`, `semantically_disposed`, and `ambiguous` as

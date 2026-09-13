@@ -148,7 +148,9 @@ def test_mcp_visible_action_rebinds_without_reinitializing_dispatcher(tmp_path, 
     window = accepted["accepted_task_authority"]["task_window_id"]
 
     current, _, _ = init(root=tmp_path, output_format="dict")
-    rebound = current("task_rebind", output_format="dict")
+    rebound = current(
+        "task_rebind", task_window_id=window, output_format="dict",
+    )
 
     assert rebound["kind"] == "task_authority_rebind"
     assert rebound["task_window_id"] == window
@@ -177,8 +179,6 @@ def test_mcp_visible_action_rebinds_without_reinitializing_dispatcher(tmp_path, 
         and timing["passed"] is True
         for timing in _SESSION_TIMINGS
     )
-
-
 def test_mcp_visible_approval_adopts_exact_dirty_continuation(tmp_path, monkeypatch):
     def git(*args):
         return subprocess.run(

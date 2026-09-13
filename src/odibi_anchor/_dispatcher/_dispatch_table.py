@@ -714,6 +714,8 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'context={"file": "src/job.py"})`',
         '`anchor("memory", "disposition", memory_id="...", disposition="irrelevant", '
         'reason={"reason": "not applicable"})`',
+        '`anchor("memory", "disposition", all_pending=True, disposition="irrelevant", '
+        'reason={"reason": "none applied"})  # one call; never loop all-irrelevant selections`',
         '`anchor("memory", "evaluate", memory_id="...", outcome="helpful", '
         'evidence={"test": "passed"})`',
     ],

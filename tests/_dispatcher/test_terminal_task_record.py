@@ -92,6 +92,8 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     monkeypatch.setitem(boot._ENV, "authority_id", "work")
     monkeypatch.setitem(boot._ENV, "trust_domain", "work")
     monkeypatch.setitem(boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=tmp_path))
+    monkeypatch.setitem(boot._ENV, "retention_days", 7)
+    monkeypatch.setitem(boot._ENV, "retention_minimum_snapshots", 3)
     result = {"assessment": {
         "assessment_id": "las-durable", "outcome": "nothing_reusable_learned",
         "observation_ids": [], "actor_kind": "agent",
@@ -104,6 +106,10 @@ def test_terminal_closure_snapshots_configured_durable_state(tmp_path, monkeypat
     )
 
     assert result["durable_state"]["action"] == "created"
+    assert result["durable_state"]["retention"] == {
+        "status": "applied", "days": 7, "minimum_snapshots": 3,
+        "removed_snapshots": 0, "removed_blobs": 0, "retained_snapshots": 1,
+    }
     assert result["durable_state"]["manifest"]["format"] == "odibi-anchor-durable-snapshot-v2"
     assert result["accepted_task_closure"]["status"] == "unavailable"
     assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
@@ -137,6 +143,30 @@ def test_durable_checkpoint_ignores_environment_redirection_after_boot(tmp_path,
     assert result["durable_state"]["authority"]["authority_id"] == "bound-authority"
     assert list((bound / "bound-authority" / "snapshots").glob("*.manifest.json"))
     assert not any(redirected.iterdir())
+
+
+def test_nonterminal_checkpoint_defers_configured_retention_scan(tmp_path, monkeypatch):
+    import odibi_anchor._dispatcher._boot as boot
+    from odibi_anchor._dispatcher._post_dispatch import _snapshot_durable_state
+
+    observed = []
+    monkeypatch.setitem(boot._ENV, "durable_root", "/durable")
+    monkeypatch.setitem(boot._ENV, "authority_id", "work")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "is_databricks", True)
+    monkeypatch.setitem(boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=tmp_path))
+    monkeypatch.setitem(boot._ENV, "retention_days", 1)
+    monkeypatch.setitem(boot._ENV, "retention_minimum_snapshots", 3)
+    monkeypatch.setattr(
+        "odibi_anchor.durability.snapshot_state",
+        lambda **kwargs: observed.append(kwargs) or {"action": "created"},
+    )
+
+    result = {}
+    _snapshot_durable_state(result, memory_db=str(tmp_path / "memory.db"))
+
+    assert observed[0]["retention_days"] is None
+    assert observed[0]["minimum_snapshots"] is None
 
 
 def test_latest_failed_gate_prevents_false_completion(tmp_path, monkeypatch):

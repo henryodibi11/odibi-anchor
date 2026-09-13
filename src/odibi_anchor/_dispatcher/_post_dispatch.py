@@ -13,6 +13,17 @@ _DEFERRED_DURABILITY_ACTIONS = frozenset({
 })
 
 
+def _defer_durability(action, args, kwargs) -> bool:
+    if action in _DEFERRED_DURABILITY_ACTIONS:
+        return True
+    selector = str(args[0] if args else kwargs.get("action", "")).strip().lower()
+    return (
+        action == "memory"
+        and selector == "disposition"
+        and kwargs.get("disposition") == "irrelevant"
+    )
+
+
 def post_commit_structured_assessment(
     result, *, session_timings, session_files_changed, session_state,
 ) -> None:
@@ -117,7 +128,9 @@ def _persist_terminal_task_if_ready(
             _ENV["memory_db"], task_window_id=session_state.task_window_id,
             terminal_status=status,
         )
-        _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
+        _snapshot_durable_state(
+            result, memory_db=_ENV["memory_db"], enforce_retention=True,
+        )
         return
     record = build_terminal_projection(
         session_state=session_state, session_timings=session_timings,
@@ -131,10 +144,14 @@ def _persist_terminal_task_if_ready(
         _ENV["memory_db"], task_window_id=session_state.task_window_id,
         terminal_status=status,
     )
-    _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
+    _snapshot_durable_state(
+        result, memory_db=_ENV["memory_db"], enforce_retention=True,
+    )
 
 
-def _snapshot_durable_state(result, *, memory_db: str) -> None:
+def _snapshot_durable_state(
+    result, *, memory_db: str, enforce_retention: bool = False,
+) -> None:
     """Checkpoint configured durable state after successful authority writes."""
     from odibi_anchor._dispatcher._boot import _ENV
 
@@ -161,8 +178,12 @@ def _snapshot_durable_state(result, *, memory_db: str) -> None:
             durable_root=durable_root,
             authority_id=authority_id,
             databricks=bool(_ENV.get("is_databricks")),
-            retention_days=_ENV.get("retention_days"),
-            minimum_snapshots=_ENV.get("retention_minimum_snapshots"),
+            retention_days=(
+                _ENV.get("retention_days") if enforce_retention else None
+            ),
+            minimum_snapshots=(
+                _ENV.get("retention_minimum_snapshots") if enforce_retention else None
+            ),
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError(
@@ -843,13 +864,17 @@ def run_post_dispatch(
             if (
                 isinstance(result, dict)
                 and action != "task"
-                and action not in _DEFERRED_DURABILITY_ACTIONS
+                and not _defer_durability(action, args, kwargs)
                 and "durable_state" not in result
                 and {"governance_write", "artifact_write"}.intersection(effects)
             ):
                 from odibi_anchor._dispatcher._boot import _ENV
 
-                _snapshot_durable_state(result, memory_db=_ENV["memory_db"])
+                _snapshot_durable_state(
+                    result,
+                    memory_db=_ENV["memory_db"],
+                    enforce_retention=action in {"checkpoint", "snapshot"},
+                )
 
     # Tool findings are candidates, not automatically persisted evidence. This
     # makes the offer explicit while preserving human/agent judgment about materiality.

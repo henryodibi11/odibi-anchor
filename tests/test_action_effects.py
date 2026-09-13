@@ -74,6 +74,8 @@ def test_exact_pre_task_access_assignment_for_all_builtins():
     *[("learning", value, "governance_write", "task_required") for value in ("capture", "assess", "safe_stop")],
     *[("learning", value, "artifact_write", "task_required") for value in ("triage", "backup")],
     *[("memory", value, "governance_write", "task_required") for value in ("apply", "disposition", "evaluate")],
+    ("task_adoption", "inspect", "read", "safe_orientation"),
+    *[("task_adoption", value, "artifact_write", "safe_orientation") for value in ("request", "withdraw")],
     *[("project", value, "read", "safe_orientation") for value in (None, "list", "status")],
     *[("project", value, "artifact_write", "task_required") for value in ("create", "set_target")],
 ])
@@ -125,7 +127,7 @@ def test_fixed_builtin_effect_sets_match_independent_contract_table():
             "task", "checkpoint", "learn", "save", "confirm", "reject", "snapshot",
             "save_snap", "archive", "import_md", "db_migrate", "register_tool",
             "touched", "skill_loaded", "log", "new_session", "incident_snapshot",
-            "task_adoption", "task_rebind",
+            "task_rebind",
         },
         "external_mutation": {"sync"},
         "orient": {"orient", "help", "quick"},
@@ -133,7 +135,7 @@ def test_fixed_builtin_effect_sets_match_independent_contract_table():
     polymorphic = {
         "problem", "spec", "work_item", "project", "config", "contract", "apply_sql",
         "apply_transform", "dogfood", "learning", "memory", "memory_hygiene", "observe_table",
-        "concurrency",
+        "concurrency", "task_adoption",
     }
     classified = polymorphic.copy()
     for effect, actions in expected.items():
@@ -176,6 +178,13 @@ def test_memory_read_effects(selector):
 def test_memory_write_effects(selector):
     outcome = resolve_invocation(CONTRACTS["memory"], (selector,), {})
     assert (outcome.effects, outcome.pre_task_access) == (("governance_write",), "task_required")
+
+
+def test_task_adoption_inspect_is_read_only_but_mutations_remain_writes():
+    assert resolved("task_adoption", "inspect") == "read"
+    assert resolved("task_adoption", command="inspect") == "read"
+    assert resolved("task_adoption", "request") == "artifact_write"
+    assert resolved("task_adoption", "withdraw") == "artifact_write"
 
 
 def test_reviewed_seed_load_is_a_pre_task_artifact_write():
@@ -648,6 +657,123 @@ def test_high_frequency_session_bookkeeping_defers_durable_snapshot(action, monk
 
     assert actual is result
     assert snapshots == []
+
+
+@pytest.mark.parametrize("all_pending", [False, True])
+def test_irrelevant_memory_disposition_defers_until_terminal_boundary(
+    all_pending, monkeypatch,
+):
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    snapshots = []
+    monkeypatch.setattr(
+        "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+        lambda *_args, **_kwargs: snapshots.append("snapshot"),
+    )
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+    kwargs = {
+        "disposition": "irrelevant", "reason": {"basis": "not applicable"},
+        "all_pending": all_pending,
+    }
+
+    run_post_dispatch(
+        "memory", {"kind": "memory_disposition", "count": 1}, None,
+        ("disposition",), kwargs,
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(
+            CONTRACTS["memory"], ("disposition",), kwargs,
+        ),
+    )
+
+    assert snapshots == []
+
+
+def test_task_adoption_inspection_does_not_create_checkpoint(monkeypatch):
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    snapshots = []
+    monkeypatch.setattr(
+        "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+        lambda *_args, **_kwargs: snapshots.append("snapshot"),
+    )
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+
+    run_post_dispatch(
+        "task_adoption", {"kind": "task_adoption_context"}, None,
+        ("inspect",), {},
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(
+            CONTRACTS["task_adoption"], ("inspect",), {},
+        ),
+    )
+
+    assert snapshots == []
+
+
+@pytest.mark.parametrize("action", ["checkpoint", "snapshot"])
+def test_explicit_checkpoint_actions_enforce_retention_once(action, monkeypatch):
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    snapshots = []
+    monkeypatch.setattr(
+        "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+        lambda *_args, **kwargs: snapshots.append(kwargs["enforce_retention"]),
+    )
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+
+    result = {"kind": action}
+    if action == "checkpoint":
+        result["metrics"] = {"overall_pass": True}
+
+    run_post_dispatch(
+        action, result, None, (), {},
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(CONTRACTS[action], (), {}),
+    )
+
+    assert snapshots == [True]
+
+
+@pytest.mark.parametrize("disposition", ["applied", "suspect", "superseded"])
+def test_global_memory_dispositions_remain_immediately_durable(
+    disposition, monkeypatch,
+):
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    snapshots = []
+    monkeypatch.setattr(
+        "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+        lambda *_args, **_kwargs: snapshots.append(disposition),
+    )
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+    kwargs = {"disposition": disposition, "reason": {"basis": "material"}}
+
+    run_post_dispatch(
+        "memory", {"kind": "memory_disposition", "count": 1}, None,
+        ("disposition",), kwargs,
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=resolve_invocation(
+            CONTRACTS["memory"], ("disposition",), kwargs,
+        ),
+    )
+
+    assert snapshots == [disposition]
 
 
 def test_successful_memory_rejection_is_preserved_in_durable_restore(tmp_path, monkeypatch):

@@ -2,6 +2,26 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.14] - 2026-09-13
+
+### Changed
+
+- Automatic intermediate checkpoints no longer run configured retention over the entire snapshot
+  history; retention remains enforced at terminal learning closure and explicit checkpoint or
+  snapshot actions.
+- Irrelevant memory dispositions are recoverable bookkeeping deferred to the next durable
+  lifecycle boundary, and managed guidance directs all-irrelevant selections through one
+  `all_pending=True` call instead of a snapshot-producing loop.
+- Databricks guidance now uses a re-raising traceback boundary for multi-step cells so generic
+  execution failures remain diagnosable without unsafe retries or secret-bearing dumps.
+
+### Fixed
+
+- `task_adoption inspect` is now correctly classified as read-only rather than creating an
+  unnecessary durable checkpoint.
+- Ambiguous task rebinding now reports copy-ready recovery and accepts an exact
+  `task_window_id`, while preserving full owner-identity validation.
+
 ## [0.3.13] - 2026-09-13
 
 ### Changed
@@ -254,3 +274,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.11]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.11
 [0.3.12]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.12
 [0.3.13]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.13
+[0.3.14]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.14

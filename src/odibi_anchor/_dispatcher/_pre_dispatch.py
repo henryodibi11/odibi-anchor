@@ -109,7 +109,8 @@ def run_pre_dispatch_enforcement(
                 "BLOCKED: selected task memories require an explicit disposition before "
                 f"learning assessment: {memory_ids}. Use anchor('memory', 'disposition', "
                 "memory_id='...', disposition='applied|irrelevant|suspect|superseded', "
-                "reason={...})."
+                "reason={...}). When every pending selection is irrelevant, use one call with "
+                "all_pending=True, disposition='irrelevant', reason={...}; never loop those calls."
             )
         unevaluated = unevaluated_task_applications(
             _ENV["memory_db"], task_window_id=active_obligation["task_window_id"],

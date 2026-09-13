@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -179,7 +180,32 @@ def test_rebind_fails_closed_when_multiple_exact_open_tasks_match(tmp_path):
 
     assert "ltw_durable" in str(exc.value)
     assert "ltw_second" in str(exc.value)
+    assert "task_rebind" in str(exc.value)
     assert restarted.task_window_id == "ltw_new"
+
+    selected = rebind_latest_open_task(
+        db, session_state=restarted, task_window_id="ltw_second",
+    )
+    assert selected["task_window_id"] == "ltw_second"
+    assert restarted.task_window_id == "ltw_second"
+
+
+def test_rebind_rejects_unknown_or_empty_explicit_task_window(tmp_path):
+    db = tmp_path / "memory.db"
+    original = state(tmp_path)
+    persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    restarted = fresh_state(original)
+
+    with pytest.raises(TaskAuthorityUnavailable, match="non-empty"):
+        rebind_latest_open_task(db, session_state=restarted, task_window_id=" ")
+    with pytest.raises(TaskAuthorityUnavailable, match="non-empty"):
+        rebind_latest_open_task(
+            db, session_state=restarted, task_window_id=cast(Any, 123),
+        )
+    with pytest.raises(TaskAuthorityUnavailable, match="ltw_unknown"):
+        rebind_latest_open_task(
+            db, session_state=restarted, task_window_id="ltw_unknown",
+        )
 
 
 def test_rebind_requires_exact_trust_domain(tmp_path):

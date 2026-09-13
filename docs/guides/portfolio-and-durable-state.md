@@ -98,12 +98,13 @@ payloads are not fetched. It does not mutate the caller's environment.
 
 ## Durable state lifecycle
 
-The live database and managed project artifact tree stay on local compute. After each successful
-substantive authority write—including task acceptance, evidence/memory writes, and terminal
-closure—Anchor automatically snapshots both when `ANCHOR_DURABLE_ROOT` and
-`ANCHOR_AUTHORITY_ID` are configured. High-frequency recoverable session bookkeeping (`touched`,
-`skill_loaded`, `task_rebind`, and the pre-task `new_session`) remains local until the next durable
-authority or lifecycle boundary instead of publishing a global snapshot per call. Database and artifact-bundle
+The live database and managed project artifact tree stay on local compute. Substantive authority
+writes automatically checkpoint both when `ANCHOR_DURABLE_ROOT` and `ANCHOR_AUTHORITY_ID` are
+configured. High-frequency recoverable bookkeeping (`touched`, `skill_loaded`, `task_rebind`,
+`new_session`, and irrelevant memory dispositions) remains local until the next substantive
+checkpoint instead of publishing a global snapshot per call. The configured retention scan runs
+at terminal learning or an explicit checkpoint/snapshot action rather than at every intermediate
+checkpoint. Global memory status changes remain immediately durable. Database and artifact-bundle
 bytes are copied as opaque immutable
 files to `<durable_root>/<authority_id>/snapshots/`; a canonical checksummed manifest
 is published last. Remote listing verifies canonical manifests and referenced payload presence

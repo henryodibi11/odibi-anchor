@@ -804,8 +804,8 @@ class TestSessionState:
                 "authority": "advisory", "unavailable_evidence": [],
             }
 
-        def snapshot(*_args, **_kwargs):
-            sequence.append("durable_checkpoint")
+        def snapshot(*_args, **kwargs):
+            sequence.append(("durable_checkpoint", kwargs.get("enforce_retention")))
 
         monkeypatch.setattr(
             "odibi_anchor._dispatcher._memory_actions.build_task_memory_context",
@@ -831,7 +831,7 @@ class TestSessionState:
                 output_format="dict",
             )
 
-        assert sequence == ["memory_selection_persisted", "durable_checkpoint"]
+        assert sequence == ["memory_selection_persisted", ("durable_checkpoint", None)]
 
     def test_accepted_task_routes_compact_engineering_references(
         self, bootstrap_cw, clean_session_state,

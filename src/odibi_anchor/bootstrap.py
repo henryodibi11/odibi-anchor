@@ -557,11 +557,15 @@ def init(
             result["artifact_contract"] = artifact_contract()
         return result
 
-    def _task_rebind_action():
+    def _task_rebind_action(*, task_window_id=None):
         """Restore the newest matching open accepted task from durable authority."""
         from odibi_anchor.codebase._task_authority import rebind_latest_open_task
 
-        rebound = rebind_latest_open_task(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+        rebound = rebind_latest_open_task(
+            _DEFAULT_DB_PATH,
+            session_state=_SESSION_STATE,
+            task_window_id=task_window_id,
+        )
         frame = _SESSION_FRAME_holder[0]
         if ANCHOR_FRAME_ENABLED and frame is not None:
             frame.record("task", {
@@ -585,9 +589,10 @@ def init(
         return {"kind": "task_authority_rebind", **rebound}
 
     def _task_rebind_dispatch(action_args, action_kwargs):
-        if action_args or {key for key in action_kwargs if key != "output_format"}:
-            raise TypeError("task_rebind accepts no arguments")
-        return _task_rebind_action()
+        unknown = set(action_kwargs) - {"output_format", "task_window_id"}
+        if action_args or unknown:
+            raise TypeError("task_rebind accepts only task_window_id as a keyword argument")
+        return _task_rebind_action(task_window_id=action_kwargs.get("task_window_id"))
 
     def _task_adoption_action(command="inspect", **options):
         """Request exact owner approval or inspect immutable adoption evidence."""

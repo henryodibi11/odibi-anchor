@@ -87,10 +87,11 @@ destination="/absolute/path")`. Actual migration and cross-trust-domain transfer
 separate authority.
 
 With durable state configured, substantive authority writes checkpoint local SQLite and managed
-project artifacts. High-frequency recoverable bookkeeping (`touched`, `skill_loaded`,
-`task_rebind`, and `new_session`) flushes at the next durable authority/lifecycle boundary rather
-than publishing one snapshot per call. Use `anchor state list|snapshot|restore`; never open durable
-snapshot bytes as live state.
+project artifacts. Recoverable bookkeeping (`touched`, `skill_loaded`, `task_rebind`,
+`new_session`, and irrelevant dispositions) flushes at the next substantive boundary. Retention is
+enforced at terminal learning or an explicit checkpoint/snapshot. Use `anchor state
+list|snapshot|restore`; never open snapshot bytes as live state.
+If all pending memories are irrelevant, dispose them once with `all_pending=True`; never loop.
 
 ## Hard Limits (RuntimeError)
 

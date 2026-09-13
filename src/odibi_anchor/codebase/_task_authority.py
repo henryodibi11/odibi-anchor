@@ -591,7 +591,7 @@ def _restore_state(record: dict[str, Any], session_state: Any) -> None:
 
 
 def rebind_latest_open_task(
-    path: str | Path, *, session_state: Any,
+    path: str | Path, *, session_state: Any, task_window_id: str | None = None,
 ) -> dict[str, Any]:
     """Restore the single open authority matching every current owner identity."""
     target = Path(path).expanduser()
@@ -629,16 +629,29 @@ def rebind_latest_open_task(
         candidate for candidate in records
         if all(candidate["identity"].get(key) == current for key, current in current_identity.items())
     ]
+    if task_window_id is not None and not isinstance(task_window_id, str):
+        raise TaskAuthorityUnavailable("task_window_id must be a non-empty string")
+    requested = task_window_id.strip() if task_window_id is not None else None
+    if task_window_id is not None and not requested:
+        raise TaskAuthorityUnavailable("task_window_id must be a non-empty string")
+    if requested is not None:
+        matches = [
+            candidate for candidate in matches
+            if candidate["identity"]["task_window_id"] == requested
+        ]
     if not matches:
+        detail = (
+            f" and task window {requested}" if requested is not None else ""
+        )
         raise TaskAuthorityUnavailable(
             "no open accepted task matches the exact project, Anchor home, project root, "
-            "artifact root, target, repository provider, and trust domain"
+            "artifact root, target, repository provider, and trust domain" + detail
         )
     if len(matches) > 1:
         bounded = sorted(item["identity"]["task_window_id"] for item in matches)[:10]
         raise TaskAuthorityUnavailable(
-            "multiple open accepted tasks match the exact owner; close or explicitly adopt one: "
-            + ", ".join(bounded)
+            "multiple open accepted tasks match the exact owner; select one with "
+            "anchor('task_rebind', task_window_id='<exact-id>'): " + ", ".join(bounded)
         )
     record = matches[0]
     identity = record["identity"]

@@ -146,12 +146,30 @@ migration plan. Migration execution and trust-domain transfer require separate a
 
 When the portfolio configures durable state, keep live SQLite and managed project artifacts on
 local compute. Substantive authority writes checkpoint both. High-frequency recoverable
-bookkeeping (`touched`, `skill_loaded`, `task_rebind`, and `new_session`) flushes at the next
-durable authority/lifecycle boundary rather than publishing one snapshot per call.
+bookkeeping (`touched`, `skill_loaded`, `task_rebind`, `new_session`, and irrelevant memory
+dispositions) flushes at the next substantive checkpoint rather than publishing one snapshot per
+call. Configured retention is enforced at terminal learning or an explicit checkpoint/snapshot
+instead of scanning full history on every intermediate checkpoint.
 `anchor state list|snapshot|restore` provides explicit recovery; durable snapshot bytes are never
 opened as live state. Databricks cold restore reads only the latest manifest and its referenced
 payloads; historical payload hashes are deferred until those payloads are actually restored or
 reused.
+
+In Databricks, expose actionable failures at one logical cell boundary without swallowing them:
+
+```python
+import traceback
+
+try:
+    result = anchor(...)
+    print(result)
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    traceback.print_exc()
+    raise
+```
+
+Never print locals or environment variables, continue after failure, or retry before diagnosis.
 
 **⚠️ ALWAYS assign anchor() results to a variable.** Bare calls get blocked by Databricks safety
 guards. Use `result = anchor("status"); print(result)` instead. This applies to ALL anchor() calls.
