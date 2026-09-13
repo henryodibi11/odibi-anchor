@@ -16,7 +16,7 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -35,6 +35,10 @@ _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
 _OWNER_TABLE = "anchor_authority_identity"
 _MAX_ARTIFACT_MEMBERS = 100_000
 _MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+
+
+class DurableSnapshotUnavailable(RuntimeError):
+    """No complete durable snapshot is available for restoration."""
 
 
 def _next(operation: str, **arguments: Any) -> dict[str, Any]:
@@ -484,7 +488,59 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     return value
 
 
-def _validated_manifests(root: Path) -> list[dict[str, Any]]:
+def _remote_entry_size(entry: Any) -> int | None:
+    for attribute in ("file_size", "size"):
+        value = getattr(entry, attribute, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
+def _validate_manifest_payloads(root: Path, manifest: dict[str, Any]) -> None:
+    snapshot_file = manifest["snapshot_file"]
+    snapshot = root / snapshot_file
+    if not snapshot.is_file():
+        raise RuntimeError("incomplete durable snapshot publication")
+    if _sha256(snapshot) != manifest["sha256"]:
+        raise RuntimeError(f"snapshot hash mismatch: {snapshot_file}")
+    if snapshot.stat().st_size != manifest["size_bytes"]:
+        raise RuntimeError(f"snapshot size mismatch: {snapshot_file}")
+    if manifest["format"] == _FORMAT_V2:
+        artifacts = manifest["artifacts"]
+        bundle = root / artifacts["file"]
+        if not bundle.is_file():
+            raise RuntimeError("incomplete durable snapshot publication")
+        if bundle.stat().st_size != artifacts["size_bytes"]:
+            raise RuntimeError(f"artifact bundle size mismatch: {artifacts['file']}")
+        if _sha256(bundle) != artifacts["sha256"]:
+            raise RuntimeError(f"artifact bundle hash mismatch: {artifacts['file']}")
+
+
+def _validate_remote_manifest_references(
+    manifest: dict[str, Any],
+    remote_entries: Mapping[str, Any],
+) -> None:
+    references = [(manifest["snapshot_file"], manifest["size_bytes"], "snapshot")]
+    if manifest["format"] == _FORMAT_V2:
+        references.append((
+            manifest["artifacts"]["file"],
+            manifest["artifacts"]["size_bytes"],
+            "artifact bundle",
+        ))
+    for name, expected_size, label in references:
+        entry = remote_entries.get(name)
+        if entry is None:
+            raise RuntimeError("incomplete durable snapshot publication")
+        actual_size = _remote_entry_size(entry)
+        if actual_size is not None and actual_size != expected_size:
+            raise RuntimeError(f"{label} size mismatch: {name}")
+
+
+def _validated_manifests(
+    root: Path,
+    *,
+    remote_entries: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     manifests = sorted(root.glob(f"*{_MANIFEST_SUFFIX}"), key=lambda item: item.name)
     validated: list[dict[str, Any]] = []
     for path in manifests:
@@ -497,20 +553,10 @@ def _validated_manifests(root: Path) -> list[dict[str, Any]]:
         expected_file = f"{content_sha256}{_SNAPSHOT_SUFFIX}"
         if manifest.get("snapshot_id") != snapshot_id or snapshot_file != expected_file:
             raise RuntimeError(f"manifest identity mismatch: {path.name}")
-        snapshot = root / expected_file
-        if not snapshot.is_file():
-            raise RuntimeError("incomplete durable snapshot publication")
-        if _sha256(snapshot) != content_sha256:
-            raise RuntimeError(f"snapshot hash mismatch: {expected_file}")
-        if manifest["format"] == _FORMAT_V2:
-            artifacts = manifest["artifacts"]
-            bundle = root / artifacts["file"]
-            if not bundle.is_file():
-                raise RuntimeError("incomplete durable snapshot publication")
-            if bundle.stat().st_size != artifacts["size_bytes"]:
-                raise RuntimeError(f"artifact bundle size mismatch: {artifacts['file']}")
-            if _sha256(bundle) != artifacts["sha256"]:
-                raise RuntimeError(f"artifact bundle hash mismatch: {artifacts['file']}")
+        if remote_entries is None:
+            _validate_manifest_payloads(root, manifest)
+        else:
+            _validate_remote_manifest_references(manifest, remote_entries)
         validated.append(manifest)
     return validated
 
@@ -535,8 +581,8 @@ def _remote_child(parent: str, name: str) -> str:
     return f"{parent.rstrip('/')}/{name}"
 
 
-def _download_remote_snapshot_files(files: Any, remote_root: str, local_root: Path) -> None:
-    local_root.mkdir(exist_ok=True)
+def _remote_snapshot_entries(files: Any, remote_root: str) -> dict[str, Any]:
+    entries: dict[str, Any] = {}
     for entry in files.list_directory_contents(remote_root):
         remote_path = str(entry.path)
         name = remote_path.rsplit("/", 1)[-1]
@@ -546,7 +592,43 @@ def _download_remote_snapshot_files(files: Any, remote_root: str, local_root: Pa
             continue
         if not name or "/" in name or "\\" in name:
             raise RuntimeError("invalid Databricks snapshot entry")
-        files.download_to(remote_path, str(local_root / name), overwrite=False, use_parallel=False)
+        if name in entries:
+            raise RuntimeError("duplicate Databricks snapshot entry")
+        entries[name] = entry
+    return entries
+
+
+def _download_remote_snapshot_files(
+    files: Any,
+    remote_root: str,
+    local_root: Path,
+    *,
+    latest_manifest_only: bool,
+) -> dict[str, Any]:
+    local_root.mkdir(exist_ok=True)
+    entries = _remote_snapshot_entries(files, remote_root)
+    manifests = sorted(name for name in entries if name.endswith(_MANIFEST_SUFFIX))
+    if latest_manifest_only and manifests:
+        manifests = manifests[-1:]
+    for name in manifests:
+        files.download_to(
+            _remote_child(remote_root, name),
+            str(local_root / name),
+            overwrite=False,
+            use_parallel=False,
+        )
+    return entries
+
+
+def _download_remote_file(files: Any, remote_root: str, local_root: Path, name: str) -> Path:
+    destination = local_root / name
+    files.download_to(
+        _remote_child(remote_root, name),
+        str(destination),
+        overwrite=False,
+        use_parallel=False,
+    )
+    return destination
 
 
 @contextmanager
@@ -556,13 +638,14 @@ def _snapshot_view(
     *,
     databricks: bool,
     create: bool = False,
-) -> Iterator[tuple[Path, Any | None, str]]:
+    latest_manifest_only: bool = False,
+) -> Iterator[tuple[Path, Any | None, str, Mapping[str, Any] | None]]:
     snapshot_root = root / authority / "snapshots"
     if not databricks:
         if create:
             snapshot_root.mkdir(parents=True, exist_ok=True)
             _reject_symlinks(snapshot_root, "authority snapshot root")
-        yield snapshot_root, None, str(snapshot_root)
+        yield snapshot_root, None, str(snapshot_root), None
         return
 
     files = _databricks_files_api()
@@ -572,12 +655,17 @@ def _snapshot_view(
     with tempfile.TemporaryDirectory(prefix="odibi-anchor-durable-view-") as temporary_directory:
         local_root = Path(temporary_directory)
         try:
-            _download_remote_snapshot_files(files, remote_root, local_root)
+            remote_entries = _download_remote_snapshot_files(
+                files,
+                remote_root,
+                local_root,
+                latest_manifest_only=latest_manifest_only,
+            )
         except Exception as exc:
             if _is_databricks_not_found(exc):
                 raise FileNotFoundError(f"authority snapshot root is not a directory: {remote_root}") from exc
             raise
-        yield local_root, files, remote_root
+        yield local_root, files, remote_root, remote_entries
 
 
 def _publish_remote_file(files: Any, source: Path, destination: str) -> None:
@@ -680,7 +768,7 @@ def _apply_retention(
     }
     for name in sorted(candidate_blobs - referenced):
         path = snapshot_root / name
-        if path.is_file():
+        if files is not None or path.is_file():
             _delete_publication(
                 path,
                 files=files,
@@ -703,7 +791,7 @@ def list_snapshots(
     authority_id: str,
     databricks: bool = False,
 ) -> dict[str, Any]:
-    """Deterministically list only complete, valid canonical publications."""
+    """List canonical publications, deferring remote payload hashes until use."""
     root = _absolute_path(
         durable_root,
         "durable_root",
@@ -719,8 +807,13 @@ def list_snapshots(
         snapshot_root = root / authority / "snapshots"
         if not snapshot_root.is_dir():
             raise FileNotFoundError(f"authority snapshot root is not a directory: {snapshot_root}")
-    with _snapshot_view(root, authority, databricks=databricks) as (snapshot_root, _, _):
-        manifests = _validated_manifests(snapshot_root)
+    with _snapshot_view(root, authority, databricks=databricks) as (
+        snapshot_root, _, _, remote_entries,
+    ):
+        manifests = _validated_manifests(
+            snapshot_root,
+            remote_entries=remote_entries,
+        )
     entries = [
         {
             "created_at": item["created_at"],
@@ -738,6 +831,9 @@ def list_snapshots(
         "kind": "durable_snapshot_listing",
         "durable_root": str(root),
         "authority_id": authority,
+        "payload_verification": (
+            "deferred_until_restore_or_reuse" if databricks else "verified"
+        ),
         "snapshots": entries,
         "next_operation": _next(
             "restore_latest",
@@ -810,7 +906,8 @@ def snapshot_state(
             qualified["authority_id"],
             databricks=databricks,
             create=True,
-        ) as (snapshot_root, files, publication_root):
+            latest_manifest_only=retention_policy is None,
+        ) as (snapshot_root, files, publication_root, remote_entries):
             if databricks:
                 assert files is not None
             snapshot_path = snapshot_root / f"{snapshot_sha256}{_SNAPSHOT_SUFFIX}"
@@ -825,7 +922,10 @@ def snapshot_state(
                 if artifacts_path is not None
                 else None
             )
-            manifests = _validated_manifests(snapshot_root)
+            manifests = _validated_manifests(
+                snapshot_root,
+                remote_entries=remote_entries,
+            )
             if manifests:
                 latest_created = max(str(item["created_at"]) for item in manifests)
                 latest = [item for item in manifests if item["created_at"] == latest_created]
@@ -851,6 +951,21 @@ def snapshot_state(
             )
             if same_checkpoint:
                 assert existing is not None
+                if databricks:
+                    assert files is not None
+                    if not _remote_file_matches(files, staged, published_snapshot_path):
+                        raise RuntimeError(f"snapshot hash mismatch: {snapshot_path.name}")
+                    if (
+                        staged_artifacts.is_file()
+                        and published_artifacts_path is not None
+                        and not _remote_file_matches(
+                            files, staged_artifacts, published_artifacts_path,
+                        )
+                    ):
+                        raise RuntimeError(
+                            "artifact bundle hash mismatch: "
+                            f"{existing['artifacts']['file']}"
+                        )
                 manifest_path = snapshot_root / f"{existing['snapshot_id']}{_MANIFEST_SUFFIX}"
                 published_manifest_path = _remote_child(publication_root, manifest_path.name)
                 result = {
@@ -909,13 +1024,25 @@ def snapshot_state(
             manifest["manifest_sha256"] = hashlib.sha256(_canonical_bytes(body)).hexdigest()
             staged_manifest = Path(temporary_directory) / "manifest.json"
             staged_manifest.write_bytes(_canonical_bytes(manifest))
-            snapshot_created = not snapshot_path.exists()
-            artifacts_created = artifacts_path is not None and not artifacts_path.exists()
+            snapshot_created = (
+                snapshot_path.name not in remote_entries
+                if remote_entries is not None
+                else not snapshot_path.exists()
+            )
+            artifacts_created = artifacts_path is not None and (
+                artifacts_path.name not in remote_entries
+                if remote_entries is not None
+                else not artifacts_path.exists()
+            )
             if snapshot_created:
                 if databricks:
                     _publish_remote_file(files, staged, published_snapshot_path)
                 else:
                     _publish_file_exclusive(staged, snapshot_path)
+            elif databricks:
+                assert files is not None
+                if not _remote_file_matches(files, staged, published_snapshot_path):
+                    raise RuntimeError("durable snapshot content collision")
             elif _sha256(snapshot_path) != snapshot_sha256:
                 raise RuntimeError("durable snapshot content collision")
             if artifacts_created:
@@ -925,6 +1052,13 @@ def snapshot_state(
                     _publish_remote_file(files, staged_artifacts, published_artifacts_path)
                 else:
                     _publish_file_exclusive(staged_artifacts, artifacts_path)
+            elif artifacts_path is not None and databricks:
+                assert files is not None
+                assert published_artifacts_path is not None
+                if not _remote_file_matches(
+                    files, staged_artifacts, published_artifacts_path,
+                ):
+                    raise RuntimeError("durable artifact bundle content collision")
             elif artifacts_path is not None:
                 assert artifact_manifest is not None
                 if _sha256(artifacts_path) != artifact_manifest["sha256"]:
@@ -1004,16 +1138,25 @@ def restore_latest(
         )
     if not destination.parent.is_dir():
         raise FileNotFoundError(f"destination parent is not a directory: {destination.parent}")
-    with _snapshot_view(root, qualified["authority_id"], databricks=databricks) as (
+    with _snapshot_view(
+        root,
+        qualified["authority_id"],
+        databricks=databricks,
+        latest_manifest_only=True,
+    ) as (
         snapshot_root,
-        _,
-        _,
+        files,
+        publication_root,
+        remote_entries,
     ):
         if not snapshot_root.is_dir():
-            raise RuntimeError("no valid durable snapshots")
-        manifests = _validated_manifests(snapshot_root)
+            raise DurableSnapshotUnavailable("no valid durable snapshots")
+        manifests = _validated_manifests(
+            snapshot_root,
+            remote_entries=remote_entries,
+        )
         if not manifests:
-            raise RuntimeError("no valid durable snapshots")
+            raise DurableSnapshotUnavailable("no valid durable snapshots")
         latest_created = max(str(item["created_at"]) for item in manifests)
         latest = [item for item in manifests if item["created_at"] == latest_created]
         if len(latest) != 1:
@@ -1025,6 +1168,21 @@ def restore_latest(
             raise ValueError(
                 "destination_artifacts is required to restore a v2 durable snapshot"
             )
+        if files is not None:
+            _download_remote_file(
+                files,
+                publication_root,
+                snapshot_root,
+                manifest["snapshot_file"],
+            )
+            if manifest["format"] == _FORMAT_V2:
+                _download_remote_file(
+                    files,
+                    publication_root,
+                    snapshot_root,
+                    manifest["artifacts"]["file"],
+                )
+            _validate_manifest_payloads(snapshot_root, manifest)
         durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
         # Stage on the destination filesystem so hard-link publication is an atomic,
         # no-overwrite directory-entry operation rather than the partial-copy fallback.

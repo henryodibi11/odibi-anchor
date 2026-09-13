@@ -33,7 +33,7 @@ class FakeDatabricksFiles:
     def list_directory_contents(self, path: str):
         prefix = path.rstrip("/") + "/"
         return [
-            SimpleNamespace(path=name)
+            SimpleNamespace(path=name, file_size=len(self.files[name]))
             for name in sorted(self.files)
             if name.startswith(prefix) and "/" not in name.removeprefix(prefix)
         ]
@@ -413,11 +413,14 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
         authority_id="work",
         databricks=True,
     )
+    before_listing = len(files.downloads)
     listing = durability.list_snapshots(
         durable_root=durable,
         authority_id="work",
         databricks=True,
     )
+    listing_downloads = files.downloads[before_listing:]
+    before_restore = len(files.downloads)
     restored_result = durability.restore_latest(
         durable_root=durable,
         destination_db=restored,
@@ -425,6 +428,7 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
         authority_id="work",
         databricks=True,
     )
+    restore_downloads = files.downloads[before_restore:]
 
     assert first["action"] == "created"
     assert second["action"] == "reused"
@@ -444,12 +448,105 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
     assert [path for path, _, _ in files.uploads][-1].endswith(".manifest.json")
     assert all(not overwrite and not parallel for _, overwrite, parallel in files.uploads)
     assert all(not overwrite and not parallel for _, overwrite, parallel in files.downloads)
+    assert [Path(path).suffixes for path, _, _ in listing_downloads] == [
+        [".manifest", ".json"]
+    ]
+    assert sorted(Path(path).suffix for path, _, _ in restore_downloads) == [
+        ".json", ".sqlite3", ".tar",
+    ]
     with sqlite3.connect(restored) as connection:
         assert connection.execute("SELECT value FROM example ORDER BY id").fetchall() == [
             ("alpha",),
             ("beta",),
         ]
     assert (restored_artifacts / "PROJECT.md").read_text() == "# Project\n"
+
+
+def test_databricks_listing_defers_payload_hash_verification_until_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    restored = tmp_path / "restored.db"
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    snapshot = durability.snapshot_state(
+        source_db=source, durable_root=durable, authority_id="work", databricks=True,
+    )
+    remote_snapshot = snapshot["snapshot_path"]
+    original = files.files[remote_snapshot]
+    files.files[remote_snapshot] = bytes([original[0] ^ 1]) + original[1:]
+    before_listing = len(files.downloads)
+
+    listing = durability.list_snapshots(
+        durable_root=durable, authority_id="work", databricks=True,
+    )
+
+    assert listing["snapshots"][0]["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert all(
+        path.endswith(".manifest.json")
+        for path, _, _ in files.downloads[before_listing:]
+    )
+    with pytest.raises(RuntimeError, match=r"snapshot (hash|size) mismatch"):
+        durability.restore_latest(
+            durable_root=durable, destination_db=restored,
+            authority_id="work", databricks=True,
+        )
+
+
+def test_databricks_listing_rejects_missing_referenced_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    _database(source)
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    snapshot = durability.snapshot_state(
+        source_db=source, durable_root=durable, authority_id="work", databricks=True,
+    )
+    del files.files[snapshot["snapshot_path"]]
+
+    with pytest.raises(RuntimeError, match="incomplete durable snapshot publication"):
+        durability.list_snapshots(
+            durable_root=durable, authority_id="work", databricks=True,
+        )
+
+
+def test_databricks_restore_downloads_only_latest_manifest_and_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    restored = tmp_path / "restored.db"
+    restored_artifacts = tmp_path / "restored-projects"
+    durable = "/Volumes/catalog/schema/anchor/odibi-anchor"
+    _database(source)
+    artifacts.mkdir()
+    files = FakeDatabricksFiles()
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    snapshots = []
+    for index in range(3):
+        (artifacts / "record.md").write_text(f"state {index}\n", encoding="utf-8")
+        snapshots.append(durability.snapshot_state(
+            source_db=source, source_artifacts=artifacts, durable_root=durable,
+            authority_id="work", databricks=True,
+        ))
+    before_restore = len(files.downloads)
+
+    result = durability.restore_latest(
+        durable_root=durable, destination_db=restored,
+        destination_artifacts=restored_artifacts, authority_id="work", databricks=True,
+    )
+
+    downloads = files.downloads[before_restore:]
+    assert result["snapshot_id"] == snapshots[-1]["manifest"]["snapshot_id"]
+    assert len(downloads) == 3
+    assert sum(path.endswith(".manifest.json") for path, _, _ in downloads) == 1
+    assert sum(path.endswith(".sqlite3") for path, _, _ in downloads) == 1
+    assert sum(path.endswith(".artifacts.tar") for path, _, _ in downloads) == 1
+    assert (restored_artifacts / "record.md").read_text() == "state 2\n"
 
 
 def test_databricks_manifest_failure_removes_uncommitted_remote_snapshot(

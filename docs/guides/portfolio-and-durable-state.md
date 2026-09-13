@@ -89,19 +89,26 @@ anchor portfolio prepare \
   --host databricks-work --project project
 ```
 
-The result registers the exact route when absent, restores the newest verified
-authority snapshot only when the local database is absent, and returns copy-ready
-environment plus bootstrap inputs. It does not mutate the caller's environment.
+The result registers the exact route when absent, performs no remote snapshot reads when complete
+local state already exists, restores only the newest verified authority snapshot when local state
+is absent, and returns copy-ready environment plus bootstrap inputs. On Databricks, cold restore
+downloads one latest manifest and only its referenced database and artifact payloads; historical
+payloads are not fetched. It does not mutate the caller's environment.
 `.active_project` is never consulted.
 
 ## Durable state lifecycle
 
-The live database and managed project artifact tree stay on local compute. After each successful authority write—including
-task acceptance, evidence/memory writes, and terminal closure—Anchor automatically snapshots
-both when `ANCHOR_DURABLE_ROOT` and `ANCHOR_AUTHORITY_ID` are configured. Database and artifact-bundle
+The live database and managed project artifact tree stay on local compute. After each successful
+substantive authority write—including task acceptance, evidence/memory writes, and terminal
+closure—Anchor automatically snapshots both when `ANCHOR_DURABLE_ROOT` and
+`ANCHOR_AUTHORITY_ID` are configured. High-frequency recoverable session bookkeeping (`touched`,
+`skill_loaded`, `task_rebind`, and the pre-task `new_session`) remains local until the next durable
+authority or lifecycle boundary instead of publishing a global snapshot per call. Database and artifact-bundle
 bytes are copied as opaque immutable
 files to `<durable_root>/<authority_id>/snapshots/`; a canonical checksummed manifest
-is published last. Restore copies durable bytes to local staging, verifies SHA-256,
+is published last. Remote listing verifies canonical manifests and referenced payload presence
+and size without downloading historical payload bytes. Restore or content reuse downloads the
+selected payloads and verifies SHA-256 before trusting them. Restore copies durable bytes to local staging, verifies SHA-256,
 logical content, SQLite integrity, and safe artifact paths locally, then publishes only to absent
 local destinations. Legacy v1 database-only snapshots remain readable; v2 restores require both
 destinations so a partial state cannot be presented as complete. When a v2 snapshot moves to a

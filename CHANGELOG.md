@@ -2,6 +2,21 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.13] - 2026-09-13
+
+### Changed
+
+- Databricks cold restore now downloads exactly the latest canonical manifest and its referenced
+  database and artifact payloads instead of downloading every historical snapshot file.
+- Complete warm local state skips remote snapshot enumeration, and cold startup no longer lists
+  the full history before independently restoring it.
+- High-frequency recoverable bookkeeping (`touched`, `skill_loaded`, `task_rebind`, and
+  `new_session`) defers remote publication until the next substantive authority or lifecycle
+  boundary, while task acceptance, memory/evidence changes, and terminal closure remain
+  immediately durable.
+- Remote snapshot listing validates canonical manifests plus referenced payload presence and size;
+  payload hashes remain mandatory before restore, content reuse, or collision acceptance.
+
 ## [0.3.12] - 2026-09-12
 
 ### Changed
@@ -237,3 +252,5 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.9]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.9
 [0.3.10]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.10
 [0.3.11]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.11
+[0.3.12]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.12
+[0.3.13]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.13

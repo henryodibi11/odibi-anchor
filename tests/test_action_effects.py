@@ -620,6 +620,36 @@ def test_successful_authority_write_checkpoints_configured_active_state(tmp_path
     assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
 
 
+@pytest.mark.parametrize(
+    "action", ["new_session", "skill_loaded", "task_rebind", "touched"],
+)
+def test_high_frequency_session_bookkeeping_defers_durable_snapshot(action, monkeypatch):
+    from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch
+
+    snapshots = []
+    monkeypatch.setattr(
+        "odibi_anchor._dispatcher._post_dispatch._snapshot_durable_state",
+        lambda *_args, **_kwargs: snapshots.append(action),
+    )
+    state = SimpleNamespace(
+        active_problem=None, active_task_profile=None, prior_learn_debt=False,
+        skill_hints_emitted=set(), skills_loaded=set(), observed_effects=[],
+    )
+    result = {"kind": action, "write_performed": True}
+
+    actual = run_post_dispatch(
+        action, result, None, (), {},
+        session_timings=[], session_files_changed=set(), session_state=state,
+        planning_required_actions=frozenset(),
+        invocation_resolution=SimpleNamespace(
+            error=None, effects=("artifact_write",),
+        ),
+    )
+
+    assert actual is result
+    assert snapshots == []
+
+
 def test_successful_memory_rejection_is_preserved_in_durable_restore(tmp_path, monkeypatch):
     import sqlite3
 

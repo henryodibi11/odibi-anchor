@@ -145,8 +145,13 @@ diagnostics and `command="plan", destination="/absolute/path"` for a non-destruc
 migration plan. Migration execution and trust-domain transfer require separate approval.
 
 When the portfolio configures durable state, keep live SQLite and managed project artifacts on
-local compute. Successful authority writes checkpoint both. `anchor state list|snapshot|restore`
-provides explicit recovery; durable snapshot bytes are never opened as live state.
+local compute. Substantive authority writes checkpoint both. High-frequency recoverable
+bookkeeping (`touched`, `skill_loaded`, `task_rebind`, and `new_session`) flushes at the next
+durable authority/lifecycle boundary rather than publishing one snapshot per call.
+`anchor state list|snapshot|restore` provides explicit recovery; durable snapshot bytes are never
+opened as live state. Databricks cold restore reads only the latest manifest and its referenced
+payloads; historical payload hashes are deferred until those payloads are actually restored or
+reused.
 
 **⚠️ ALWAYS assign anchor() results to a variable.** Bare calls get blocked by Databricks safety
 guards. Use `result = anchor("status"); print(result)` instead. This applies to ALL anchor() calls.

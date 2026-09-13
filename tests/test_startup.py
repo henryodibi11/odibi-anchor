@@ -720,12 +720,6 @@ def test_prepare_databricks_runtime_and_launch_use_sdk_without_volume_fuse(
     )
     calls = []
     monkeypatch.setattr(durability, "qualify_durability", lambda **kwargs: calls.append(("qualify", kwargs)))
-    monkeypatch.setattr(
-        durability,
-        "list_snapshots",
-        lambda **kwargs: calls.append(("list", kwargs)) or {"snapshots": [{"snapshot_id": "one"}]},
-    )
-
     def restore(**kwargs):
         calls.append(("restore", kwargs))
         durability.ensure_database_authority(
@@ -761,7 +755,7 @@ def test_prepare_databricks_runtime_and_launch_use_sdk_without_volume_fuse(
 
     assert result["restore"] == {"status": "restored", "snapshot_id": "one"}
     assert callable(anchor)
-    assert [name for name, _ in calls] == ["qualify", "list", "restore"]
+    assert [name for name, _ in calls] == ["qualify", "restore"]
     assert all(arguments["databricks"] is True for _, arguments in calls)
 
 
@@ -790,7 +784,7 @@ def test_prepare_databricks_runtime_only_treats_missing_snapshot_root_as_clean_s
     )
     monkeypatch.setattr(durability, "qualify_durability", lambda **_kwargs: None)
     monkeypatch.setattr(
-        durability, "list_snapshots", lambda **_kwargs: (_ for _ in ()).throw(error)
+        durability, "restore_latest", lambda **_kwargs: (_ for _ in ()).throw(error)
     )
 
     if isinstance(error, PermissionError):
@@ -807,6 +801,50 @@ def test_prepare_databricks_runtime_only_treats_missing_snapshot_root_as_clean_s
             "status": "not_applicable", "reason": "no durable snapshot exists"
         }
         assert result["authority"]["status"] == "initialized"
+
+
+def test_prepare_databricks_runtime_skips_remote_snapshot_io_when_local_state_is_complete(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    projects = state / "workspace" / "projects"
+    target.mkdir()
+    projects.mkdir(parents=True)
+    durability.ensure_database_authority(
+        state / ".agent_memory.db", authority_id="work",
+        trust_domain="work", initialize=True,
+    )
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "work", "trust_domain": "work"},
+        "hosts": {"serverless": {
+            "adapter": "databricks", "local_state_root": str(state),
+            "durable_root": "/Volumes/catalog/schema/anchor",
+        }},
+        "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+        "personas": {},
+    })
+    monkeypatch.setattr(durability, "qualify_durability", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        durability, "list_snapshots",
+        lambda **_kwargs: pytest.fail("warm startup must not enumerate remote snapshots"),
+    )
+    monkeypatch.setattr(
+        durability, "restore_latest",
+        lambda **_kwargs: pytest.fail("warm startup must not restore remote snapshots"),
+    )
+
+    result = prepare_portfolio_runtime(
+        config_path=config, host_id="serverless", project_id="alpha",
+    )
+
+    assert result["restore"] == {
+        "status": "not_applicable", "reason": "local database already exists",
+    }
 
 
 def test_prepare_portfolio_runtime_refuses_existing_unowned_database(tmp_path):
@@ -907,12 +945,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.12"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.13"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.12"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.13"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -1002,7 +1040,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
     shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
     payload = {
         "releases": {
-            "0.3.12": [{"yanked": False}],
+            "0.3.13": [{"yanked": False}],
             "0.4.0rc1": [{"yanked": False}],
             "9.9.9": [{"yanked": True}],
         }
@@ -1019,7 +1057,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
         runpy.run_path(str(launcher))
 
     message = str(raised.value)
-    assert '%pip install "odibi-anchor[databricks]==0.3.12"' in message
+    assert '%pip install "odibi-anchor[databricks]==0.3.13"' in message
     assert "dbutils.library.restartPython()" in message
     assert "0.4.0rc1" not in message
     assert "9.9.9" not in message

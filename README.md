@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.12"
+python -m pip install "odibi-anchor==0.3.13"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.12"
+python -m pip install "odibi-anchor[mcp]==0.3.13"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.12"
+%pip install "odibi-anchor[databricks]==0.3.13"
 dbutils.library.restartPython()
 ```
 
@@ -99,9 +99,10 @@ PortfolioV1 to keep host-specific project roots and state locations explicit ins
 
 `ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
 checkout. Let portfolio preparation set it. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Configure
-an approved durable snapshot root while keeping live state local; Anchor checkpoints successful
-authority writes and restores the absent SQLite database and managed project artifacts through
-verified immutable files. Do not run live
+an approved durable snapshot root while keeping live state local; Anchor checkpoints substantive
+authority writes and restores only the latest absent SQLite database and managed project artifacts
+through verified immutable files. Recoverable per-file bookkeeping flushes at durable lifecycle
+boundaries instead of publishing a snapshot per call. Do not run live
 SQLite state from Workspace Files, DBFS, Volumes, or another network/distributed filesystem.
 See [portfolio and durable state](docs/guides/portfolio-and-durable-state.md) and
 [Databricks MCP guidance](docs/guides/mcp-databricks.md).

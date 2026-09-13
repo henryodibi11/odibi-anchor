@@ -86,9 +86,11 @@ a non-destructive move plan with `anchor("memory", "storage", command="plan",
 destination="/absolute/path")`. Actual migration and cross-trust-domain transfer require
 separate authority.
 
-With durable state configured, successful authority writes checkpoint local SQLite and managed
-project artifacts. Use `anchor state list|snapshot|restore`; never open durable snapshot bytes as
-live state.
+With durable state configured, substantive authority writes checkpoint local SQLite and managed
+project artifacts. High-frequency recoverable bookkeeping (`touched`, `skill_loaded`,
+`task_rebind`, and `new_session`) flushes at the next durable authority/lifecycle boundary rather
+than publishing one snapshot per call. Use `anchor state list|snapshot|restore`; never open durable
+snapshot bytes as live state.
 
 ## Hard Limits (RuntimeError)
 

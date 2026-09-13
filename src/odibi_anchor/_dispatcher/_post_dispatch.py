@@ -5,6 +5,13 @@ validation, learn debt clearing, and same-invocation planning advisories.
 """
 from __future__ import annotations
 
+_DEFERRED_DURABILITY_ACTIONS = frozenset({
+    "new_session",
+    "skill_loaded",
+    "task_rebind",
+    "touched",
+})
+
 
 def post_commit_structured_assessment(
     result, *, session_timings, session_files_changed, session_state,
@@ -836,6 +843,7 @@ def run_post_dispatch(
             if (
                 isinstance(result, dict)
                 and action != "task"
+                and action not in _DEFERRED_DURABILITY_ACTIONS
                 and "durable_state" not in result
                 and {"governance_write", "artifact_write"}.intersection(effects)
             ):

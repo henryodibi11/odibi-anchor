@@ -230,8 +230,8 @@ def prepare_portfolio_runtime(
     restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
     projects = home / "workspace" / "projects"
     snapshots: list[dict[str, Any]] = []
-    if durable_root is not None:
-        from odibi_anchor.durability import list_snapshots, restore_latest
+    if durable_root is not None and database.exists() != projects.exists():
+        from odibi_anchor.durability import list_snapshots
 
         try:
             snapshots = list_snapshots(
@@ -241,24 +241,31 @@ def prepare_portfolio_runtime(
             )["snapshots"]
         except FileNotFoundError:
             snapshots = []
-    latest_is_v2 = bool(
-        snapshots and snapshots[-1].get("format") == "odibi-anchor-durable-snapshot-v2"
-    )
-    if latest_is_v2 and database.exists() != projects.exists():
-        raise RuntimeError(
-            "local durable state is partial: the database and managed projects must both "
-            "exist or both be absent before portfolio preparation"
+        latest_is_v2 = bool(
+            snapshots and snapshots[-1].get("format") == "odibi-anchor-durable-snapshot-v2"
         )
-    if not database.exists():
-        if snapshots:
-            assert durable_root is not None
-            restore = restore_latest(
-                durable_root=durable_root,
-                destination_db=database,
-                destination_artifacts=projects,
-                authority_id=authority_id,
-                databricks=is_databricks,
+        if latest_is_v2:
+            raise RuntimeError(
+                "local durable state is partial: the database and managed projects must both "
+                "exist or both be absent before portfolio preparation"
             )
+    if not database.exists():
+        if durable_root is not None:
+            from odibi_anchor.durability import (
+                DurableSnapshotUnavailable,
+                restore_latest,
+            )
+
+            try:
+                restore = restore_latest(
+                    durable_root=durable_root,
+                    destination_db=database,
+                    destination_artifacts=projects,
+                    authority_id=authority_id,
+                    databricks=is_databricks,
+                )
+            except (FileNotFoundError, DurableSnapshotUnavailable):
+                restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
         else:
             restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
     from odibi_anchor.durability import ensure_database_authority
