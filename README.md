@@ -68,16 +68,23 @@ Install the pinned public release in a Databricks notebook:
 dbutils.library.restartPython()
 ```
 
-After one-time host setup, run the managed launcher with only the project ID. It selects local
-state, restores durable artifacts, binds the exact route, and advertises managed artifact actions.
-No source clone, host ID, portfolio path, or manually chosen `ANCHOR_HOME` is required:
+Before the first launch, complete the copy-ready
+[personal-workspace setup](docs/guides/getting-started.md#databricks-one-time-personal-workspace-setup).
+It creates a durable UC Volume, installs host guidance, and writes the portfolio where the
+managed launcher expects it. Do not use `/tmp` for the portfolio or a UC Volume for live SQLite
+state.
+
+After that one-time setup, every fresh Python process launches with only the project ID:
 
 ```python
 import runpy
 
+user = spark.sql("SELECT current_user()").first()[0]
+instruction_root = f"/Workspace/Users/{user}"
+
 namespace = runpy.run_path(
-    "/Workspace/Users/<user>/.assistant/agent_bootstrap.py",
-    init_globals={"ANCHOR_PROJECT_ID": "my-databricks-project"},
+    f"{instruction_root}/.assistant/agent_bootstrap.py",
+    init_globals={"ANCHOR_PROJECT_ID": "personal-work"},
 )
 anchor = namespace["anchor"]
 startup = namespace["STARTUP_PACKET"]
@@ -90,12 +97,10 @@ The `anchor` callable is process-bound and comes from the launcher namespace (or
 value of `odibi_anchor.launch()`); `from odibi_anchor import anchor` is intentionally unsupported.
 Run doctor only when additional startup diagnostics are needed.
 
-Run `anchor setup-host databricks --target /Workspace/Users/<user>` once to install and
-subsequently reconcile the packaged instructions and launcher. Workspace targets are published
-and byte-verified through the Databricks Workspace API rather than the FUSE mount. Create a
-PortfolioV1 to keep host-specific project roots and state locations explicit instead of rediscovering them. See
-[getting started](docs/guides/getting-started.md) and
-[portfolio and durable state](docs/guides/portfolio-and-durable-state.md).
+Host setup refuses to overwrite an existing user-owned `.assistant` tree. The setup guide explains
+both safe choices: retain existing guidance under a dedicated Anchor instruction root, or remove an
+obsolete installation only after identifying it. Workspace targets are published and byte-verified
+through the Databricks Workspace API rather than the FUSE mount.
 
 `ANCHOR_HOME` must be writable local filesystem storage outside the installed package/source
 checkout. Let portfolio preparation set it. On Databricks, `/tmp` is session-scoped and must not be treated as durable. Configure
