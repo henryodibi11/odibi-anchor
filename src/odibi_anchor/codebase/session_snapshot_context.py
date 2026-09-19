@@ -152,6 +152,21 @@ def session_snapshot_context(
     findings = _build_snapshot_findings(metrics, test_state, changes_since, decisions, conventions)
     risks = _build_snapshot_risks(test_state, open_questions)
 
+    # Report malformed managed records, but never refuse to snapshot over them.
+    # Rejecting here would make a damaged file unsnapshottable and leave the
+    # operator unable to checkpoint the work it belongs to; the point is to
+    # surface the corruption near its cause instead of sessions later (issue #15).
+    schema_violations = _managed_record_violations()
+    if schema_violations:
+        findings.append(
+            f"{len(schema_violations)} managed record(s) do not match their canonical "
+            "frontmatter and will fail when read back through a managed action. "
+            "They are included in this snapshot; see managed_record_violations."
+        )
+        risks.append(
+            "Malformed managed records persist durably and surface only on a later read."
+        )
+
     ctx: dict[str, Any] = {
         "kind": "session_snapshot_context",
         "subject": subject,
@@ -168,6 +183,7 @@ def session_snapshot_context(
         "conventions": conventions or {},
         "findings": findings,
         "risks": risks,
+        "managed_record_violations": schema_violations,
         "samples": {},
         "suggested_next_actions": (next_steps or []) + [
             "MUST: Run anchor('snapshot', mode='handoff', summary=task, state='in_progress', decisions=[...]) "
@@ -275,6 +291,25 @@ def _diff_snapshots(
 # ---------------------------------------------------------------------------
 # Findings & Risks
 # ---------------------------------------------------------------------------
+
+def _managed_record_violations() -> list[dict[str, Any]]:
+    """Scan the active project's artifact root for malformed managed records.
+
+    Best effort by design: a snapshot must still be produced when the artifact
+    root is unknown or unreadable, so any failure here yields no findings rather
+    than an error.
+    """
+    try:
+        from odibi_anchor._dispatcher._managed_record_schema import scan_managed_records
+        from odibi_anchor._utils._session_state import get_state
+
+        artifact_root = get_state().get("artifact_root")
+        if not artifact_root:
+            return []
+        return scan_managed_records(artifact_root)
+    except Exception:
+        return []
+
 
 def _build_snapshot_findings(
     metrics: dict[str, Any],

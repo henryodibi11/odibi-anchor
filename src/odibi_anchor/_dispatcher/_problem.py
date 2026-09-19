@@ -219,6 +219,28 @@ def _parse(path: Path) -> dict[str, Any]:
             meta[key] = json.loads(value.strip())
         except json.JSONDecodeError:
             meta[key] = value.strip()
+    # Validate the canonical contract here rather than letting a later managed
+    # action fail with a raw KeyError. A record written directly to disk with the
+    # wrong frontmatter used to parse, snapshot and persist, surfacing only
+    # sessions later and nowhere near its cause (issue #15).
+    from odibi_anchor._dispatcher._managed_record_schema import (
+        managed_record_schemas,
+        missing_required_fields,
+        repair_guidance,
+    )
+
+    schema = managed_record_schemas()["problem"]
+    missing = missing_required_fields(meta, schema)
+    if missing:
+        guidance = repair_guidance(path, schema, missing)
+        from odibi_anchor._recovery import attach_recovery
+
+        raise attach_recovery(
+            ValueError(f"{guidance['reason']}. {guidance['repair']}"),
+            error_code="managed_record_schema_violation",
+            context=guidance,
+        )
+
     meta["rigor_level"] = normalize_problem_rigor(meta.get("rigor_level", "full"))
 
     issues_section = _section(body, _HEADINGS["issues"], _HEADINGS["priorities"])
@@ -565,16 +587,37 @@ def problem_action(
 
     if command in {"list", "status", ""}:
         records = []
+        malformed: list[dict[str, Any]] = []
         if directory.is_dir():
             for path in sorted(directory.glob("PRB-????-????.md")):
-                record = _parse(path)
+                # Report a malformed record per file and keep listing. One record
+                # written directly to disk must not hide every valid one (issue #15).
+                try:
+                    record = _parse(path)
+                except ValueError as exc:
+                    malformed.append(
+                        getattr(exc, "context", None)
+                        or {"path": str(path), "reason": str(exc)}
+                    )
+                    continue
                 records.append(_context(record, path))
+        next_actions = (
+            ["Create a record with anchor('problem', 'create', title='...')."]
+            if not records and not malformed else []
+        )
+        if malformed:
+            next_actions.append(
+                f"Repair {len(malformed)} malformed record(s): see malformed_records "
+                "for the missing fields and the managed call that creates a valid one."
+            )
         result: dict[str, Any] = {
             "kind": "problem_list_context",
             "project_id": project_id,
             "problems": records,
             "count": len(records),
-            "suggested_next_actions": ["Create a record with anchor('problem', 'create', title='...')."] if not records else [],
+            "malformed_records": malformed,
+            "malformed_count": len(malformed),
+            "suggested_next_actions": next_actions,
         }
         if output_format == "dict":
             return result

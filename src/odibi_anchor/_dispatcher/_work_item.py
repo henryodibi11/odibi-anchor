@@ -52,6 +52,21 @@ _TEXT_FIELDS = frozenset(_MATERIAL) - {
     "implementation_disposition",
     "reopening_triggers",
 }
+# The canonical frontmatter contract, named once so the managed-record schema
+# registry can derive from it rather than restating it and drifting.
+REQUIRED_META = frozenset({
+    "work_item_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "revision",
+    "approvals",
+    "provider_bindings",
+    "publication_receipts",
+    "revisions",
+})
+OPTIONAL_META = frozenset({"implementation_disposition", "reopening_triggers"})
+
 _SECTION_NAMES = (
     "Outcome",
     "Context",
@@ -245,20 +260,16 @@ def _parse(path: Path) -> dict[str, Any]:
             record[key] = json.loads(value.strip())
     except (ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"Invalid work-item frontmatter: {path}") from exc
-    required_meta = {
-        "work_item_id",
-        "status",
-        "created_at",
-        "updated_at",
-        "revision",
-        "approvals",
-        "provider_bindings",
-        "publication_receipts",
-        "revisions",
-    }
-    optional_meta = {"implementation_disposition", "reopening_triggers"}
+    required_meta = set(REQUIRED_META)
+    optional_meta = set(OPTIONAL_META)
     if not required_meta.issubset(record):
-        raise ValueError(f"Missing work-item frontmatter: {sorted(required_meta - set(record))}")
+        missing = sorted(required_meta - set(record))
+        raise ValueError(
+            f"Missing work-item frontmatter: {missing}. "
+            f"{path.name} was not produced by the managed action; create records with "
+            'anchor("work_item", "create", title="...", outcome="...") rather than '
+            "writing the file directly, or add the missing fields."
+        )
     if not set(record).issubset(required_meta | optional_meta):
         raise ValueError(f"Unknown work-item frontmatter: {sorted(set(record) - required_meta - optional_meta)}")
     record["implementation_disposition"] = _implementation_disposition(
