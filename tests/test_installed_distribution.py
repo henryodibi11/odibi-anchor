@@ -3484,10 +3484,19 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_results[0]["ok"] is True
         assert dirty_results[1]["ok"] is True
         assert dirty_results[2]["ok"] is False
-        assert dirty_results[2]["error"] == {
-            "message": "BLOCKED: source-change task requires a clean initial Git worktree",
-            "type": "RuntimeError",
-        }
+        dirty_error = dirty_results[2]["error"]
+        # The fail-closed class and message are the stable contract; the recovery
+        # fields are additive so an agent can tell which recovery applies (#6).
+        assert dirty_error["message"] == (
+            "BLOCKED: source-change task requires a clean initial Git worktree"
+        )
+        assert dirty_error["type"] == "RuntimeError"
+        assert dirty_error["error_code"] == "source_change_requires_clean_worktree"
+        assert dirty_error["context"]["dirty_path_count"] >= 1
+        assert dirty_error["context"]["requested_execution_mode"] == "source_change"
+        assert [
+            operation["action"] for operation in dirty_error["next_operations"]
+        ] == ["task_rebind", "task", "review"]
         assert _git_snapshot(dirty) == dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3843,10 +3852,20 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert mcp_dirty["tool_names"] == ["anchor_execute", "anchor_help"]
         assert mcp_dirty["v1_is_error"] is True
         assert any(dirty_message in content for content in mcp_dirty["v1_content"])
-        assert mcp_dirty["v2_envelope"] == {
-            "error": {"message": dirty_message, "type": "RuntimeError"},
-            "ok": False,
-        }
+        assert mcp_dirty["v2_envelope"]["ok"] is False
+        # Class and message stay fixed; the recovery fields are additive (#6).
+        mcp_dirty_envelope_error = mcp_dirty["v2_envelope"]["error"]
+        assert mcp_dirty_envelope_error["message"] == dirty_message
+        assert mcp_dirty_envelope_error["type"] == "RuntimeError"
+        assert (
+            mcp_dirty_envelope_error["error_code"]
+            == "source_change_requires_clean_worktree"
+        )
+        assert mcp_dirty_envelope_error["context"]["dirty_path_count"] >= 1
+        assert [
+            operation["action"]
+            for operation in mcp_dirty_envelope_error["next_operations"]
+        ] == ["task_rebind", "task", "review"]
         assert _git_snapshot(dirty) == mcp_dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3890,10 +3909,18 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         )
         assert mcp_dirty_restart["missing_task"]["ok"] is True
         assert mcp_dirty_restart["task_error"]["ok"] is False
-        assert mcp_dirty_restart["task_error"]["error"] == {
-            "message": "BLOCKED: source-change task requires a clean initial Git worktree",
-            "type": "RuntimeError",
-        }
+        mcp_dirty_error = mcp_dirty_restart["task_error"]["error"]
+        # Same additive recovery contract as the shell transport above, asserted
+        # here so MCP v2 serialization cannot silently drop the fields (#6).
+        assert mcp_dirty_error["message"] == (
+            "BLOCKED: source-change task requires a clean initial Git worktree"
+        )
+        assert mcp_dirty_error["type"] == "RuntimeError"
+        assert mcp_dirty_error["error_code"] == "source_change_requires_clean_worktree"
+        assert mcp_dirty_error["context"]["requested_execution_mode"] == "source_change"
+        assert [
+            operation["action"] for operation in mcp_dirty_error["next_operations"]
+        ] == ["task_rebind", "task", "review"]
         assert mcp_dirty_restart["fresh_readiness"] is None
         assert _unborn_git_snapshot(mcp_unborn) == dirty_restart_before
         restart_source.unlink()

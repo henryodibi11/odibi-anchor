@@ -461,6 +461,73 @@ def databricks_task_baseline_projection(
     }
 
 
+_DIRTY_WORKTREE_MESSAGE = "BLOCKED: source-change task requires a clean initial Git worktree"
+
+
+def _dirty_worktree_block(
+    root: str | os.PathLike[str],
+    branch: str | None,
+    staged: Sequence[str],
+    unstaged: Sequence[str],
+    untracked: Sequence[str],
+) -> RuntimeError:
+    """Build the fail-closed dirty-worktree error with bounded recovery routes.
+
+    The baseline rule does not change: a source-change task still requires a clean
+    start. What the caller could not previously tell is *which* recovery applies —
+    whether the intended work is artifact-only, belongs to an interrupted task, or
+    is blocked behind changes another task already owns. Each route below is a
+    read-only next step; none of them stash, discard, commit, check out or
+    otherwise absorb the existing changes, because their ownership is unknown here.
+    `continuation=True` is deliberately not offered: it would meet the same dirty
+    baseline and fail identically.
+    """
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    return attach_recovery(
+        RuntimeError(_DIRTY_WORKTREE_MESSAGE),
+        error_code="source_change_requires_clean_worktree",
+        context={
+            "target_root": str(root),
+            "branch": branch,
+            "dirty_path_count": len(staged) + len(unstaged) + len(untracked),
+            "staged_path_count": len(staged),
+            "unstaged_path_count": len(unstaged),
+            "untracked_path_count": len(untracked),
+            "requested_execution_mode": "source_change",
+            "resolution_authority": (
+                "The existing changes are not this task's to resolve. Identify their "
+                "owner before any further action; never stash, discard, commit or "
+                "absorb them to clear the baseline."
+            ),
+        },
+        next_operations=[
+            dispatcher_operation(
+                "task_rebind",
+                reason=(
+                    "if these changes belong to an interrupted source-change task, list "
+                    "the matching open task windows and rebind the exact one that owns them"
+                ),
+            ),
+            dispatcher_operation(
+                "task",
+                kwargs={"mode": "planning"},
+                reason=(
+                    "if the intended work writes only managed artifacts and no source, "
+                    "use an artifact-only mode instead of claiming source-change authority"
+                ),
+            ),
+            dispatcher_operation(
+                "review",
+                reason=(
+                    "if the changes belong to a completed task, inspect them and finish "
+                    "that task's authorized delivery before starting another source-change task"
+                ),
+            ),
+        ],
+    )
+
+
 def capture_task_repository_baseline(
     target_worktree: str | os.PathLike[str], configured_target_ref: str = "main",
 ) -> TaskRepositoryBaseline | UnbornTaskRepositoryBaseline:
@@ -480,7 +547,7 @@ def capture_task_repository_baseline(
             raise RuntimeError("unborn source-change task requires an absent configured target")
         staged, unstaged, untracked = _mutable_paths(git)
         if staged or unstaged or untracked:
-            raise RuntimeError("BLOCKED: source-change task requires a clean initial Git worktree")
+            raise _dirty_worktree_block(root, branch, staged, unstaged, untracked)
         return UnbornTaskRepositoryBaseline(
             str(root), branch, configured_target_ref,
             datetime.now(timezone.utc).isoformat(),
@@ -491,7 +558,10 @@ def capture_task_repository_baseline(
     # concerns only mutable worktree/index state; those commits become the immutable
     # task base and are therefore excluded from the task delta.
     if snapshot.staged_paths or snapshot.unstaged_paths or snapshot.untracked_paths:
-        raise RuntimeError("BLOCKED: source-change task requires a clean initial Git worktree")
+        raise _dirty_worktree_block(
+            root, snapshot.branch,
+            snapshot.staged_paths, snapshot.unstaged_paths, snapshot.untracked_paths,
+        )
     if snapshot.branch is None:
         raise RuntimeError("source-change task requires an attached Git branch")
     if not snapshot.target_sha:
