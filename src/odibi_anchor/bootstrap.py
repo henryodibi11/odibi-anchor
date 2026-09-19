@@ -16,6 +16,7 @@ the caller's process as documented in the repository workflow reference.
 """
 from __future__ import annotations
 
+import collections.abc
 import copy
 import hashlib
 import json
@@ -1027,52 +1028,107 @@ def init(
     def _build_contextual_suggestions(frame, result):
         return _build_contextual_suggestions_impl(frame, result)
 
+    class _LazyActionFuncs(collections.abc.MutableMapping):
+        """Resolve help-table callables on demand.
+
+        build_help_text() only tests membership and reads the single entry it was
+        asked about, so materializing the whole table would import every action
+        module at once — including odibi_anchor.validation (numpy) and
+        odibi_anchor.tables (pandas), which ship only in optional extras. That made
+        every anchor("help") variant fail on a base install. An action whose module
+        is unavailable reports as absent instead, so its help degrades to the
+        documented usage and examples rather than raising.
+        """
+
+        def __init__(self, thunks):
+            self._thunks = dict(thunks)
+            self._cache = {}
+
+        def _resolve(self, key):
+            if key not in self._thunks:
+                return None
+            if key not in self._cache:
+                try:
+                    self._cache[key] = self._thunks[key]()
+                except Exception:
+                    self._cache[key] = None
+            return self._cache[key]
+
+        def __contains__(self, key):
+            return self._resolve(key) is not None
+
+        def __getitem__(self, key):
+            resolved = self._resolve(key)
+            if resolved is None:
+                raise KeyError(key)
+            return resolved
+
+        def __setitem__(self, key, value):
+            self._thunks[key] = lambda: value
+            self._cache[key] = value
+
+        def __delitem__(self, key):
+            self._thunks.pop(key, None)
+            self._cache.pop(key, None)
+
+        def __iter__(self):
+            return iter(self._thunks)
+
+        def __len__(self):
+            return len(self._thunks)
+
     def _help_action_impl(args, kwargs):
         from odibi_anchor._dispatcher._dispatch_table import build_help_text
         target = args[0] if args else None
-        _action_funcs = {
-            "memory": _codebase_mod.memory_context, "map": _codebase_mod.codebase_map_context,
-            "concurrency": __import__(
+
+        def _operational(name):
+            return lambda: getattr(
+                __import__("odibi_anchor.operational", fromlist=[name]), name
+            )
+
+        _action_funcs = _LazyActionFuncs({
+            "memory": lambda: _codebase_mod.memory_context, "map": lambda: _codebase_mod.codebase_map_context,
+            "concurrency": lambda: __import__(
                 "odibi_anchor._dispatcher._concurrency", fromlist=["concurrency_action"]
             ).concurrency_action,
-            "impact": _codebase_mod.change_impact_context, "consistency": _codebase_mod.consistency_check_context,
-            "convention": _codebase_mod.convention_preflight_context, "safe": _codebase_mod.safe_change_context,
-            "semantic": _codebase_mod.semantic_edit_context, "import_resolve": _codebase_mod.import_resolve_context,
-            "known_bad": _codebase_mod.known_bad_change_context,
-            "task": _planning.task_execution_context,
-            "task_adoption": _task_adoption_action,
-            "task_rebind": _task_rebind_action,
-            "work_item": __import__(
+            "impact": lambda: _codebase_mod.change_impact_context, "consistency": lambda: _codebase_mod.consistency_check_context,
+            "convention": lambda: _codebase_mod.convention_preflight_context, "safe": lambda: _codebase_mod.safe_change_context,
+            "semantic": lambda: _codebase_mod.semantic_edit_context, "import_resolve": lambda: _codebase_mod.import_resolve_context,
+            "known_bad": lambda: _codebase_mod.known_bad_change_context,
+            "task": lambda: _planning.task_execution_context,
+            "task_adoption": lambda: _task_adoption_action,
+            "task_rebind": lambda: _task_rebind_action,
+            "work_item": lambda: __import__(
                 "odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]
             ).work_item_action,
-            "incident_snapshot": __import__("odibi_anchor.operational", fromlist=["incident_snapshot"]).incident_snapshot,
-            "environment_diff": __import__("odibi_anchor.operational", fromlist=["compare_environments"]).compare_environments,
-            "spark_diagnose": __import__("odibi_anchor.operational", fromlist=["spark_diagnose"]).spark_diagnose,
-            "uc_context": __import__("odibi_anchor.operational", fromlist=["uc_context"]).uc_context,
-            "delta_changes": __import__("odibi_anchor.operational", fromlist=["delta_changes"]).delta_changes,
-            "run_diff": __import__("odibi_anchor.operational", fromlist=["run_diff"]).run_diff,
-            "observe_table": __import__("odibi_anchor.operational", fromlist=["observe_table"]).observe_table,
-            "table_trend": __import__("odibi_anchor.operational", fromlist=["table_trend"]).table_trend,
-            "gate": _codebase_mod.workflow_gate_context,
-            "preflight": _codebase_mod.preflight_context, "test": _codebase_mod.test_focus_context,
-            "profile_table": _profile_table_context, "microscope": _microscope_context,
-            "case_file": _case_file_context,
-            "quality": _validation_mod.quality_gate_context, "validate": _validation_mod.validation_summary_context,
-            "duplicate": _validation_mod.duplicate_key_context, "diff": _tables_mod.diff_tables_by_key,
-            "schema_diff": _tables_mod.schema_diff_context, "contract": _tables_mod.table_contract_summary,
-            "transform": _tables_mod.transform_plan_context, "apply_transform": _tables_mod.apply_transform_context,
-            "known_error": _debugging_mod.failure_pattern_context, "trace": _debugging_mod.error_trace_context,
-            "lookup": _codebase_mod.framework_lookup_context, "learn": _codebase_mod.learn_context,
-            "save": _codebase_mod.append_memory, "confirm": _codebase_mod.confirm_memory,
-            "reject": _codebase_mod.reject_memory, "snapshot": _codebase_mod.session_snapshot_context,
-            "dogfood": _profiling_mod.dogfood_regression_context,
-            "reconcile": _workflows_mod._reconcile_workflow,
-            "investigate": _workflows_mod._investigate_workflow,
-            "debug": _workflows_mod._debug_workflow,
-            "trace_row": _workflows_mod._trace_workflow,
-            "evolve": _workflows_mod._evolve_workflow,
-            "chain": _chain_context,
-        }
+            "incident_snapshot": _operational("incident_snapshot"),
+            "environment_diff": _operational("compare_environments"),
+            "spark_diagnose": _operational("spark_diagnose"),
+            "uc_context": _operational("uc_context"),
+            "delta_changes": _operational("delta_changes"),
+            "run_diff": _operational("run_diff"),
+            "observe_table": _operational("observe_table"),
+            "table_trend": _operational("table_trend"),
+            "gate": lambda: _codebase_mod.workflow_gate_context,
+            "preflight": lambda: _codebase_mod.preflight_context, "test": lambda: _codebase_mod.test_focus_context,
+            "profile_table": lambda: _profile_table_context, "microscope": lambda: _microscope_context,
+            "case_file": lambda: _case_file_context,
+            "quality": lambda: _validation_mod.quality_gate_context, "validate": lambda: _validation_mod.validation_summary_context,
+            "duplicate": lambda: _validation_mod.duplicate_key_context, "diff": lambda: _tables_mod.diff_tables_by_key,
+            "schema_diff": lambda: _tables_mod.schema_diff_context, "contract": lambda: _tables_mod.table_contract_summary,
+            "transform": lambda: _tables_mod.transform_plan_context, "apply_transform": lambda: _tables_mod.apply_transform_context,
+            "known_error": lambda: _debugging_mod.failure_pattern_context, "trace": lambda: _debugging_mod.error_trace_context,
+            "lookup": lambda: _codebase_mod.framework_lookup_context, "learn": lambda: _codebase_mod.learn_context,
+            "save": lambda: _codebase_mod.append_memory, "confirm": lambda: _codebase_mod.confirm_memory,
+            "reject": lambda: _codebase_mod.reject_memory, "snapshot": lambda: _codebase_mod.session_snapshot_context,
+            "dogfood": lambda: _profiling_mod.dogfood_regression_context,
+            "reconcile": lambda: _workflows_mod._reconcile_workflow,
+            "investigate": lambda: _workflows_mod._investigate_workflow,
+            "debug": lambda: _workflows_mod._debug_workflow,
+            "trace_row": lambda: _workflows_mod._trace_workflow,
+            "evolve": lambda: _workflows_mod._evolve_workflow,
+            "chain": lambda: _chain_context,
+        })
         # Registered tools (pre_join, pre_merge, suggest_rules, …) aren't in the
         # hardcoded map above, so without this their help showed only a usage
         # string + example — no Parameters section. Merge their callables in so

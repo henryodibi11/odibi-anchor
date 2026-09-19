@@ -95,6 +95,23 @@ jobs:
           /tmp/anchor-wheel/bin/python -m pip install --no-deps dist/*.whl
           /tmp/anchor-wheel/bin/python -c "import odibi_anchor; from odibi_anchor.cli import main"
           /tmp/anchor-wheel/bin/anchor --help
+          # `anchor --help` is argparse and never dispatches. Exercise the help
+          # ACTION too, so an action table that reaches into an optional extra
+          # (numpy, pandas) fails here instead of on a user's base install.
+          /tmp/anchor-wheel/bin/anchor exec help > /tmp/help-overview.json
+          /tmp/anchor-wheel/bin/anchor exec help '{"args":["task"]}' > /tmp/help-action.json
+          /tmp/anchor-wheel/bin/anchor exec help '{"args":["duplicate"]}' > /tmp/help-optional.json
+          /tmp/anchor-wheel/bin/python - <<'PY'
+          import json
+          for path in (
+              "/tmp/help-overview.json",
+              "/tmp/help-action.json",
+              "/tmp/help-optional.json",
+          ):
+              with open(path) as handle:
+                  payload = json.load(handle)
+              assert payload.get("ok") is True, (path, payload.get("error"))
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: distributions
