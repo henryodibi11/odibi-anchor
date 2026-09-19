@@ -158,14 +158,23 @@ def session_snapshot_context(
     # surface the corruption near its cause instead of sessions later (issue #15).
     schema_violations = _managed_record_violations()
     if schema_violations:
-        findings.append(
-            f"{len(schema_violations)} managed record(s) do not match their canonical "
-            "frontmatter and will fail when read back through a managed action. "
-            "They are included in this snapshot; see managed_record_violations."
-        )
-        risks.append(
-            "Malformed managed records persist durably and surface only on a later read."
-        )
+        enforced = [v for v in schema_violations if not v.get("advisory")]
+        advisory = [v for v in schema_violations if v.get("advisory")]
+        if enforced:
+            findings.append(
+                f"{len(enforced)} managed record(s) do not match their canonical "
+                "frontmatter and will fail when read back through a managed action. "
+                "They are included in this snapshot; see managed_record_violations."
+            )
+            risks.append(
+                "Malformed managed records persist durably and surface only on a later read."
+            )
+        if advisory:
+            findings.append(
+                f"{len(advisory)} record(s) deviate from their expected frontmatter. "
+                "Advisory only — their readers tolerate this, so nothing will fail; "
+                "see managed_record_violations."
+            )
 
     ctx: dict[str, Any] = {
         "kind": "session_snapshot_context",
