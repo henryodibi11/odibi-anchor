@@ -1149,8 +1149,21 @@ def _evidence(value: Any) -> list[dict]:
             ref = _text(e.get("reference"), "evidence.reference", 512)
         except ValueError as exc:
             raise invalid(str(exc)) from exc
-        if typ not in REFS or not REFS[typ].fullmatch(ref):
-            raise invalid("reference_type or reference does not match an allowed form")
+        if typ not in REFS:
+            raise invalid(
+                f"reference_type {typ!r} is not one of: {', '.join(sorted(REFS))}"
+            )
+        if not REFS[typ].fullmatch(ref):
+            raise invalid(
+                f"reference {ref!r} does not match the {typ!r} form "
+                f"{REFS[typ].pattern!r}"
+                + (
+                    " — session references are slugs, so use dots, colons or hyphens "
+                    "instead of spaces and put prose in `summary`"
+                    if typ == "session"
+                    else ""
+                )
+            )
         try:
             summary = _text(
                 e.get("summary", ""), "evidence.summary", 500, empty=True, free=True,
@@ -1195,7 +1208,14 @@ def _capture_result(result: dict[str, Any]) -> dict[str, Any]:
         reason="assess this observation after all intended captures are complete",
         retry_safety="state_checked",
     )
-    return {**result, "next_operation": operation, "available_operations": [operation]}
+    # `observation_id` mirrors item.item_id at the top level: callers collecting IDs
+    # for assess reach for a flat key first, and reading a nested one is easy to miss.
+    return {
+        **result,
+        "observation_id": item_id,
+        "next_operation": operation,
+        "available_operations": [operation],
+    }
 
 
 def _obligation_for_operation(
@@ -1231,32 +1251,60 @@ def _capture(payload: dict[str, Any]) -> dict:
         "provenance",
         "evidence",
     }
-    if set(payload) - allowed_keys:
-        raise ValueError("invalid capture payload")
+    unknown_keys = set(payload) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            f"invalid capture payload: unknown field(s) {', '.join(sorted(unknown_keys))}; "
+            f"allowed fields are {', '.join(sorted(allowed_keys))}"
+        )
     otype = payload.get("observation_type")
     if otype not in ("friction", "blocker", "near_miss", "reusable_practice", "evidence_gap"):
-        raise ValueError("invalid observation_type")
+        raise ValueError(
+            f"invalid observation_type {otype!r}; expected one of: "
+            "blocker, evidence_gap, friction, near_miss, reusable_practice"
+        )
     summary = _text(payload.get("summary"), "summary", 1000, free=True)
     signal = _text(payload.get("signal_key"), "signal_key", 128)
     if not SIGNAL.fullmatch(signal) or SENSITIVE.search(signal):
         raise ValueError("invalid signal_key")
     impact = payload.get("impact", "medium")
     scope = payload.get("applicability_scope", "workbench")
-    if impact not in ("low", "medium", "high", "critical") or scope not in (
-        "project_local",
-        "workbench",
-        "cross_project",
-    ):
-        raise ValueError("invalid capture field")
+    if impact not in ("low", "medium", "high", "critical"):
+        raise ValueError(
+            f"invalid impact {impact!r}; expected one of: critical, high, low, medium"
+        )
+    if scope not in ("project_local", "workbench", "cross_project"):
+        raise ValueError(
+            f"invalid applicability_scope {scope!r}; expected one of: "
+            "cross_project, project_local, workbench"
+        )
     projects = _list(payload.get("project_refs"), "project_refs")
     wp = _list(payload.get("work_package_refs"), "work_package_refs")
     env = _list(payload.get("environment_refs"), "environment_refs")
-    if (scope == "project_local" and len(projects) != 1) or (scope == "cross_project" and len(projects) < 2):
-        raise ValueError("invalid project_refs")
+    if scope == "project_local" and len(projects) != 1:
+        raise ValueError(
+            "invalid project_refs: applicability_scope 'project_local' requires "
+            f"exactly 1 project_refs entry, got {len(projects)}"
+        )
+    if scope == "cross_project" and len(projects) < 2:
+        raise ValueError(
+            "invalid project_refs: applicability_scope 'cross_project' requires "
+            f"at least 2 project_refs entries, got {len(projects)}; use "
+            "applicability_scope 'workbench' for a single-project observation"
+        )
     ev = _evidence(payload.get("evidence"))
     prov = payload.get("provenance", {})
-    if not isinstance(prov, dict) or set(prov) - {"source_action", "source_version"}:
-        raise ValueError("invalid provenance")
+    if not isinstance(prov, dict):
+        raise ValueError(
+            "invalid provenance: expected an object with only source_action "
+            f"and/or source_version, got {type(prov).__name__}"
+        )
+    if set(prov) - {"source_action", "source_version"}:
+        raise ValueError(
+            "invalid provenance: unknown field(s) "
+            f"{', '.join(sorted(set(prov) - {'source_action', 'source_version'}))}; "
+            "allowed fields are source_action, source_version"
+        )
     prov = {k: _ident(v, f"provenance.{k}") for k, v in prov.items()}
     provenance_connection = _connect(_db_path(), ro=True)
     try:

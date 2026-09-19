@@ -40,6 +40,19 @@ _LEGACY_DEFAULTS: dict[str, tuple[str, str, str, str, tuple[str, ...], tuple[str
 }
 
 
+def _unsupported_mode_message(legacy_mode: object) -> str:
+    """Name the rejected mode and every accepted one.
+
+    Callers cannot guess the accepted set, and the mode determines whether the task
+    may change source, artifacts or data — so the message lists each mode with the
+    execution mode it grants.
+    """
+    known = ", ".join(
+        f"{name} ({defaults[1]})" for name, defaults in sorted(_LEGACY_DEFAULTS.items())
+    )
+    return f"Unsupported legacy mode: {legacy_mode!r}. Valid modes: {known}"
+
+
 @dataclass(frozen=True)
 class EvidenceRequest:
     """Evidence explicitly requested by the caller."""
@@ -97,7 +110,7 @@ class TaskProfile:
         ):
             raise ValueError("caller_required_evidence must contain EvidenceRequest values")
         if self.legacy_mode is not None and self.legacy_mode not in _LEGACY_DEFAULTS:
-            raise ValueError(f"Unsupported legacy mode: {self.legacy_mode!r}")
+            raise ValueError(_unsupported_mode_message(self.legacy_mode))
         if not isinstance(self.normalization_notes, tuple) or not all(
             isinstance(note, str) for note in self.normalization_notes
         ):
@@ -174,7 +187,7 @@ def normalize_task_profile(
 ) -> TaskProfile:
     """Normalize legacy and explicit task inputs without inferring mutation permission."""
     if legacy_mode is not None and legacy_mode not in _LEGACY_DEFAULTS:
-        raise ValueError(f"Unsupported legacy mode: {legacy_mode!r}")
+        raise ValueError(_unsupported_mode_message(legacy_mode))
     defaults = _LEGACY_DEFAULTS.get(
         legacy_mode or "", ("investigate", "read_only", "medium", "compact", ("general",), ()),
     )

@@ -560,7 +560,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "learn":        'anchor("learn", session_events=[...])  # compatibility-only historical recovery when old persisted state technically requires it',
     "learning":     [
         'anchor("learning", "capture", observation_type="reusable_practice", summary="...", signal_key="...")',
-        'anchor("learning", "assess", outcome="observations_recorded", observation_ids=["obs_..."])',
+        'anchor("learning", "assess", outcome="observations_recorded", observation_ids=["lrn_..."])',
         'anchor("learning", "triage", decision="derive_lesson", actor_kind="human", source_item_ids=["lrn_..."], expected_source_versions={"lrn_...": 1}, ...)',
         'anchor("learning", "safe_stop", status="blocked", reason="required evidence unavailable")',
     ],
@@ -736,6 +736,16 @@ _ACTION_DETAILS: dict[str, list[str]] = {
     "task": [
         '`memory_limit`: optional integer from 1 through 20 controlling how many ranked memories '
         'are selected at task acceptance (default 5). Every selection requires disposition.',
+        '`mode`: one of `analysis`, `data`, `debugging`, `decision`, `documentation`, `etl`, '
+        '`greenfield`, `handoff`, `implementation`, `migration`, `planning`, `reconciliation`, '
+        '`refresh`, `retrospective`, `review`, `spec_creation`, or `testing`. The mode sets the '
+        'execution mode and therefore what the task may change: `implementation` and `migration` '
+        'are `source_change`; `data`, `etl` and `refresh` are `data_change`; `documentation`, '
+        '`decision`, `greenfield`, `handoff`, `planning`, `retrospective` and `spec_creation` are '
+        '`artifact_only`; `analysis`, `debugging`, `reconciliation`, `review` and `testing` are '
+        '`read_only`. A `source_change` mode requires a clean initial Git worktree.',
+        '`repository_scope`: optional non-empty list of repository-relative path strings. It is '
+        'not a prose string.',
     ],
     "learning": [
         '`capture`: provide `observation_type` (`friction`, `blocker`, `near_miss`, '
@@ -745,10 +755,30 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`workbench`), references, provenance, and `retry_latest=True`. `evidence` is required '
         'and must be a non-empty list of objects with `reference_type` and `reference`; each may '
         'also include `summary` and UTC `observed_at` ending in `Z`.',
+        '`capture` `project_refs` cardinality follows `applicability_scope`: `workbench` '
+        '(the default) takes none, `project_local` requires exactly one, and `cross_project` '
+        'requires at least two. A single-project observation belongs in `workbench`.',
+        '`capture` `evidence[].reference_type` must be one of `file`, `git_commit`, `problem`, '
+        '`spec`, `test`, or `session`, and `reference` must match that type\'s form: `file` is a '
+        'repo-relative path with an optional `#L12` or `#L12-L20` suffix; `git_commit` is a full '
+        '40- or 64-character hex SHA; `problem` is `PRB-YYYY-NNNN`; `spec` is upper-case letters, '
+        'digits and underscores; `test` is a `tests/...py` path with optional `::node` selectors; '
+        '`session` is a slug of letters, digits, dots, colons and hyphens. None of these accept '
+        'spaces, so put prose in the entry\'s `summary`.',
+        '`capture` `provenance` is an object accepting only `source_action` and `source_version`.',
+        '`capture` returns the new observation id at the top level as `observation_id`, and also '
+        'at `item.item_id`. `deduped` is `True` when an existing observation matched instead. '
+        'Collect `observation_id` from each capture and pass the list to `assess`.',
         '`assess`: provide `outcome="observations_recorded"` with `observation_ids`, or '
         '`outcome="nothing_reusable_learned"` without them; optional `notes`, `actor_kind` '
         '(`agent` or `human`), `actor_ref`, and `retry_latest=True`. The result explains each '
         'semantic projection decision and supplies the next managed operation.',
+        '`assess` prerequisite: every memory selected at task acceptance must already be disposed, '
+        'or assess blocks and names the pending ids. Dispose them with '
+        '`anchor("memory", "disposition", memory_id="...", disposition="applied|irrelevant|'
+        'suspect|superseded", reason={...})`, where `reason` is an object, not a string. When all '
+        'pending selections are irrelevant, use a single call with `all_pending=True` rather than '
+        'looping.',
         '`triage`: cross-project widening is human-only. Follow the assessed observation\'s '
         '`next_operation`, preserve its expected source version and evidence, and use '
         '`derive_lesson` or `derive_watch`; never create memory through SQLite.',
