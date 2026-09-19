@@ -9,18 +9,29 @@ import pytest
 
 # On Databricks, portfolio preparation sets ANCHOR_HOME to local compute while
 # ANCHOR_DURABLE_ROOT separately identifies durable snapshots. For the test session,
-# default to a temp directory so tests never require external state configuration
-# and never write into the source checkout.
+# use a temp directory so tests never require external state configuration and
+# never write into the source checkout.
+#
+# These are assigned, not `setdefault`. `setdefault` is a no-op when the variable
+# is already set, so a suite started from inside a bound Anchor runtime — or by a
+# developer with these exported — silently inherited that routing and ran against
+# a real store instead of the temp paths these lines promise. That is how test
+# runs came to write task windows into an operator's memory database (issue #17).
+# `pytest_runner` now strips ANCHOR_ names from its child, but that only covers
+# the `anchor("test")` path; this covers every other way the suite is started.
+#
+# Tests that need specific routing pass an explicit environment to a subprocess,
+# which is unaffected by what the session sets here.
 _cw_test_home = os.path.join(tempfile.gettempdir(), "anchor_test_home")
 os.makedirs(_cw_test_home, exist_ok=True)
-os.environ.setdefault("ANCHOR_HOME", _cw_test_home)
+os.environ["ANCHOR_HOME"] = _cw_test_home
 
 # Point the shared memory DB at a throwaway temp file for the whole test session,
-# BEFORE any odibi_anchor import resolves _DEFAULT_DB_PATH. This guarantees
-# tests never read or write the repo's committed .agent_memory.db by default,
-# regardless of which environment profile is detected.
-os.environ.setdefault(
-    "ANCHOR_MEMORY_DB", os.path.join(tempfile.gettempdir(), "anchor_test_agent_memory.db")
+# BEFORE any odibi_anchor import resolves _DEFAULT_DB_PATH. This guarantees tests
+# never read or write a real .agent_memory.db, regardless of which environment
+# profile is detected or what the caller exported.
+os.environ["ANCHOR_MEMORY_DB"] = os.path.join(
+    tempfile.gettempdir(), "anchor_test_agent_memory.db"
 )
 
 # The orb can require signed commits globally. Test repositories are disposable
