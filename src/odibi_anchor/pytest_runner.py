@@ -14,6 +14,9 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 SUMMARY_ENV = "ODIBI_ANCHOR_PYTEST_SUMMARY"
+# Anchor routing variables (ANCHOR_HOME, ANCHOR_MEMORY_DB, ANCHOR_PROJECT_ID,
+# ANCHOR_PROJECT_ROOT, ...). SUMMARY_ENV starts with ODIBI_ANCHOR_ and is unaffected.
+ANCHOR_ENV_PREFIX = "ANCHOR_"
 _CANONICAL_PLUGIN_NAME = "odibi_anchor.pytest_runner"
 _GIT_CONFIG = (
     ("commit.gpgSign", "false"),
@@ -23,8 +26,20 @@ _GIT_CONFIG = (
 
 
 def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Return child-only Python and Git settings without changing Git config."""
+    """Return child-only Python and Git settings without changing Git config.
+
+    Anchor's own routing variables are stripped. `anchor("test")` runs inside a live
+    runtime, so inheriting them pointed the suite at the operator's real home,
+    memory database and project: tests that resolve Anchor state from the
+    environment bound to that project instead of their own fixtures, wrote foreign
+    task windows into the operator's database, and failed in ways that do not
+    reproduce under plain pytest. Stripping the prefix gives the child the same
+    environment a contributor's `pytest` invocation sees. `ODIBI_ANCHOR_` names,
+    including the summary hand-off below, do not match the prefix and are kept.
+    """
     env = dict(os.environ if base is None else base)
+    for name in [key for key in env if key.startswith(ANCHOR_ENV_PREFIX)]:
+        del env[name]
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     start = int(env.get("GIT_CONFIG_COUNT", "0"))
     for offset, (key, value) in enumerate(_GIT_CONFIG):
