@@ -1326,6 +1326,33 @@ def archive_stale(
 # ---------------------------------------------------------------------------
 
 
+def get_memory_entry(
+    db_path: str | None = None, *, entry_id: str,
+) -> dict[str, Any] | None:
+    """Return one entry by exact id, or None when no such entry exists.
+
+    Deliberately unscoped by project and status. The caller already holds the id —
+    it is handed to them by disposition blocks and projection decisions — so
+    filtering here would reproduce the dead end this exists to remove: an id you
+    cannot resolve. The returned entry carries its own project and status, so the
+    caller can see the scope rather than having it silently applied.
+
+    Like get_all_entries, this does not update last_used timestamps: resolving what
+    an id refers to is not a retrieval for relevance purposes.
+    """
+    if not isinstance(entry_id, str) or not entry_id.strip():
+        raise ValueError("entry_id must be a non-empty string")
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT * FROM memories WHERE id = ?", (entry_id.strip(),),
+    ).fetchone()
+    if row is None:
+        return None
+    entry = _row_to_dict(row)
+    _attach_lifecycle_evidence(conn, [entry])
+    return entry
+
+
 def get_all_entries(
     db_path: str | None = None,
     *,

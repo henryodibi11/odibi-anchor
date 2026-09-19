@@ -42,6 +42,7 @@ from odibi_anchor.codebase._memory_db import (
     resolve_project,
     insert_memory as _db_insert,
     query_memories as _db_query,
+    get_memory_entry as _db_get_entry,
     confirm_memory_entry as _db_confirm,
     reject_memory_entry as _db_reject,
     archive_stale as _db_archive,
@@ -83,6 +84,25 @@ def _get_current_session_id() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _format_memory_entry(result: dict[str, Any], output_format: str) -> str:
+    """Render an exact-id lookup. Only markdown reaches here; toon is dispatcher-side."""
+    if not result["found"]:
+        return f"# Memory {result['memory_id']}\n\nNot found. {result.get('reason', '')}".rstrip()
+    entry = result["entries"][0]
+    lines = [
+        f"# Memory {entry['id']}",
+        "",
+        f"- **project**: {entry.get('project')}",
+        f"- **type**: {entry.get('type')}",
+        f"- **status**: {entry.get('status')}",
+        f"- **confidence**: {entry.get('confidence')}",
+        f"- **source**: {entry.get('source')}",
+        "",
+        str(entry.get("content", "")),
+    ]
+    return "\n".join(lines)
+
+
 def memory_context(
     root: str | Path,
     *,
@@ -91,6 +111,7 @@ def memory_context(
     error_text: str | None = None,
     task_type: str | None = None,
     entry_type: str | None = None,
+    memory_id: str | None = None,
     query: str | None = None,
     limit: int = 10,
     offset: int = 0,
@@ -149,6 +170,30 @@ def memory_context(
     subject = subject or root.name
     project = project or resolve_project(root)
     db_path = db_path or _DEFAULT_DB_PATH
+
+    if memory_id is not None:
+        # Exact lookup, not a search. Disposition blocks and projection decisions
+        # hand callers a memory id; without this they cannot see what that id
+        # refers to through any action, because the id is not in the entry content
+        # and so a free-text query for it matches nothing.
+        entry = _db_get_entry(db_path, entry_id=memory_id)
+        found = entry is not None
+        result = {
+            "kind": "memory_entry",
+            "memory_id": memory_id,
+            "found": found,
+            "entries": [entry] if found else [],
+            "count": 1 if found else 0,
+            "subject": subject,
+        }
+        if not found:
+            result["reason"] = (
+                f"no memory entry has id {memory_id!r} in this store; it may belong "
+                "to a different Anchor home"
+            )
+        if output_format == "dict":
+            return result
+        return _format_memory_entry(result, output_format)
 
     # Build status filter. Explicit inspection is validated rather than using
     # ``None`` (which means the normal retrievable statuses in query_memories).
