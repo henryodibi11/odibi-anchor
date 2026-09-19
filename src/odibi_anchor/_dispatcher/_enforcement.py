@@ -541,10 +541,32 @@ def should_block_gate_learn(timings: list[dict]) -> tuple[bool, str]:
     return False, ""
 
 
+def _read_only_legacy_modes() -> frozenset[str]:
+    """Legacy mode names whose declared execution mode forbids any file change.
+
+    Derived rather than listed. The previous hardcoded set named `planning`,
+    `decision` and `retrospective`, all of which declare `artifact_only` — so modes
+    whose purpose is writing managed records were rejected at gate for writing
+    them, leaving no way to deliver artifact-only work (issue #13).
+    """
+    from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
+
+    return frozenset(
+        name for name, defaults in _LEGACY_DEFAULTS.items() if defaults[1] == "read_only"
+    )
+
+
 def should_block_mode_mismatch(
     timings: list[dict], files_changed: set[str],
 ) -> tuple[bool, str]:
-    """Reject file delivery from the latest read-only task mode."""
+    """Reject file delivery from the latest read-only task mode.
+
+    Only `read_only` execution modes are rejected. An `artifact_only` mode may
+    deliver managed records; it still cannot touch source, because
+    `task_profile_effect_compatible` refuses the `source_write` effect unless the
+    execution mode is `source_change`. That rule is the source-edit boundary, not
+    this check.
+    """
     if not files_changed:
         return False, ""
     last_task = next(
@@ -555,14 +577,15 @@ def should_block_mode_mismatch(
         None,
     )
     planned_mode = last_task.get("task_mode", "planning") if last_task else None
-    readonly_modes = {"analysis", "review", "retrospective", "planning", "decision"}
-    if planned_mode not in readonly_modes:
+    if planned_mode not in _read_only_legacy_modes():
         return False, ""
     return True, (
         f"Mode mismatch — planned as '{planned_mode}' but files were modified.\n"
         f"Changed files: {sorted(files_changed)[:5]}\n"
-        "Re-run anchor(\"task\", goal=\"...\", mode=\"implementation\") with a file-modifying mode,\n"
-        "then re-run anchor(\"gate\")."
+        f"'{planned_mode}' is a read-only mode. Re-run anchor(\"task\", goal=\"...\") with a\n"
+        "mode that may write: an artifact_only mode such as \"documentation\" or \"planning\"\n"
+        "for managed records, or \"implementation\" for source changes. Then re-run\n"
+        "anchor(\"gate\")."
     )
 
 
