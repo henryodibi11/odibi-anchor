@@ -176,7 +176,12 @@ def memory_context(
         # hand callers a memory id; without this they cannot see what that id
         # refers to through any action, because the id is not in the entry content
         # and so a free-text query for it matches nothing.
-        entry = _db_get_entry(db_path, entry_id=memory_id)
+        entry = _db_get_entry(
+            db_path,
+            entry_id=memory_id,
+            project=project,
+            status=["candidate", "active", "confirmed"],
+        )
         found = entry is not None
         result = {
             "kind": "memory_entry",
@@ -188,8 +193,8 @@ def memory_context(
         }
         if not found:
             result["reason"] = (
-                f"no memory entry has id {memory_id!r} in this store; it may belong "
-                "to a different Anchor home"
+                f"no retrievable memory entry has id {memory_id!r} in project "
+                f"{project!r} or shared scope"
             )
         if output_format == "dict":
             return result

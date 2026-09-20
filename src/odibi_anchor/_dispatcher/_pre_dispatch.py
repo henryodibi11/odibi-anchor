@@ -230,7 +230,12 @@ def run_pre_dispatch_enforcement(
     # timing persistence creates learn debt for a delivery that must be rejected.
     if action == "gate" and session_files_changed:
         from odibi_anchor._dispatcher._enforcement import should_block_mode_mismatch
-        blocked, msg = should_block_mode_mismatch(session_timings, session_files_changed)
+        blocked, msg = should_block_mode_mismatch(
+            session_timings,
+            session_files_changed,
+            artifact_root=getattr(session_state, "artifact_root", None),
+            target_root=getattr(session_state, "target_root", None),
+        )
         if blocked:
             raise RuntimeError(f"BLOCKED: {msg}")
 

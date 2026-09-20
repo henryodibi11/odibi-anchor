@@ -68,6 +68,8 @@ class _State:
     active_task_mode = "implementation"
     skills_loaded = set()
     skill_hints_emitted = set()
+    artifact_root = None
+    target_root = None
 
 
 def _passing_timings():
@@ -206,6 +208,20 @@ def test_documentation_gate_rechecks_existing_final_ledger(tmp_path):
         _run(
             tmp_path, _passing_timings(), drift,
             changed_files={"README.md", "settings.json"}, mode="documentation",
+        )
+
+
+def test_planning_gate_blocks_source_drift_before_registration(tmp_path):
+    drift = {"has_drift": True, "unregistered": ["src/package.py"], "created": []}
+    timings = _passing_timings()
+    timings[0]["task_mode"] = "planning"
+    with pytest.raises(RuntimeError, match="Artifact-only tasks"):
+        _run(
+            tmp_path,
+            timings,
+            drift,
+            changed_files=set(),
+            mode="planning",
         )
 
 

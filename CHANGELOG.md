@@ -2,6 +2,35 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.17] - 2026-09-20
+
+### Added
+
+- Dirty-worktree source-task failures now carry bounded, copy-ready recovery metadata.
+- Learning and task help now documents accepted schemas, field constraints, valid modes, and
+  exact observation identifiers.
+- Managed problem, work-item, spec, and decision directories now have a canonical schema
+  registry with read enforcement or advisory reporting according to reader behavior.
+
+### Changed
+
+- Base-package help loads optional actions lazily, preserving help across minimal, MCP, and
+  Databricks installations.
+- Artifact-only tasks may deliver managed records while gates reject target-root drift that
+  requires source-change authority.
+- Pytest subprocesses and direct suite execution use isolated Anchor routing and unique state
+  roots rather than inheriting operator projects or databases.
+
+### Fixed
+
+- Exact memory-ID lookup preserves project and lifecycle scope while still resolving eligible
+  task selections and shared memories.
+- Dirty-worktree recovery no longer recommends review before task authority can exist.
+- Snapshot Markdown surfaces malformed managed records and unavailable validation; work-item
+  listing isolates malformed files instead of hiding healthy records.
+- Learning scope validation now enforces the documented `project_refs` cardinality for
+  `workbench`, `project_local`, and `cross_project` observations.
+
 ## [0.3.16] - 2026-09-13
 
 ### Added

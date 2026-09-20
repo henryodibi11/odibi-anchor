@@ -20,6 +20,7 @@ import zipfile
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -210,7 +211,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
 ]
 EXPECTED_DISTRIBUTION_METADATA = {
     "Name": ["odibi-anchor"],
-    "Version": ["0.3.16"],
+    "Version": ["0.3.17"],
     "Summary": ["Provider-neutral reliability, context, and evidence tooling for engineering agents."],
     "Requires-Python": [">=3.11"],
     "License-Expression": ["Apache-2.0"],
@@ -508,7 +509,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
-    assert project["version"] == "0.3.16"
+    assert project["version"] == "0.3.17"
     assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
     assert project["license"] == "Apache-2.0"
@@ -548,7 +549,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     }
 
     init_source = (REPOSITORY_ROOT / "src" / "odibi_anchor" / "__init__.py").read_text(encoding="utf-8")
-    assert '"0.3.16"' not in init_source
+    assert '"0.3.17"' not in init_source
     assert '"0.7.1"' not in init_source
     assert not (REPOSITORY_ROOT / "src" / "odibi_anchor" / "_version.py").exists()
 
@@ -675,7 +676,7 @@ def _repository_factory_probe(
 
 def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     """Assert installed metadata and runtime expose the authoritative contract."""
-    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.16"
+    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.17"
     assert probe["summary"] == EXPECTED_DISTRIBUTION_METADATA["Summary"][0]
     assert probe["author"] == "Henry Odibi"
     assert probe["license"] == "Apache-2.0"
@@ -699,8 +700,8 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    wheel = next(artifacts.glob("odibi_anchor-0.3.16-*.whl"))
-    sdist = artifacts / "odibi_anchor-0.3.16.tar.gz"
+    wheel = next(artifacts.glob("odibi_anchor-0.3.17-*.whl"))
+    sdist = artifacts / "odibi_anchor-0.3.17.tar.gz"
     assert sdist.is_file()
 
     with zipfile.ZipFile(wheel) as wheel_archive:
@@ -719,7 +720,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         packaged_init = wheel_archive.read("odibi_anchor/__init__.py").decode("utf-8")
-        assert '"0.3.16"' not in packaged_init
+        assert '"0.3.17"' not in packaged_init
         assert wheel_archive.read(".assistant_instructions.md") == (
             candidate / ".assistant_instructions.md"
         ).read_bytes()
@@ -811,7 +812,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert raw["version"] == "0.3.16"
+    assert raw["version"] == "0.3.17"
     assert Path(raw["module"]).is_relative_to(candidate)
 
     collision = audit_root / "collision"
@@ -840,7 +841,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert collision_result["version"] == "0.3.16"
+    assert collision_result["version"] == "0.3.17"
     assert raw_hashes_before == {
         "pyproject.toml": _sha256(candidate / "pyproject.toml"),
         "__init__.py": _sha256(candidate / "src" / "odibi_anchor" / "__init__.py"),
@@ -931,7 +932,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         loaded_policy = PromotionPolicy.from_path(policy)
         digest = "sha256:" + "a" * 64
         run = QualificationRun(
-            "synthetic-run", "public-t1-localized-fix", "1.0", "a" * 40, "0.3.16",
+            "synthetic-run", "public-t1-localized-fix", "1.0", "a" * 40, "0.3.17",
             digest, "synthetic-family", "1", "producer", "direct-python", "direct",
             "T1", "localized", "source-change", "Anchor-T1-TESTS@1.0",
             "sha256:" + "0" * 63 + "5", "2026-08-20T00:00:00Z",
@@ -1038,7 +1039,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_wheel_probe["runtime_version"] == "0.3.16"
+    assert masked_wheel_probe["runtime_version"] == "0.3.17"
     assert Path(masked_wheel_probe["module"]).is_relative_to(audit_root / "wheel-venv")
     (fake_metadata / "RECORD").write_bytes(b"\xff")
     assert _runtime_version_probe(
@@ -1046,13 +1047,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment,
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
-    ) == "0.3.16"
+    ) == "0.3.17"
     (fake_metadata / "RECORD").unlink()
     wheel_site_packages = Path(wheel_probe["module"]).parent.parent
     colocated_fake_metadata = wheel_site_packages / "odibi_anchor-9.9.9.dist-info"
     shutil.copytree(fake_metadata, colocated_fake_metadata)
     try:
-        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.16"
+        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.17"
         (colocated_fake_metadata / "RECORD").write_text(
             "odibi_anchor/__init__.py,,\n",
             encoding="utf-8",
@@ -1061,7 +1062,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         assert ambiguous_wheel_probe["runtime_version"] == "0+unknown"
     finally:
         shutil.rmtree(colocated_fake_metadata)
-    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.16.dist-info")) / "METADATA"
+    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.17.dist-info")) / "METADATA"
     wheel_metadata_bytes = wheel_metadata_path.read_bytes()
     try:
         wheel_metadata_path.write_bytes(b"\xff")
@@ -1185,7 +1186,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_editable_probe["runtime_version"] == "0.3.16"
+    assert masked_editable_probe["runtime_version"] == "0.3.17"
     assert Path(masked_editable_probe["module"]).is_relative_to(candidate)
     assert Path(editable_probe["module"]).is_relative_to(candidate)
     editable_direct_url = json.loads(editable_probe["direct_url"])
@@ -1196,7 +1197,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     candidate_pyproject = candidate / "pyproject.toml"
     authoritative_pyproject = candidate_pyproject.read_text(encoding="utf-8")
     try:
-        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.16"', 'version = "9.9.9"', 1)
+        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.17"', 'version = "9.9.9"', 1)
         assert conflicting_pyproject != authoritative_pyproject
         candidate_pyproject.write_text(conflicting_pyproject, encoding="utf-8")
         editable_metadata_probe = _runtime_probe(editable_python, environment, cwd=audit_root)
@@ -1231,7 +1232,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert nonlocal_authority_probe["runtime_version"] == "0.3.16"
+        assert nonlocal_authority_probe["runtime_version"] == "0.3.17"
 
         fake_direct_url["url"] = "file://[malformed"
         fake_direct_url_path.write_text(json.dumps(fake_direct_url), encoding="utf-8")
@@ -1241,7 +1242,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert malformed_url_probe["runtime_version"] == "0.3.16"
+        assert malformed_url_probe["runtime_version"] == "0.3.17"
 
         for relative_url in ("file:.", "file://localhost"):
             fake_direct_url["url"] = relative_url
@@ -1251,7 +1252,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
                 environment,
                 cwd=candidate,
                 metadata_prepend=fake_editable_root,
-            ) == "0.3.16"
+            ) == "0.3.17"
 
         fake_direct_url_path.write_bytes(b"\xff")
         assert _runtime_version_probe(
@@ -1259,13 +1260,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment,
             cwd=candidate,
             metadata_prepend=fake_editable_root,
-        ) == "0.3.16"
+        ) == "0.3.17"
     finally:
         candidate_pyproject.write_text(authoritative_pyproject, encoding="utf-8")
 
     extracted = audit_root / "sdist-source"
     shutil.unpack_archive(str(sdist), extracted)
-    sdist_root = extracted / "odibi_anchor-0.3.16"
+    sdist_root = extracted / "odibi_anchor-0.3.17"
     _validate_native_skill_layout(sdist_root / ".assistant")
     sdist_wheelhouse = audit_root / "sdist-wheelhouse"
     _run(
@@ -1273,7 +1274,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.16-*.whl"))
+    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.17-*.whl"))
     with zipfile.ZipFile(sdist_wheel) as sdist_wheel_archive:
         sdist_wheel_names = sdist_wheel_archive.namelist()
         sdist_metadata_name = next(name for name in sdist_wheel_names if name.endswith(".dist-info/METADATA"))
@@ -1577,7 +1578,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
                 item = call("learning", {"arg0":"capture", "observation_type":"friction",
                     "summary":"Installed transports preserve structured learning.",
                     "signal_key":"installed.transport.learning", "impact":"medium",
-                    "applicability_scope":"workbench", "project_refs":["project:A", "project:B"],
+                    "applicability_scope":"workbench", "project_refs":[],
                     "work_package_refs":[], "environment_refs":["wheel"],
                     "provenance":{"source_action":"gate","source_version":"revision-8"},
                     "evidence":[{"reference_type":"test","reference":"tests/test_installed_distribution.py"}]})["item"]
@@ -2077,7 +2078,8 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
     assert first_obligation["status"] == second_obligation["status"] == "assessed"
     assert first_obligation["task_window_id"] == second_obligation["task_window_id"]
     assert len(direct["exported"]["items"]) == 1
-    assert direct["shown"]["item"]["project_refs"] == ["project:A", "project:B"]
+    shown = cast(dict[str, Any], direct["shown"])
+    assert shown["item"]["project_refs"] == []
     assert direct["listed"]["items"] and direct["exported"]["complete"] is True
     assert Path(direct["backup"]["backup_path"]).is_relative_to(direct_home)
     assert len(direct["blocked"]) == 3
@@ -3484,7 +3486,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_results[0]["ok"] is True
         assert dirty_results[1]["ok"] is True
         assert dirty_results[2]["ok"] is False
-        dirty_error = dirty_results[2]["error"]
+        dirty_error = cast(dict[str, Any], dirty_results[2]["error"])
         # The fail-closed class and message are the stable contract; the recovery
         # fields are additive so an agent can tell which recovery applies (#6).
         assert dirty_error["message"] == (
@@ -3496,7 +3498,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_error["context"]["requested_execution_mode"] == "source_change"
         assert [
             operation["action"] for operation in dirty_error["next_operations"]
-        ] == ["task_rebind", "task", "review"]
+        ] == ["task_rebind", "task"]
         assert _git_snapshot(dirty) == dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3865,7 +3867,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert [
             operation["action"]
             for operation in mcp_dirty_envelope_error["next_operations"]
-        ] == ["task_rebind", "task", "review"]
+        ] == ["task_rebind", "task"]
         assert _git_snapshot(dirty) == mcp_dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3920,7 +3922,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert mcp_dirty_error["context"]["requested_execution_mode"] == "source_change"
         assert [
             operation["action"] for operation in mcp_dirty_error["next_operations"]
-        ] == ["task_rebind", "task", "review"]
+        ] == ["task_rebind", "task"]
         assert mcp_dirty_restart["fresh_readiness"] is None
         assert _unborn_git_snapshot(mcp_unborn) == dirty_restart_before
         restart_source.unlink()

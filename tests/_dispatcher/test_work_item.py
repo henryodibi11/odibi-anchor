@@ -2,6 +2,7 @@ import errno
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,8 +12,10 @@ from odibi_anchor._dispatcher._work_item import work_item_action
 from odibi_anchor._utils._session_state import SessionState
 
 
-def call(root, *args, **kwargs):
-    return work_item_action(root, *args, output_format="dict", **kwargs)
+def call(root, *args, **kwargs) -> dict[str, Any]:
+    result = work_item_action(root, *args, output_format="dict", **kwargs)
+    assert isinstance(result, dict)
+    return result
 
 
 @pytest.mark.parametrize("unsupported_errno", [errno.ENOSYS, errno.EPERM])
@@ -112,6 +115,19 @@ def test_local_lifecycle_round_trip_and_markdown(tmp_path):
     rendered = work_item_action(tmp_path, "show", created["work_item_id"])
     assert "Ship outcome" in rendered
     assert "Implementation disposition:** unknown" in rendered
+
+
+def test_list_keeps_valid_work_items_when_one_record_is_malformed(tmp_path):
+    valid = call(tmp_path, "create", title="Valid", outcome="Delivered")
+    malformed = tmp_path / "work_items" / "WI-2026-9999.md"
+    malformed.write_text("---\nwork_item_id: WI-2026-9999\n---\n# Broken\n", encoding="utf-8")
+
+    result = call(tmp_path, "list")
+
+    assert [item["work_item_id"] for item in result["work_items"]] == [valid["work_item_id"]]
+    assert result["malformed_count"] == 1
+    assert result["malformed_records"][0]["path"].endswith("WI-2026-9999.md")
+    assert result["suggested_next_actions"]
 
 
 def test_material_fingerprint_and_close(tmp_path):

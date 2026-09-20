@@ -517,13 +517,6 @@ def _dirty_worktree_block(
                     "use an artifact-only mode instead of claiming source-change authority"
                 ),
             ),
-            dispatcher_operation(
-                "review",
-                reason=(
-                    "if the changes belong to a completed task, inspect them and finish "
-                    "that task's authorized delivery before starting another source-change task"
-                ),
-            ),
         ],
     )
 

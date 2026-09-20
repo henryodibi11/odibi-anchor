@@ -13,6 +13,8 @@ Three concerns:
     decisions have no reader at all, so neither can fail the way problems did.
     They are reported, never enforced, so no file that works today starts failing.
 """
+from typing import Any
+
 import pytest
 
 from odibi_anchor._dispatcher._managed_record_schema import (
@@ -116,7 +118,8 @@ def test_malformed_problem_raises_valueerror_not_keyerror(malformed_problem):
 def test_read_error_names_every_missing_field(malformed_problem):
     with pytest.raises(ValueError) as excinfo:
         _parse(malformed_problem)
-    missing = excinfo.value.context["missing_fields"]
+    error: Any = excinfo.value
+    missing = error.context["missing_fields"]
     assert "problem_id" in missing, "the reported case renamed problem_id to id"
     for field in ("stage", "rigor_level", "revision", "created_at", "updated_at", "next_action"):
         assert field in missing
@@ -125,9 +128,10 @@ def test_read_error_names_every_missing_field(malformed_problem):
 def test_read_error_carries_a_copy_ready_repair_call(malformed_problem):
     with pytest.raises(ValueError) as excinfo:
         _parse(malformed_problem)
-    assert excinfo.value.error_code == "managed_record_schema_violation"
-    assert 'anchor("problem", "create"' in excinfo.value.context["repair"]
-    assert excinfo.value.context["path"].endswith("PRB-2026-0001.md")
+    error: Any = excinfo.value
+    assert error.error_code == "managed_record_schema_violation"
+    assert 'anchor("problem", "create"' in error.context["repair"]
+    assert error.context["path"].endswith("PRB-2026-0001.md")
 
 
 def test_canonical_record_still_parses(canonical_problem):
@@ -199,10 +203,12 @@ def mixed_problems(artifact_root, canonical_problem, malformed_problem):
 def _list_problems(artifact_root):
     from odibi_anchor._dispatcher._problem import problem_action
 
-    return problem_action(
+    result = problem_action(
         artifact_root=str(artifact_root), project_id="proj",
         args=("list",), output_format="dict",
     )
+    assert isinstance(result, dict)
+    return result
 
 
 def test_one_malformed_record_does_not_hide_the_valid_ones(mixed_problems):
@@ -232,6 +238,40 @@ def test_listing_a_clean_directory_reports_no_malformed_records(artifact_root, c
     assert result["malformed_count"] == 0
     assert result["malformed_records"] == []
     assert result["count"] == 1
+
+
+def test_snapshot_markdown_surfaces_managed_record_violations(artifact_root, malformed_problem, monkeypatch):
+    from odibi_anchor._utils import _session_state
+    from odibi_anchor.codebase.session_snapshot_context import session_snapshot_context
+
+    monkeypatch.setattr(
+        _session_state,
+        "get_state",
+        lambda: {"artifact_root": str(artifact_root)},
+    )
+    rendered = session_snapshot_context(
+        artifact_root, subject="managed-record-test", output_format="markdown",
+    )
+    assert "Managed-record validation" in rendered
+    assert "PRB-2026-0001.md" in rendered
+    assert "missing canonical problem frontmatter" in rendered
+
+
+def test_snapshot_reports_validation_unavailable(monkeypatch, tmp_path):
+    from odibi_anchor._dispatcher import _managed_record_schema
+    from odibi_anchor._utils import _session_state
+    from odibi_anchor.codebase.session_snapshot_context import session_snapshot_context
+
+    monkeypatch.setattr(_session_state, "get_state", lambda: {"artifact_root": str(tmp_path)})
+    monkeypatch.setattr(
+        _managed_record_schema,
+        "scan_managed_records",
+        lambda _root: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    result = session_snapshot_context(tmp_path, output_format="dict")
+    assert isinstance(result, dict)
+    assert result["managed_record_validation"]["status"] == "unavailable"
+    assert "PermissionError" in result["managed_record_validation"]["reason"]
 
 
 # ── advisory tier: reported at snapshot, never enforced at read ──────────────

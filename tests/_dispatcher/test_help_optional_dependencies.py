@@ -62,6 +62,7 @@ def test_optional_dependency_carriers_are_actually_optional():
     """
     module = importlib.import_module("odibi_anchor.validation.duplicate_key_context")
 
+    assert module.__file__ is not None
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "import numpy" in source
 

@@ -110,7 +110,7 @@ def capture_payload(reference: str = "src/pkg/file.py#L10-L20", **updates: objec
         "signal_key": "qualification.installed-wheel-drift",
         "impact": "medium",
         "applicability_scope": "workbench",
-        "project_refs": ["project:test"],
+        "project_refs": [],
         "work_package_refs": ["work:one"],
         "environment_refs": ["env:test"],
         "provenance": {"source_action": "gate", "source_version": "v1"},
@@ -1210,6 +1210,11 @@ def test_dotted_hostname_signal_is_rejected(ledger: Path) -> None:
     obligation = activate()
     with pytest.raises(ValueError, match="invalid signal_key"):
         capture(obligation, signal_key="prod.example.com")
+
+
+def test_workbench_scope_rejects_project_refs(ledger: Path) -> None:
+    with pytest.raises(ValueError, match=r"workbench.*accepts no"):
+        capture(activate(), project_refs=["project:test"])
 
 
 def test_schema_drift_and_checksum_drift_fail_closed(ledger: Path) -> None:

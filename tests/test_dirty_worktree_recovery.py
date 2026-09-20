@@ -97,11 +97,9 @@ def test_context_is_bounded_and_carries_no_path_contents(dirty_error):
 # ── recovery routes ──────────────────────────────────────────────────────────
 
 
-def test_offers_the_three_distinct_recovery_routes(dirty_error):
+def test_offers_only_executable_recovery_routes(dirty_error):
     actions = [operation["action"] for operation in dirty_error.next_operations]
-    assert "task_rebind" in actions, "interrupted implementation"
-    assert "task" in actions, "artifact-only intent"
-    assert "review" in actions, "changes owned by a completed task"
+    assert actions == ["task_rebind", "task"]
 
 
 def test_artifact_only_route_does_not_claim_source_change_authority(dirty_error):

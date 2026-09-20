@@ -93,7 +93,9 @@ def run_pytest(
             )
         except subprocess.TimeoutExpired as exc:
             summary = _empty_summary(-1, time.monotonic() - started, timed_out=True)
-            proc = subprocess.CompletedProcess(cmd, -1, exc.stdout or "", exc.stderr or "")
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
+            proc = subprocess.CompletedProcess(cmd, -1, stdout, stderr)
             return summary, proc
 
         try:

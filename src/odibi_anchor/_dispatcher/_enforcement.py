@@ -557,15 +557,15 @@ def _read_only_legacy_modes() -> frozenset[str]:
 
 
 def should_block_mode_mismatch(
-    timings: list[dict], files_changed: set[str],
+    timings: list[dict], files_changed: set[str], *,
+    artifact_root: str | None = None, target_root: str | None = None,
 ) -> tuple[bool, str]:
-    """Reject file delivery from the latest read-only task mode.
+    """Reject file delivery incompatible with the latest task mode.
 
-    Only `read_only` execution modes are rejected. An `artifact_only` mode may
-    deliver managed records; it still cannot touch source, because
-    `task_profile_effect_compatible` refuses the `source_write` effect unless the
-    execution mode is `source_change`. That rule is the source-edit boundary, not
-    this check.
+    Invocation-effect checks prevent an artifact-only task from calling a known
+    source writer. This gate check separately covers out-of-band filesystem drift:
+    an artifact-only task may deliver managed artifacts, but must never absorb
+    arbitrary target-root files as if they were artifacts.
     """
     if not files_changed:
         return False, ""
@@ -577,6 +577,27 @@ def should_block_mode_mismatch(
         None,
     )
     planned_mode = last_task.get("task_mode", "planning") if last_task else None
+    from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
+
+    defaults = _LEGACY_DEFAULTS.get(planned_mode) if planned_mode else None
+    execution_mode = defaults[1] if defaults else None
+    if execution_mode == "artifact_only" and planned_mode != "documentation":
+        from odibi_anchor._utils._session_state import is_managed_artifact_path
+
+        invalid = sorted(
+            path for path in files_changed
+            if not is_managed_artifact_path(
+                path, artifact_root=artifact_root, target_root=target_root,
+            )
+        )
+        if invalid:
+            return True, (
+                f"Mode mismatch — planned as '{planned_mode}' but target-root files were modified.\n"
+                f"Non-artifact files: {invalid[:5]}\n"
+                "Artifact-only tasks may write only managed artifact paths. Use an authorized "
+                "source-change task for repository files."
+            )
+        return False, ""
     if planned_mode not in _read_only_legacy_modes():
         return False, ""
     return True, (
