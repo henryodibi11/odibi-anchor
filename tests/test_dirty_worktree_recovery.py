@@ -85,6 +85,7 @@ def test_context_counts_dirty_paths_by_category(dirty_error):
 def test_context_reports_the_requested_execution_intent(dirty_error):
     assert dirty_error.context["requested_execution_mode"] == "source_change"
     assert dirty_error.context["branch"] == "main"
+    assert dirty_error.context["ownership_state"] == "unavailable"
 
 
 def test_context_is_bounded_and_carries_no_path_contents(dirty_error):
@@ -99,7 +100,91 @@ def test_context_is_bounded_and_carries_no_path_contents(dirty_error):
 
 def test_offers_only_executable_recovery_routes(dirty_error):
     actions = [operation["action"] for operation in dirty_error.next_operations]
-    assert actions == ["task_rebind", "task"]
+    assert actions == ["task"]
+
+
+def test_interrupted_task_recovery_offers_exact_rebind_before_artifact_route(dirty_repo):
+    with pytest.raises(RuntimeError) as excinfo:
+        capture_task_repository_baseline(
+            dirty_repo,
+            "main",
+            task_authority_context={
+                "ownership_state": "interrupted_source_task",
+                "matching_open_source_task_count": 1,
+                "matching_open_source_task_ids": ["ltw-owned"],
+                "matching_terminal_source_task_count": 0,
+                "matching_terminal_source_task_ids": [],
+            },
+        )
+
+    error = excinfo.value
+    assert error.context["ownership_state"] == "interrupted_source_task"
+    assert error.next_operations[0]["action"] == "task_rebind"
+    assert error.next_operations[0]["kwargs"] == {"task_window_id": "ltw-owned"}
+
+
+def test_completed_task_recovery_does_not_offer_invalid_rebind(dirty_repo):
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=dirty_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    with pytest.raises(RuntimeError) as excinfo:
+        capture_task_repository_baseline(
+            dirty_repo,
+            "main",
+            task_authority_context={
+                "ownership_state": "terminal_source_task_candidates",
+                "matching_open_source_task_count": 0,
+                "matching_open_source_task_ids": [],
+                "matching_terminal_source_task_count": 1,
+                "matching_terminal_source_task_ids": ["ltw-completed"],
+                "_terminal_source_candidates": [{
+                    "task_window_id": "ltw-completed",
+                    "branch": "main",
+                    "changed_paths": ("staged.txt", "tracked.txt", "untracked.txt"),
+                    "end_revision": head,
+                }],
+            },
+        )
+
+    error = excinfo.value
+    assert error.context["ownership_state"] == "completed_task_delivery"
+    assert error.context["source_change_recovery"] == (
+        "The matching source task is terminal. Resolve or complete delivery under that "
+        "task's retained authority; do not create a new task that absorbs its changes."
+    )
+    assert [item["action"] for item in error.next_operations] == ["task"]
+
+
+def test_historical_terminal_task_without_exact_diff_match_is_not_claimed(dirty_repo):
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=dirty_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    with pytest.raises(RuntimeError) as excinfo:
+        capture_task_repository_baseline(
+            dirty_repo,
+            "main",
+            task_authority_context={
+                "ownership_state": "terminal_source_task_candidates",
+                "matching_open_source_task_count": 0,
+                "matching_open_source_task_ids": [],
+                "matching_terminal_source_task_count": 1,
+                "matching_terminal_source_task_ids": ["ltw-historical"],
+                "_terminal_source_candidates": [{
+                    "task_window_id": "ltw-historical",
+                    "branch": "main",
+                    "changed_paths": ("different.py",),
+                    "end_revision": head,
+                }],
+            },
+        )
+
+    error = excinfo.value
+    assert error.context["ownership_state"] == "unowned_or_ambiguous"
+    assert error.context["matching_terminal_source_task_count"] == 0
+    assert "_terminal_source_candidates" not in error.context
+    assert [item["action"] for item in error.next_operations] == ["task"]
 
 
 def test_artifact_only_route_does_not_claim_source_change_authority(dirty_error):

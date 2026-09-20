@@ -54,6 +54,37 @@ def _canonical_path(value: str | os.PathLike[str] | None) -> str | None:
     return os.path.normcase(str(Path(value).expanduser().resolve()))
 
 
+def _owner_identity(session_state: Any, *, trust_domain: str | None = None) -> dict[str, Any]:
+    return {
+        "project_id": session_state.active_project,
+        "anchor_home": _canonical_path(session_state.anchor_home),
+        "project_root": _canonical_path(session_state.project_root),
+        "artifact_root": _canonical_path(session_state.artifact_root),
+        "target_root": _canonical_path(session_state.target_root or session_state.artifact_root),
+        "repository_provider_id": getattr(session_state.repository_provider, "provider_id", None),
+        "trust_domain": (
+            trust_domain if trust_domain is not None else getattr(session_state, "trust_domain", None)
+        ),
+    }
+
+
+def _matches_owner(record: dict[str, Any], owner: dict[str, Any]) -> bool:
+    return all(record["identity"].get(key) == value for key, value in owner.items())
+
+
+def _terminal_records(path: str | Path) -> list[dict[str, Any]]:
+    from odibi_anchor.codebase._task_execution import inspect_terminal_records
+
+    return inspect_terminal_records(path)["records"]
+
+
+def _terminal_task_ids(path: str | Path) -> set[str]:
+    return {
+        str(item["task_window_id"])
+        for item in _terminal_records(path)
+    }
+
+
 def _connect(path: str | Path, *, read_only: bool = False) -> sqlite3.Connection:
     from odibi_anchor.codebase._sqlite_contention import connect_shared_memory
 
@@ -598,6 +629,10 @@ def rebind_latest_open_task(
     target = Path(path).expanduser()
     if not target.is_file():
         raise TaskAuthorityUnavailable("accepted task authority is unavailable")
+    try:
+        terminal_task_ids = _terminal_task_ids(target)
+    except (KeyError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+        raise TaskAuthorityUnavailable("terminal task authority storage is inconsistent") from exc
     connection = _connect(target, read_only=True)
     try:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -610,25 +645,21 @@ def rebind_latest_open_task(
             "SELECT r.* FROM accepted_task_records r WHERE r.project_id IS ? AND r.target_root=? AND NOT EXISTS (SELECT 1 FROM accepted_task_events e WHERE e.task_window_id=r.task_window_id AND e.event_type='closed') ORDER BY r.accepted_at,r.task_window_id",
             (project, target_root),
         ).fetchall()
-        records = [_load_verified_record(row) for row in rows]
+        records = [
+            record for row in rows
+            if (record := _load_verified_record(row))["identity"]["task_window_id"]
+            not in terminal_task_ids
+        ]
     except TaskAuthorityUnavailable:
         raise
     except (KeyError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
         raise TaskAuthorityUnavailable("accepted task authority storage is inconsistent") from exc
     finally:
         connection.close()
-    current_identity = {
-        "project_id": session_state.active_project,
-        "anchor_home": _canonical_path(session_state.anchor_home),
-        "project_root": _canonical_path(session_state.project_root),
-        "artifact_root": _canonical_path(session_state.artifact_root),
-        "target_root": _canonical_path(session_state.target_root or session_state.artifact_root),
-        "repository_provider_id": getattr(session_state.repository_provider, "provider_id", None),
-        "trust_domain": getattr(session_state, "trust_domain", None),
-    }
+    current_identity = _owner_identity(session_state)
     matches = [
         candidate for candidate in records
-        if all(candidate["identity"].get(key) == current for key, current in current_identity.items())
+        if _matches_owner(candidate, current_identity)
     ]
     if task_window_id is not None and not isinstance(task_window_id, str):
         raise TaskAuthorityUnavailable(
@@ -657,26 +688,55 @@ def rebind_latest_open_task(
         )
     if len(matches) > 1:
         bounded = sorted(matches, key=lambda item: item["identity"]["task_window_id"])[:10]
+        open_tasks = [
+            {
+                "task_window_id": item["identity"]["task_window_id"],
+                "accepted_at": item.get("accepted_at", "unknown"),
+                "session": item["identity"].get("session_name")
+                or item["identity"].get("session_id", "unknown"),
+                "execution_mode": item["task"].get("profile", {}).get(
+                    "execution_mode", "unknown"
+                ),
+                "goal": str(item["task"].get("goal") or "unspecified")[:120],
+                "open_reason": "no terminal record or closure event",
+            }
+            for item in bounded
+        ]
         context = "; ".join(
             "id={id}, accepted_at={accepted}, session={session}, mode={mode}, goal={goal}".format(
-                id=item["identity"]["task_window_id"],
-                accepted=item.get("accepted_at", "unknown"),
-                session=item["identity"].get("session_name")
-                or item["identity"].get("session_id", "unknown"),
-                mode=item["task"].get("profile", {}).get("execution_mode", "unknown"),
-                goal=str(item["task"].get("goal") or "unspecified")[:120],
+                id=item["task_window_id"], accepted=item["accepted_at"],
+                session=item["session"], mode=item["execution_mode"], goal=item["goal"],
             )
-            for item in bounded
+            for item in open_tasks
         )
-        raise TaskAuthorityUnavailable(
+        omitted = len(matches) - len(bounded)
+        suffix = f" ({omitted} additional open tasks omitted.)" if omitted else ""
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        raise attach_recovery(TaskAuthorityUnavailable(
             "multiple open accepted tasks match the exact owner; select one with "
             "anchor('task_rebind', task_window_id='<exact-id>'). Open tasks: " + context + ". "
             "To close an abandoned task, rebind it, dispose pending memories in one "
             "all_pending=True call when all are irrelevant, then run review, gate, and "
             "learning assess; if delivery is blocked, assess learning and use learning "
             "safe_stop. task_adoption is only for authenticated takeover of dirty work, "
-            "not orphan recovery."
-        )
+            "not orphan recovery." + suffix
+        ), error_code="multiple_open_task_windows", context={
+            "matching_open_task_count": len(matches),
+            "displayed_open_task_count": len(bounded),
+            "omitted_open_task_count": omitted,
+            "open_tasks": open_tasks,
+            "terminal_invariant": (
+                "A task is open only when it has neither a terminal task record nor a "
+                "closed accepted-task event."
+            ),
+        }, next_operations=[
+            dispatcher_operation(
+                "task_rebind", kwargs={"task_window_id": item["task_window_id"]},
+                reason="rebind this exact verified open task window",
+            )
+            for item in open_tasks
+        ])
     record = matches[0]
     identity = record["identity"]
     prior_state = vars(session_state).copy()
@@ -702,6 +762,96 @@ def rebind_latest_open_task(
     }
     result["diagnostics"] = inspect_task_authority(path)
     return result
+
+
+def task_recovery_context(
+    path: str | Path, *, session_state: Any, trust_domain: str | None = None,
+) -> dict[str, Any]:
+    """Classify source-task ownership for a blocked dirty-worktree acceptance."""
+    target = Path(path).expanduser()
+    unavailable = {
+        "ownership_state": "unavailable",
+        "matching_open_source_task_count": 0,
+        "matching_open_source_task_ids": [],
+        "matching_terminal_source_task_count": 0,
+        "matching_terminal_source_task_ids": [],
+    }
+    if not target.is_file():
+        return {**unavailable, "reason": "accepted task authority is unavailable"}
+    try:
+        terminal_records = _terminal_records(target)
+        terminal_ids = {str(item["task_window_id"]) for item in terminal_records}
+        connection = _connect(target, read_only=True)
+        try:
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "accepted_task_records" not in tables:
+                return {**unavailable, "reason": "accepted task authority is unavailable"}
+            _verify_schema(connection)
+            rows = connection.execute(
+                "SELECT r.* FROM accepted_task_records r WHERE r.project_id IS ? "
+                "AND r.target_root=? ORDER BY r.accepted_at,r.task_window_id",
+                (
+                    session_state.active_project,
+                    _canonical_path(session_state.target_root or session_state.artifact_root),
+                ),
+            ).fetchall()
+            closed_ids = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT task_window_id FROM accepted_task_events WHERE event_type='closed'"
+                ).fetchall()
+            }
+            records = [_load_verified_record(row) for row in rows]
+        finally:
+            connection.close()
+    except (KeyError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+        return {**unavailable, "reason": f"task authority inspection failed: {type(exc).__name__}"}
+
+    owner = _owner_identity(session_state, trust_domain=trust_domain)
+    source_records = [
+        record for record in records
+        if _matches_owner(record, owner)
+        and record["task"].get("profile", {}).get("execution_mode") == "source_change"
+    ]
+    open_ids = sorted(
+        record["identity"]["task_window_id"] for record in source_records
+        if record["identity"]["task_window_id"] not in closed_ids
+        and record["identity"]["task_window_id"] not in terminal_ids
+    )
+    terminal_source_ids = sorted(
+        record["identity"]["task_window_id"] for record in source_records
+        if record["identity"]["task_window_id"] in terminal_ids
+    )
+    if len(open_ids) == 1:
+        ownership_state = "interrupted_source_task"
+    elif len(open_ids) > 1:
+        ownership_state = "ambiguous_open_source_tasks"
+    elif terminal_source_ids:
+        ownership_state = "terminal_source_task_candidates"
+    else:
+        ownership_state = "unowned_or_ambiguous"
+    return {
+        "ownership_state": ownership_state,
+        "matching_open_source_task_count": len(open_ids),
+        "matching_open_source_task_ids": open_ids[:10],
+        "omitted_open_source_task_count": max(0, len(open_ids) - 10),
+        "matching_terminal_source_task_count": len(terminal_source_ids),
+        "matching_terminal_source_task_ids": terminal_source_ids[:10],
+        "omitted_terminal_source_task_count": max(0, len(terminal_source_ids) - 10),
+        "_terminal_source_candidates": [
+            {
+                "task_window_id": item["task_window_id"],
+                "branch": item["record"]["repository"].get("branch"),
+                "changed_paths": tuple(item["record"]["repository"].get("changed_paths", ())),
+                "end_revision": item["record"]["repository"].get("end_revision"),
+            }
+            for item in terminal_records
+            if item["task_window_id"] in terminal_source_ids
+        ],
+    }
 
 
 def inspect_task_authority(path: str | Path) -> dict[str, Any]:
@@ -743,10 +893,17 @@ def inspect_task_authority(path: str | Path) -> dict[str, Any]:
                 or row["event_id"] != deterministic_id
             ):
                 raise TaskAuthorityUnavailable("accepted task event integrity mismatch")
+        terminal_ids = _terminal_task_ids(target)
+        closed_ids = {
+            str(row["task_window_id"]) for row in events if row["event_type"] == "closed"
+        }
+        accepted_ids = {str(row["task_window_id"]) for row in rows}
         return {
             "schema_status": "ready", "durable_windows": len(rows),
             "rebindings": sum(row["event_type"] == "rebound" for row in events),
             "closures": sum(row["event_type"] == "closed" for row in events),
+            "open_windows": len(accepted_ids - closed_ids - terminal_ids),
+            "terminal_without_closure": len((accepted_ids & terminal_ids) - closed_ids),
         }
     finally:
         connection.close()

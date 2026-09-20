@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
-def _serializable_baseline(target_worktree, configured_target_ref="main"):
+def _serializable_baseline(target_worktree, configured_target_ref="main", **_kwargs):
     from odibi_anchor._repository_snapshot import UnbornTaskRepositoryBaseline
 
     return UnbornTaskRepositoryBaseline(

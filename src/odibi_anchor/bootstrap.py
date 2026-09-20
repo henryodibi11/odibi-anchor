@@ -1866,6 +1866,7 @@ def init(
                     task_stage=_TASK_STAGE_holder[0] if action == "task" else None,
                     invocation_resolution=_invocation_resolution,
                     pre_task_decision=_pre_task_decision,
+                    memory_db=_DEFAULT_DB_PATH,
                 )
                 if action == "task" and _err is None and isinstance(_final, dict):
                     from odibi_anchor.codebase._task_authority import persist_accepted_task

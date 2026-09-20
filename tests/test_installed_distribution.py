@@ -3496,9 +3496,10 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_error["error_code"] == "source_change_requires_clean_worktree"
         assert dirty_error["context"]["dirty_path_count"] >= 1
         assert dirty_error["context"]["requested_execution_mode"] == "source_change"
+        assert dirty_error["context"]["ownership_state"] == "unowned_or_ambiguous"
         assert [
             operation["action"] for operation in dirty_error["next_operations"]
-        ] == ["task_rebind", "task"]
+        ] == ["task"]
         assert _git_snapshot(dirty) == dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3864,10 +3865,14 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             == "source_change_requires_clean_worktree"
         )
         assert mcp_dirty_envelope_error["context"]["dirty_path_count"] >= 1
+        assert (
+            mcp_dirty_envelope_error["context"]["ownership_state"]
+            == "unowned_or_ambiguous"
+        )
         assert [
             operation["action"]
             for operation in mcp_dirty_envelope_error["next_operations"]
-        ] == ["task_rebind", "task"]
+        ] == ["task"]
         assert _git_snapshot(dirty) == mcp_dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3920,9 +3925,14 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert mcp_dirty_error["type"] == "RuntimeError"
         assert mcp_dirty_error["error_code"] == "source_change_requires_clean_worktree"
         assert mcp_dirty_error["context"]["requested_execution_mode"] == "source_change"
+        assert mcp_dirty_error["context"]["ownership_state"] == "interrupted_source_task"
         assert [
             operation["action"] for operation in mcp_dirty_error["next_operations"]
         ] == ["task_rebind", "task"]
+        prior_window = mcp_unborn_result["v2_envelope"]["result"]["task_window_id"]
+        assert mcp_dirty_error["next_operations"][0]["kwargs"] == {
+            "task_window_id": prior_window,
+        }
         assert mcp_dirty_restart["fresh_readiness"] is None
         assert _unborn_git_snapshot(mcp_unborn) == dirty_restart_before
         restart_source.unlink()

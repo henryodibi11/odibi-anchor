@@ -42,6 +42,39 @@ def test_init_explicitly_rebinds_open_task_without_task_dispatch(tmp_path, monke
     assert _SESSION_STATE.task_goal == "Prove explicit rebinding restores the accepted task."
 
 
+def test_completed_artifact_task_is_closed_across_fresh_initialization(tmp_path, monkeypatch):
+    anchor_home = tmp_path.parent / f"{tmp_path.name}-anchor-home"
+    memory_db = anchor_home / ".agent_memory.db"
+    monkeypatch.setenv("ANCHOR_HOME", str(anchor_home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(memory_db))
+    from odibi_anchor.bootstrap import init
+
+    anchor, _, _ = init(root=tmp_path, output_format="dict")
+    anchor("orient", output_format="dict")
+    accepted = anchor(
+        "task", "Complete one artifact-only lifecycle.",
+        goal="Prove terminal artifact work does not remain rebindable after restart.",
+        mode="documentation", work_type="change", execution_mode="artifact_only",
+        risk="low", rigor="direct", continuation=True,
+        acceptance_criteria=["Fresh initialization cannot rebind the completed window."],
+        output_format="dict",
+    )
+    window = accepted["accepted_task_authority"]["task_window_id"]
+    anchor("skill_loaded", "documentation", output_format="dict")
+    anchor("review", output_format="dict")
+    anchor("gate", output_format="dict")
+    assessed = anchor(
+        "learning", "assess", outcome="nothing_reusable_learned",
+        notes="Lifecycle closure behavior is covered by this regression test.",
+        output_format="dict",
+    )
+
+    assert assessed["accepted_task_closure"]["task_window_id"] == window
+    restarted, _, _ = init(root=tmp_path, output_format="dict")
+    with pytest.raises(RuntimeError, match="no open accepted task"):
+        restarted("task_rebind", task_window_id=window, output_format="dict")
+
+
 def test_source_task_rebind_preserves_baseline_after_worktree_becomes_dirty(tmp_path, monkeypatch):
     def git(*args):
         return subprocess.run(
@@ -111,7 +144,7 @@ def test_ordinary_source_task_still_refuses_a_dirty_initial_worktree(tmp_path, m
     anchor, _, _ = init(root=tmp_path, output_format="dict")
     anchor("orient", output_format="dict")
 
-    with pytest.raises(RuntimeError, match="clean initial Git worktree"):
+    with pytest.raises(RuntimeError, match="clean initial Git worktree") as excinfo:
         anchor(
             "task", "Do not absorb pre-existing source changes.",
             goal="Keep ordinary task acceptance fail-closed.",
@@ -120,6 +153,58 @@ def test_ordinary_source_task_still_refuses_a_dirty_initial_worktree(tmp_path, m
             acceptance_criteria=["Dirty initial worktrees remain blocked."],
             output_format="dict",
         )
+    assert excinfo.value.context["ownership_state"] == "unowned_or_ambiguous"
+    assert excinfo.value.context["matching_open_source_task_count"] == 0
+
+
+def test_dirty_task_failure_identifies_exact_interrupted_source_task(tmp_path, monkeypatch):
+    def git(*args):
+        subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True,
+            text=True, encoding="utf-8",
+        )
+
+    git("init", "-b", "main")
+    git("config", "user.email", "tests@example.invalid")
+    git("config", "user.name", "Tests")
+    git("config", "commit.gpgsign", "false")
+    source = tmp_path / "source.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "base")
+    anchor_home = tmp_path.parent / f"{tmp_path.name}-anchor-home"
+    monkeypatch.setenv("ANCHOR_HOME", str(anchor_home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(anchor_home / ".agent_memory.db"))
+    from odibi_anchor.bootstrap import init
+
+    anchor, _, _ = init(root=tmp_path, output_format="dict")
+    anchor("orient", output_format="dict")
+    accepted = anchor(
+        "task", "Own one source change across restart.",
+        goal="Make dirty recovery identify this exact interrupted task.",
+        mode="implementation", risk="low", rigor="direct", continuation=True,
+        acceptance_criteria=["The exact task window is offered for rebind."],
+        output_format="dict",
+    )
+    window = accepted["accepted_task_authority"]["task_window_id"]
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+
+    restarted, _, _ = init(root=tmp_path, output_format="dict")
+    restarted("orient", output_format="dict")
+    with pytest.raises(RuntimeError, match="clean initial Git worktree") as excinfo:
+        restarted(
+            "task", "Start unrelated source work.",
+            goal="Do not absorb the interrupted task's change.",
+            mode="implementation", risk="low", rigor="direct", continuation=True,
+            acceptance_criteria=["Recovery points to the existing owner."],
+            output_format="dict",
+        )
+
+    assert excinfo.value.context["ownership_state"] == "interrupted_source_task"
+    assert excinfo.value.context["matching_open_source_task_ids"] == [window]
+    assert excinfo.value.next_operations[0]["copy_ready"] == (
+        f"anchor('task_rebind', task_window_id='{window}')"
+    )
 
 
 def test_init_rebind_reports_unavailable_instead_of_reconstructing(tmp_path, monkeypatch):

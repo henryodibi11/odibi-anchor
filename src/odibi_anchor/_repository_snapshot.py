@@ -470,6 +470,8 @@ def _dirty_worktree_block(
     staged: Sequence[str],
     unstaged: Sequence[str],
     untracked: Sequence[str],
+    task_authority_context: Mapping[str, Any] | None = None,
+    current_head: str | None = None,
 ) -> RuntimeError:
     """Build the fail-closed dirty-worktree error with bounded recovery routes.
 
@@ -484,6 +486,68 @@ def _dirty_worktree_block(
     """
     from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
+    authority = dict(task_authority_context or {})
+    terminal_candidates = authority.pop("_terminal_source_candidates", [])
+    authority.setdefault("ownership_state", "unavailable")
+    authority.setdefault("matching_open_source_task_count", 0)
+    authority.setdefault("matching_open_source_task_ids", [])
+    authority.setdefault("matching_terminal_source_task_count", 0)
+    authority.setdefault("matching_terminal_source_task_ids", [])
+    state = authority["ownership_state"]
+    if state == "terminal_source_task_candidates":
+        dirty_paths = tuple(sorted(set(staged) | set(unstaged) | set(untracked)))
+        exact_terminal_owners = [
+            item for item in terminal_candidates
+            if item.get("branch") == branch
+            and item.get("end_revision") == current_head
+            and tuple(sorted(item.get("changed_paths", ()))) == dirty_paths
+        ]
+        if len(exact_terminal_owners) == 1:
+            authority["ownership_state"] = state = "completed_task_delivery"
+            authority["matching_terminal_source_task_count"] = 1
+            authority["matching_terminal_source_task_ids"] = [
+                exact_terminal_owners[0]["task_window_id"]
+            ]
+        else:
+            authority["ownership_state"] = state = "unowned_or_ambiguous"
+            authority["matching_terminal_source_task_count"] = 0
+            authority["matching_terminal_source_task_ids"] = []
+    if state == "completed_task_delivery":
+        source_change_recovery = (
+            "The matching source task is terminal. Resolve or complete delivery under that "
+            "task's retained authority; do not create a new task that absorbs its changes."
+        )
+    elif state in {"interrupted_source_task", "ambiguous_open_source_tasks"}:
+        source_change_recovery = (
+            "Rebind the exact verified open source task that owns these changes."
+        )
+    else:
+        source_change_recovery = (
+            "No verified task owner was found. Stop and resolve ownership without altering "
+            "or absorbing the existing changes."
+        )
+    next_operations = []
+    open_ids = list(authority["matching_open_source_task_ids"])
+    if len(open_ids) == 1 and authority["matching_open_source_task_count"] == 1:
+        next_operations.append(dispatcher_operation(
+            "task_rebind", kwargs={"task_window_id": open_ids[0]},
+            reason="rebind the exact open source task that owns the dirty worktree",
+        ))
+    elif authority["matching_open_source_task_count"] > 1:
+        next_operations.append(dispatcher_operation(
+            "task_rebind",
+            reason="list the bounded matching open source tasks, then rebind the exact owner",
+        ))
+    next_operations.append(
+        dispatcher_operation(
+            "task",
+            kwargs={"mode": "planning"},
+            reason=(
+                "if the intended work writes only managed artifacts and no source, "
+                "use an artifact-only mode instead of claiming source-change authority"
+            ),
+        )
+    )
     return attach_recovery(
         RuntimeError(_DIRTY_WORKTREE_MESSAGE),
         error_code="source_change_requires_clean_worktree",
@@ -495,34 +559,21 @@ def _dirty_worktree_block(
             "unstaged_path_count": len(unstaged),
             "untracked_path_count": len(untracked),
             "requested_execution_mode": "source_change",
+            **authority,
+            "source_change_recovery": source_change_recovery,
             "resolution_authority": (
                 "The existing changes are not this task's to resolve. Identify their "
                 "owner before any further action; never stash, discard, commit or "
                 "absorb them to clear the baseline."
             ),
         },
-        next_operations=[
-            dispatcher_operation(
-                "task_rebind",
-                reason=(
-                    "if these changes belong to an interrupted source-change task, list "
-                    "the matching open task windows and rebind the exact one that owns them"
-                ),
-            ),
-            dispatcher_operation(
-                "task",
-                kwargs={"mode": "planning"},
-                reason=(
-                    "if the intended work writes only managed artifacts and no source, "
-                    "use an artifact-only mode instead of claiming source-change authority"
-                ),
-            ),
-        ],
+        next_operations=next_operations,
     )
 
 
 def capture_task_repository_baseline(
     target_worktree: str | os.PathLike[str], configured_target_ref: str = "main",
+    *, task_authority_context: Mapping[str, Any] | None = None,
 ) -> TaskRepositoryBaseline | UnbornTaskRepositoryBaseline:
     """Capture a clean, branch-attached born or exact-unborn task start."""
     root, git = _task_git(target_worktree, configured_target_ref)
@@ -540,7 +591,9 @@ def capture_task_repository_baseline(
             raise RuntimeError("unborn source-change task requires an absent configured target")
         staged, unstaged, untracked = _mutable_paths(git)
         if staged or unstaged or untracked:
-            raise _dirty_worktree_block(root, branch, staged, unstaged, untracked)
+            raise _dirty_worktree_block(
+                root, branch, staged, unstaged, untracked, task_authority_context, None,
+            )
         return UnbornTaskRepositoryBaseline(
             str(root), branch, configured_target_ref,
             datetime.now(timezone.utc).isoformat(),
@@ -554,6 +607,7 @@ def capture_task_repository_baseline(
         raise _dirty_worktree_block(
             root, snapshot.branch,
             snapshot.staged_paths, snapshot.unstaged_paths, snapshot.untracked_paths,
+            task_authority_context, snapshot.head_sha,
         )
     if snapshot.branch is None:
         raise RuntimeError("source-change task requires an attached Git branch")
