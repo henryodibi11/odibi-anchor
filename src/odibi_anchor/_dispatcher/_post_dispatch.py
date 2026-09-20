@@ -343,7 +343,7 @@ def run_post_dispatch(
     action, result, err, args, kwargs, *,
     session_timings, session_files_changed, session_state,
     planning_required_actions, action_contract=None, task_stage=None,
-    invocation_resolution=None, pre_task_decision=None,
+    invocation_resolution=None, pre_task_decision=None, memory_db=None,
 ):
     """Run all post-dispatch enforcement checks.
 
@@ -540,11 +540,34 @@ def run_post_dispatch(
                             "changed_paths": prepared["subject"]["repository"]["changed_paths"],
                         }
                 else:
+                    if memory_db is None:
+                        from odibi_anchor._dispatcher._boot import _ENV
+                        memory_db = _ENV["memory_db"]
                     from odibi_anchor._pr_readiness import load_pr_config
                     from odibi_anchor._repository_snapshot import capture_task_repository_baseline
+                    from odibi_anchor.codebase._task_authority import task_recovery_context
+
                     config = load_pr_config(session_state.artifact_root)
+                    recovery_context = task_recovery_context(
+                        memory_db, session_state=session_state,
+                        trust_domain=task_stage.get("trust_domain") if task_stage else None,
+                    )
+                    if (
+                        recovery_context["ownership_state"] == "unavailable"
+                        and recovery_context.get("reason")
+                        == "accepted task authority is unavailable"
+                    ):
+                        # The configured authority has no accepted-task store, so no earlier
+                        # task can own the worktree. The low-level inspector remains
+                        # conservative without this runtime-path qualification.
+                        recovery_context = {
+                            **recovery_context,
+                            "ownership_state": "unowned_or_ambiguous",
+                            "reason": "configured task authority contains no records",
+                        }
                     task_baseline = capture_task_repository_baseline(
                         session_state.target_root, config["default_target_ref"],
+                        task_authority_context=recovery_context,
                     )
         # Validate baseline qualification before any managed-record write. A
         # rejected task must leave no durable artifact or task-visible state.
