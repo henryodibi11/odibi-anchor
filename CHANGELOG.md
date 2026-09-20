@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.18] - 2026-09-20
+
+### Changed
+
+- Dirty-worktree recovery now distinguishes exact interrupted-task ownership, exact completed-task
+  delivery, and unowned or ambiguous changes before offering executable next operations.
+- Ambiguous task-rebind diagnostics are bounded to ten verified open windows with exact copy-ready
+  selection calls and an omitted-window count.
+
+### Fixed
+
+- Terminal task records now prevent completed windows from being rebound even when a process stops
+  between terminal-record persistence and accepted-task closure.
+- Completed artifact-only task windows remain terminal across fresh initialization instead of
+  accumulating as stale rebind candidates.
+- Historical terminal tasks claim dirty work only when branch, HEAD, and the complete changed-path
+  set match their retained repository evidence.
+
 ## [0.3.17] - 2026-09-20
 
 ### Added
@@ -350,3 +368,5 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.14]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.14
 [0.3.15]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.15
 [0.3.16]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.16
+[0.3.17]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.17
+[0.3.18]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.18
