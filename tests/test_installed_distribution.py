@@ -211,7 +211,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
 ]
 EXPECTED_DISTRIBUTION_METADATA = {
     "Name": ["odibi-anchor"],
-    "Version": ["0.3.18"],
+    "Version": ["0.3.19"],
     "Summary": ["Provider-neutral reliability, context, and evidence tooling for engineering agents."],
     "Requires-Python": [">=3.11"],
     "License-Expression": ["Apache-2.0"],
@@ -509,7 +509,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
-    assert project["version"] == "0.3.18"
+    assert project["version"] == "0.3.19"
     assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
     assert project["license"] == "Apache-2.0"
@@ -549,7 +549,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     }
 
     init_source = (REPOSITORY_ROOT / "src" / "odibi_anchor" / "__init__.py").read_text(encoding="utf-8")
-    assert '"0.3.18"' not in init_source
+    assert '"0.3.19"' not in init_source
     assert '"0.7.1"' not in init_source
     assert not (REPOSITORY_ROOT / "src" / "odibi_anchor" / "_version.py").exists()
 
@@ -676,7 +676,7 @@ def _repository_factory_probe(
 
 def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     """Assert installed metadata and runtime expose the authoritative contract."""
-    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.18"
+    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.19"
     assert probe["summary"] == EXPECTED_DISTRIBUTION_METADATA["Summary"][0]
     assert probe["author"] == "Henry Odibi"
     assert probe["license"] == "Apache-2.0"
@@ -700,8 +700,8 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    wheel = next(artifacts.glob("odibi_anchor-0.3.18-*.whl"))
-    sdist = artifacts / "odibi_anchor-0.3.18.tar.gz"
+    wheel = next(artifacts.glob("odibi_anchor-0.3.19-*.whl"))
+    sdist = artifacts / "odibi_anchor-0.3.19.tar.gz"
     assert sdist.is_file()
 
     with zipfile.ZipFile(wheel) as wheel_archive:
@@ -720,7 +720,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         packaged_init = wheel_archive.read("odibi_anchor/__init__.py").decode("utf-8")
-        assert '"0.3.18"' not in packaged_init
+        assert '"0.3.19"' not in packaged_init
         assert wheel_archive.read(".assistant_instructions.md") == (
             candidate / ".assistant_instructions.md"
         ).read_bytes()
@@ -812,7 +812,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert raw["version"] == "0.3.18"
+    assert raw["version"] == "0.3.19"
     assert Path(raw["module"]).is_relative_to(candidate)
 
     collision = audit_root / "collision"
@@ -841,7 +841,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert collision_result["version"] == "0.3.18"
+    assert collision_result["version"] == "0.3.19"
     assert raw_hashes_before == {
         "pyproject.toml": _sha256(candidate / "pyproject.toml"),
         "__init__.py": _sha256(candidate / "src" / "odibi_anchor" / "__init__.py"),
@@ -932,7 +932,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         loaded_policy = PromotionPolicy.from_path(policy)
         digest = "sha256:" + "a" * 64
         run = QualificationRun(
-            "synthetic-run", "public-t1-localized-fix", "1.0", "a" * 40, "0.3.18",
+            "synthetic-run", "public-t1-localized-fix", "1.0", "a" * 40, "0.3.19",
             digest, "synthetic-family", "1", "producer", "direct-python", "direct",
             "T1", "localized", "source-change", "Anchor-T1-TESTS@1.0",
             "sha256:" + "0" * 63 + "5", "2026-08-20T00:00:00Z",
@@ -1039,7 +1039,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_wheel_probe["runtime_version"] == "0.3.18"
+    assert masked_wheel_probe["runtime_version"] == "0.3.19"
     assert Path(masked_wheel_probe["module"]).is_relative_to(audit_root / "wheel-venv")
     (fake_metadata / "RECORD").write_bytes(b"\xff")
     assert _runtime_version_probe(
@@ -1047,13 +1047,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment,
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
-    ) == "0.3.18"
+    ) == "0.3.19"
     (fake_metadata / "RECORD").unlink()
     wheel_site_packages = Path(wheel_probe["module"]).parent.parent
     colocated_fake_metadata = wheel_site_packages / "odibi_anchor-9.9.9.dist-info"
     shutil.copytree(fake_metadata, colocated_fake_metadata)
     try:
-        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.18"
+        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.19"
         (colocated_fake_metadata / "RECORD").write_text(
             "odibi_anchor/__init__.py,,\n",
             encoding="utf-8",
@@ -1062,7 +1062,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         assert ambiguous_wheel_probe["runtime_version"] == "0+unknown"
     finally:
         shutil.rmtree(colocated_fake_metadata)
-    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.18.dist-info")) / "METADATA"
+    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.19.dist-info")) / "METADATA"
     wheel_metadata_bytes = wheel_metadata_path.read_bytes()
     try:
         wheel_metadata_path.write_bytes(b"\xff")
@@ -1186,7 +1186,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_editable_probe["runtime_version"] == "0.3.18"
+    assert masked_editable_probe["runtime_version"] == "0.3.19"
     assert Path(masked_editable_probe["module"]).is_relative_to(candidate)
     assert Path(editable_probe["module"]).is_relative_to(candidate)
     editable_direct_url = json.loads(editable_probe["direct_url"])
@@ -1197,7 +1197,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     candidate_pyproject = candidate / "pyproject.toml"
     authoritative_pyproject = candidate_pyproject.read_text(encoding="utf-8")
     try:
-        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.18"', 'version = "9.9.9"', 1)
+        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.19"', 'version = "9.9.9"', 1)
         assert conflicting_pyproject != authoritative_pyproject
         candidate_pyproject.write_text(conflicting_pyproject, encoding="utf-8")
         editable_metadata_probe = _runtime_probe(editable_python, environment, cwd=audit_root)
@@ -1232,7 +1232,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert nonlocal_authority_probe["runtime_version"] == "0.3.18"
+        assert nonlocal_authority_probe["runtime_version"] == "0.3.19"
 
         fake_direct_url["url"] = "file://[malformed"
         fake_direct_url_path.write_text(json.dumps(fake_direct_url), encoding="utf-8")
@@ -1242,7 +1242,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert malformed_url_probe["runtime_version"] == "0.3.18"
+        assert malformed_url_probe["runtime_version"] == "0.3.19"
 
         for relative_url in ("file:.", "file://localhost"):
             fake_direct_url["url"] = relative_url
@@ -1252,7 +1252,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
                 environment,
                 cwd=candidate,
                 metadata_prepend=fake_editable_root,
-            ) == "0.3.18"
+            ) == "0.3.19"
 
         fake_direct_url_path.write_bytes(b"\xff")
         assert _runtime_version_probe(
@@ -1260,13 +1260,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment,
             cwd=candidate,
             metadata_prepend=fake_editable_root,
-        ) == "0.3.18"
+        ) == "0.3.19"
     finally:
         candidate_pyproject.write_text(authoritative_pyproject, encoding="utf-8")
 
     extracted = audit_root / "sdist-source"
     shutil.unpack_archive(str(sdist), extracted)
-    sdist_root = extracted / "odibi_anchor-0.3.18"
+    sdist_root = extracted / "odibi_anchor-0.3.19"
     _validate_native_skill_layout(sdist_root / ".assistant")
     sdist_wheelhouse = audit_root / "sdist-wheelhouse"
     _run(
@@ -1274,7 +1274,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.18-*.whl"))
+    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.19-*.whl"))
     with zipfile.ZipFile(sdist_wheel) as sdist_wheel_archive:
         sdist_wheel_names = sdist_wheel_archive.namelist()
         sdist_metadata_name = next(name for name in sdist_wheel_names if name.endswith(".dist-info/METADATA"))
@@ -1867,16 +1867,17 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
                 project_id=resolve_project(os.environ["TARGET"]),
                 task_window_id=owner["task_window_id"],
             )}))
-        elif mode == "legacy-close":
+        elif mode == "restart-close":
             from odibi_anchor.bootstrap import init
             with contextlib.redirect_stdout(io.StringIO()):
                 anchor, _, _ = init(root=os.environ["TARGET"], output_format="dict")
-            learned = anchor("learn", session_events=[{
-                "type":"discovery",
-                "detail":"Legacy recovery closed the exact restarted obligation.",
-            }], output_format="dict")
+            assessed = anchor(
+                "learning", "assess", outcome="nothing_reusable_learned",
+                notes="Structured recovery closed the exact restarted obligation.",
+                output_format="dict",
+            )
             exported = anchor("learning", "export", output_format="dict")
-            print(json.dumps({"learned":learned, "exported":exported}))
+            print(json.dumps({"assessed":assessed, "exported":exported}))
         elif mode == "direct":
             from odibi_anchor.bootstrap import init
             from odibi_anchor._dispatcher._project import project_action
@@ -2089,9 +2090,13 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
     legacy_home = tmp_path / "home-legacy-recovery"
     legacy_active = run_probe("legacy-setup", legacy_home)
     assert legacy_active["active"]["status"] == "active"
-    legacy_closed = run_probe("legacy-close", legacy_home)
-    assert legacy_closed["exported"]["obligations"][-1]["status"] == "legacy_closed"
-    assert legacy_closed["exported"]["items"] == []
+    restarted_closed = run_probe("restart-close", legacy_home)
+    restarted_assessed = cast(dict[str, Any], restarted_closed["assessed"])
+    restarted_assessment = cast(dict[str, Any], restarted_assessed["assessment"])
+    restarted_exported = cast(dict[str, Any], restarted_closed["exported"])
+    assert restarted_assessment["outcome"] == "nothing_reusable_learned"
+    assert restarted_exported["obligations"][-1]["status"] == "assessed"
+    assert restarted_exported["items"] == []
 
     # Stateful CLI batch and shell preserve one JSON result per request and exit zero.
     for transport in ("batch", "shell"):

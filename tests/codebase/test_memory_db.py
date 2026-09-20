@@ -522,23 +522,6 @@ class TestLifecycle:
         ).fetchone()
         assert tuple(retained) == ("candidate", 0)
 
-    def test_public_confirmation_returns_blocked_for_unauthenticated_human_review(self, db_path):
-        from odibi_anchor.codebase.memory_context import confirm_memory
-
-        r = insert_memory(db_path, project="all", type="gotcha", content="Unreviewed claim")
-        result = confirm_memory(
-            ".", r["id"], db_path=db_path,
-            human_review={
-                "actor_ref": "claimed-human", "decision_source": "prompt",
-                "evidence": "agent-authored claim",
-            },
-        )
-        assert result and result["action"] == "confirmation_blocked"
-        retained = get_db(db_path).execute(
-            "SELECT status,confirmation_count FROM memories WHERE id=?", (r["id"],),
-        ).fetchone()
-        assert tuple(retained) == ("candidate", 0)
-
     def test_fabricated_multi_task_recurrence_cannot_promote(self, db_path):
         from odibi_anchor.codebase._memory_lifecycle import (
             evaluate_application_effects,

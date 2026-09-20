@@ -65,7 +65,7 @@ def run_pre_dispatch_enforcement(
             or active_obligation["task_window_id"] != session_state.task_window_id
         )
     )
-    recovery_actions = {"learning", "learn", "context", "prepare"}
+    recovery_actions = {"learning", "context", "prepare"}
     recovery_memory_action = (
         action == "memory"
         and bool(args)
@@ -143,10 +143,9 @@ def run_pre_dispatch_enforcement(
         if blocked:
             raise RuntimeError(
                 f"BLOCKED: {msg}\n"
-                "This is compatibility-only historical debt created before structured "
-                "learning obligation IDs were retained.\n"
-                "Historical recovery technically requires anchor(\"learn\", session_events=[{\"type\": \"decision\", "
-                "\"detail\": \"what happened in the prior session\"}]) first."
+                "Use anchor(\"learning\", \"capture\", ...) for any genuine reusable "
+                "observation, then anchor(\"learning\", \"assess\", ...) to close the "
+                "retained structured obligation."
             )
 
     # ── Config mutation guardrail ──
@@ -377,7 +376,7 @@ def run_pre_dispatch_enforcement(
             # A required spec blocks consequential work, not creation/linking of
             # task/problem/spec artifacts or universally permitted bookkeeping.
             spec_exempt = action in {
-                "task", "problem", "spec", "work_item", "new_session", "checkpoint", "learn",
+                "task", "problem", "spec", "work_item", "new_session", "checkpoint",
                 "skill_loaded", "log", "status", "help", "skills", "project",
             }
             has_spec = bool(
@@ -396,8 +395,7 @@ def run_pre_dispatch_enforcement(
     recovery_closure = bool(
         active_obligation
         and (
-            action == "learn"
-            or (action == "learning" and learning_selector in {"capture", "assess"})
+            (action == "learning" and learning_selector in {"capture", "assess"})
             or recovery_memory_action
         )
     )

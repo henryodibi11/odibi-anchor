@@ -57,8 +57,8 @@ class SessionState:
     Attributes:
         files_at_last_checkpoint: File count at last successful gate/checkpoint.
             Used to enforce the checkpoint-between-features rule.
-        prior_learn_debt: True if the previous session ended without anchor("learn").
-            Blocks anchor("task") until debt is cleared.
+        prior_learn_debt: True if the previous session has an open learning obligation.
+            Blocks anchor("task") until structured assessment closes it.
         boot_manifest: Hash manifest loaded at boot for filesystem drift detection.
             Maps relative file paths to {"sha256": "..."} entries.
     """

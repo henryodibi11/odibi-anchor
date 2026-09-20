@@ -27,7 +27,7 @@ def _compliance_audit() -> dict:
 
     Analyzes _SESSION_TIMINGS chronologically against a 15-point checklist.
     Returns dict with score, gaps (deductions), and stats. Pure computation —
-    no file I/O, no subprocess. Called automatically by anchor("learn").
+    no file I/O and no subprocess.
 
     Scoring:
         Each of 15 checks is worth 1 point. Deductions are binary (0 or 1).

@@ -289,7 +289,7 @@ Content quality and the non-authority firewall are owned by
 The planning gate checks both `error=None` AND `passed=True`. Tasks that fail readiness
 (passed=False) do not satisfy the gate. All of these tools require an active planning gate
 (RuntimeError if not): safe, semantic, gate, preflight, checkpoint, touched, save, handoff,
-apply_transform, confirm, reject, archive, import_md.
+apply_transform, reject, archive, import_md.
 
 Config mutations (suppress_category, suppress_id, file_override) also require planning.
 Read-only `anchor("config")` is fine without planning.

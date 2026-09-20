@@ -24,7 +24,7 @@ def test_known_bad_change_context_heals():
 def test_lazy_loading_still_works():
     pkg = importlib.import_module("odibi_anchor.codebase")
     # Names resolve to callables whether or not previously accessed
-    for name in ("import_resolve_context", "memory_context", "learn_context"):
+    for name in ("import_resolve_context", "memory_context", "known_bad_change_context"):
         assert callable(getattr(pkg, name)), name
 
 

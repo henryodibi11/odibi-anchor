@@ -266,7 +266,7 @@ def should_block_learn_debt(prior_session_learn_debt: bool) -> tuple[bool, str]:
     """Determine if task should be blocked due to prior session learn debt.
 
     Args:
-        prior_session_learn_debt: Whether the previous session ended without anchor("learn").
+        prior_session_learn_debt: Whether the previous session has an open learning obligation.
 
     Returns:
         (should_block, message) — True if learn debt exists.

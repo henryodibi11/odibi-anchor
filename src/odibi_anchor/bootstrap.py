@@ -281,13 +281,12 @@ def init(
         "workflow_gate_context", "render_workflow_gate_report",
         "framework_lookup_context", "render_framework_lookup_report",
         "memory_context", "render_memory_report",
-        "append_memory", "confirm_memory", "reject_memory",
+        "append_memory", "reject_memory",
         "archive_stale_entries", "export_markdown", "import_from_markdown",
         "semantic_edit_context", "render_semantic_edit_report",
         "preflight_context", "render_preflight_report",
         "import_resolve_context", "render_import_resolve_report",
         "safe_change_context", "render_safe_change_report",
-        "learn_context", "render_learn_report",
         "known_bad_change_context", "render_known_bad_change_report",
     ])
     _manifest_mod = _LazyModule("odibi_anchor.codebase._manifest", [
@@ -306,12 +305,10 @@ def init(
         query_memories as _db_query_memories,
         entry_count as _db_entry_count,
         resolve_project as _db_resolve_project,
-        confirm_memory_entry as _db_confirm_entry,
         increment_sessions_seen as _db_increment_sessions_seen,
         promote_by_sessions_seen as _db_promote_by_sessions_seen,
         add_tag_to_entry as _db_add_tag_to_entry,
         count_similar_entries as _db_count_similar_entries,
-        insert_audit as _db_insert_audit,
         query_audits as _db_query_audits,
         audit_trend as _db_audit_trend,
         _DEFAULT_DB_PATH,
@@ -330,13 +327,13 @@ def init(
     ANCHOR_FRAME_ENABLED = frame_enabled
 
     _NO_OUTPUT_FORMAT_ACTIONS = frozenset({
-        "save", "confirm", "reject", "archive", "export_md", "import_md", "test_run",
+        "save", "reject", "archive", "export_md", "import_md", "test_run",
         "save_snap", "load_snap", "touched", "unpersist", "rollback", "log", "new_session",
         "skill_loaded", "apply_sql",
     })
     _PLANNING_REQUIRED_ACTIONS = frozenset({
         "safe", "semantic", "gate", "preflight", "checkpoint", "touched",
-        "save", "apply_transform", "confirm", "reject", "archive", "import_md",
+        "save", "apply_transform", "reject", "archive", "import_md",
     })
     from odibi_anchor._dispatcher._effects import (
         ActionContract as _ActionContract,
@@ -395,7 +392,6 @@ def init(
         _status as _status_impl, _audit_history as _audit_history_impl,
     )
     from odibi_anchor._dispatcher._session_health import (
-        capture_session_health as _capture_session_health,
         check_cross_session_drift as _check_cross_session_drift,
         session_delta_context as _session_delta_context_impl,
     )
@@ -1118,8 +1114,8 @@ def init(
             "schema_diff": lambda: _tables_mod.schema_diff_context, "contract": lambda: _tables_mod.table_contract_summary,
             "transform": lambda: _tables_mod.transform_plan_context, "apply_transform": lambda: _tables_mod.apply_transform_context,
             "known_error": lambda: _debugging_mod.failure_pattern_context, "trace": lambda: _debugging_mod.error_trace_context,
-            "lookup": lambda: _codebase_mod.framework_lookup_context, "learn": lambda: _codebase_mod.learn_context,
-            "save": lambda: _codebase_mod.append_memory, "confirm": lambda: _codebase_mod.confirm_memory,
+            "lookup": lambda: _codebase_mod.framework_lookup_context,
+            "save": lambda: _codebase_mod.append_memory,
             "reject": lambda: _codebase_mod.reject_memory, "snapshot": lambda: _codebase_mod.session_snapshot_context,
             "dogfood": lambda: _profiling_mod.dogfood_regression_context,
             "reconcile": lambda: _workflows_mod._reconcile_workflow,
@@ -1221,25 +1217,23 @@ def init(
         if action == "learning":
             entry["learning_command"] = "pending"
         _SESSION_TIMINGS.append(entry)
-        if (action in {"preflight", "test", "gate", "learn", "learning"} and
+        if (action in {"preflight", "test", "gate", "learning"} and
                 _SESSION_STATE.checkpoint_in_progress is not None):
             # Checkpoint-owned entries are provisional input to nested enforcement.
             # The checkpoint truncates them and publishes one final transition.
             return
         if action == "task":
             return  # Task persistence is deferred until post-dispatch acceptance.
-        if action in {"gate", "learn", "checkpoint"} and not passed:
+        if action in {"gate", "checkpoint"} and not passed:
             return  # Preserve the prior persisted learn-debt state on failure.
         if action in ("status", "task", "touched", "safe", "semantic",
-                       "gate", "checkpoint", "learn"):
+                       "gate", "checkpoint"):
             _stage_map = {
                 "status": "oriented", "task": "planned",
                 "touched": "editing", "safe": "editing", "semantic": "editing",
-                "gate": "gated", "checkpoint": "gated", "learn": "learned",
+                "gate": "gated", "checkpoint": "gated",
             }
             awaiting = (action == "gate" and passed)
-            if action == "learn":
-                awaiting = False
             _save_session_state({
                 "stage": _stage_map.get(action, "unknown"),
                 "files_changed": sorted(_SESSION_FILES_CHANGED),
@@ -1531,7 +1525,7 @@ def init(
                 kwargs["output_format"] = "dict"
             elif kwargs.get("output_format") == "markdown" and (
                 action in {
-                    "orient", "task", "problem", "spec", "work_item", "project", "preflight", "test", "gate", "checkpoint", "learn", "learning",
+                    "orient", "task", "problem", "spec", "work_item", "project", "preflight", "test", "gate", "checkpoint", "learning",
                     "incident_snapshot", "environment_diff", "spark_diagnose", "uc_context",
                     "delta_changes", "run_diff", "observe_table", "table_trend",
                 }
@@ -1590,7 +1584,6 @@ def init(
         from odibi_anchor._dispatcher._auto_confirm import (
             error_with_auto_confirm as _error_ac,
             known_bad_with_auto_confirm as _known_bad_ac,
-            learn_with_auto_confirm as _learn_ac,
         )
         from odibi_anchor._dispatcher._gate_wrappers import (
             preflight_with_baseline as _preflight_wb,
@@ -1704,9 +1697,7 @@ def init(
             "known_error":  lambda: _error_ac(ROOT, args, kwargs, failure_pattern_fn=_debugging_mod.failure_pattern_context, render_fn=_debugging_mod.render_failure_pattern_report),
             "trace":        lambda: _debugging_mod.error_trace_context(args[0] if args else "", **kwargs),
             "lookup":       lambda: _codebase_mod.framework_lookup_context(args[0] if args else "", framework_root=FRAMEWORK_ROOT, **kwargs),
-            "learn":        lambda: _learn_ac(ROOT, args, {**({"project": _SESSION_STATE.active_project} if _SESSION_STATE.active_project else {}), **({"problem_id": _SESSION_STATE.active_problem} if _SESSION_STATE.active_problem else {}), **kwargs}, learning_project_id=_boot_result.project, learn_fn=_codebase_mod.learn_context, render_fn=_codebase_mod.render_learn_report, session_files_changed=_SESSION_FILES_CHANGED, session_files_created=_SESSION_FILES_CREATED, session_timings=_SESSION_TIMINGS, session_state=_SESSION_STATE, compliance_audit_fn=_compliance_audit, db_insert_audit_fn=_db_insert_audit, capture_health_fn=_capture_session_health),
             "save":         lambda: _save_with_spec(ROOT, args, kwargs),
-            "confirm":      lambda: _codebase_mod.confirm_memory(ROOT, args[0] if args else "", **kwargs),
             "reject":       lambda: _codebase_mod.reject_memory(ROOT, args[0] if args else "", **kwargs),
 
             # ── Session & Snapshots ──
@@ -2168,12 +2159,11 @@ def init(
             if action == "checkpoint":
                 from odibi_anchor._dispatcher._checkpoint import format_checkpoint
                 return _with_protocol(format_checkpoint(_final, "markdown"))
-            if action in {"learn", "learning"}:
+            if action == "learning":
                 import json as _json
-                title = "Structured Learning" if action == "learning" else "Learning"
                 payload = {key: value for key, value in _final.items()
                            if key not in {"operating_protocol", "agent_context"}}
-                return _with_protocol(f"# {title}\n\n```json\n" + _json.dumps(payload, indent=2) + "\n```")
+                return _with_protocol("# Structured Learning\n\n```json\n" + _json.dumps(payload, indent=2) + "\n```")
             if action in {
                 "incident_snapshot", "environment_diff", "spark_diagnose", "uc_context",
                 "delta_changes", "run_diff", "observe_table", "table_trend",

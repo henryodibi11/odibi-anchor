@@ -35,8 +35,13 @@ assert startup["status"] == "ready"
 ```
 
 If Databricks reports that Anchor is missing or stale, run the exact pinned latest-stable install
-and restart remediation it emits, then rerun this identical call. `anchor portfolio prepare` and
-manual environment application remain recovery/diagnostic tools, not normal startup.
+and restart remediation it emits, then rerun this identical call. Installation is needed only
+when missing or changing versions, and Python restart is needed only after that install/upgrade.
+Use `setup_host` for initial setup, released-guidance reconciliation after an upgrade, or
+diagnosed guidance drift. Bootstrap once per fresh Python process; in the same healthy process,
+start subsequent logical work with `anchor("new_session", ...)`, without reinstalling,
+restarting, rerunning setup, or re-bootstrap. `anchor portfolio prepare` and manual environment
+application remain recovery/diagnostic tools, not normal startup.
 
 `anchor` is process-bound state returned by this namespace (or by `launch()`), not a top-level
 package export. Never use `from odibi_anchor import anchor`.
@@ -375,9 +380,8 @@ spec = anchor("spec", "from_problem", "PRB-2026-0001", name="QUEUE_CAPACITY")
 ```
 
 Tool findings are offered as evidence candidates but are not persisted automatically.
-Snapshots point to a compact resume projection. `anchor("save")` and selected entries from the
-compatibility-only historical `anchor("learn")` route, used only when old persisted state
-technically requires it, are tagged with the active Problem Record rather than copying it.
+Snapshots point to a compact resume projection. `anchor("save")` entries are tagged with the
+active Problem Record rather than copying it.
 
 Rigor is progressive: level 0 direct tasks bypass a record, level 1 analysis uses a
 compact record, and level 2 high-impact/migration/multi-session work uses all stages.
@@ -519,12 +523,12 @@ intended path with `touched`; unrelated drift remains blocked until acknowledged
 `gotcha`, `decision`, `pattern`, `convention`, `failure_pattern`, `discovery`, `tool_call`, `preference`
 
 
-## Learning compatibility
+## Learning closure
 
-Legacy `anchor("learn")` remains available only as a compatibility-only route for historical
-recovery that technically requires the old persisted payload. Use canonical `learning capture/assess`
-for normal closure. The content-quality and non-authority firewall is stated in the global
-operating contract.
+Use `learning capture/assess` for closure. Historical lifecycle markers with an exact task owner
+are migrated to structured obligations during bootstrap; unowned markers are preserved for
+forensics but cannot grant or block authority. The content-quality and non-authority firewall is
+stated in the global operating contract.
 
 ## Workflow Loops
 
@@ -759,9 +763,8 @@ When gate PASSES with `files_changed > 0`, truthful learning assessment is requi
 the next gate. Structured learning is a two-step route: capture genuine observation content
 with `anchor("learning", "capture", ...)`, then assess the returned item IDs with
 `outcome="observations_recorded"`. If no bounded reusable observation exists, assess
-`nothing_reusable_learned` without IDs. `assess` never accepts observation content. Legacy
-`anchor("learn")` remains a compatibility-only historical-recovery route where the old payload
-is technically required; historical payload validation is unchanged. Do not fabricate content.
+`nothing_reusable_learned` without IDs. `assess` never accepts observation content. Do not
+fabricate content.
 
 Apply the authority boundary before retaining a finding. Cross-project lessons belong in
 learning, project-specific execution results and environmental deviations belong in managed
@@ -769,16 +772,6 @@ evidence artifacts, and reproducible source defects belong in a Problem Record o
 Work Item. Memory is not a replacement for project authority. After any managed-artifact
 write, re-read the exact path or record in the active process before claiming persistence;
 conversation history is not durable evidence of the write.
-
-### Auto-compliance audit (v0.6.1)
-When old persisted state technically requires the compatibility-only historical
-`anchor("learn")` route and it fires with `files_changed > 0`, a
-compliance audit auto-runs:
-- Scores session 0-10 objectively from `_SESSION_TIMINGS` ordering
-- Detects gaps: missing planning, wrong ordering, no preflight, untouched files, etc.
-- Preserves the historical compatibility record; new work uses structured audit evidence
-- Inspect historical compliance with `anchor("audit_history")`, not a semantic-memory query
-- Zero ceremony — fires automatically, never breaks learn on failure
 
 ### Auto-tag enrichment (v0.6.2)
 Compliance entries are automatically tagged for queryability:
@@ -791,7 +784,7 @@ Use `anchor("audit_history")` for compliance trends. Deep inspection of compatib
 semantic rows requires an explicitly authorized memory-governance audit.
 
 ### Behavioral auto-tags (v0.6.3)
-- **`recurring`** — Applied at learn time when existing entries have similar content (FTS5 match).
+- **`recurring`** — Historical lifecycle status retained for snapshot compatibility.
   It is recurrence evidence only and grants no priority or lifecycle disposition.
 - **`protective`** — Applied when `known_bad` matches a memory entry (the entry prevented an error).
   It is application evidence only and grants no priority or lifecycle disposition.
@@ -819,15 +812,15 @@ Rules #11 and #12 in `.assistant_instructions.md`:
 ### Layer 4: Research session enforcement
 8+ `anchor()` calls without `anchor("task")` raises RuntimeError. Warning starts at 3+.
 
-### Layer 5: Prior session learn debt
+### Layer 5: Prior session learning debt
 If a previous session ended with assessment debt, `anchor("task")` is blocked until real
-Observation IDs or `nothing_reusable_learned` clear it. A compatibility-only historical
-recovery route is surfaced by Anchor only when persisted old state technically requires it.
+Observation IDs or `nothing_reusable_learned` clear it. Bootstrap migrates an exact-owner
+historical marker into this same structured obligation path.
 
 ### Layer 6: Per-feature planning reset
 After a successful gate/checkpoint, a fresh `anchor("task")` is required for the next feature.
 All planning-gated tools (safe, semantic, gate, preflight, checkpoint, touched, save,
-handoff, apply_transform, confirm, reject, archive, import_md) raise RuntimeError without
+handoff, apply_transform, reject, archive, import_md) raise RuntimeError without
 an active planning gate.
 
 ### Layer 7: Spec requirement gate
@@ -980,7 +973,7 @@ Legacy `sessions_seen` and `use_count` remain readable history but do not rank,
 promote, or retain entries. Immutable application/evaluation evidence informs retrieval ranking;
 it does not grant backlog, scope, permission, policy, implementation, or promotion authority.
 Typed verifiers and governed owner activation/confirmation are the available promotion lanes;
-compatibility `confirm` calls return `confirmation_blocked` without changing candidate status.
+no direct confirmation action exists.
 
 ### How it works:
 1. **Candidate fetch**: reads the complete eligible active-project corpus before bounded ranking.
@@ -1010,4 +1003,4 @@ No gate-wide or exposure-based bulk confirmation occurs.
 - **Structured learning**: `anchor("learning", "capture|assess|safe_stop|list|show|insights|triage|export|backup", ...)`.
   Capture, gate, or closure assessment creates the task's local SQLite obligation as needed,
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
-  `nothing_reusable_learned`. Legacy `learn` remains compatibility-only. State is local—no cloud replication.
+  `nothing_reusable_learned`. State is local—no cloud replication.

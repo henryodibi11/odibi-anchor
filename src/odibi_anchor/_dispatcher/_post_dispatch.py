@@ -918,10 +918,6 @@ def run_post_dispatch(
             "persisted": False,
         }
 
-    # ── Clear prior session learn debt after successful learn ──
-    if action == "learn" and _dispatch_ok and session_state.prior_learn_debt:
-        session_state.prior_learn_debt = False
-
     # ── Planning advisory on the successful task-required invocation itself ──
     attempt = getattr(pre_task_decision, "attempt", None)
     if (
