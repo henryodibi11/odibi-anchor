@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.19] - 2026-09-20
+
+### Changed
+
+- Agent-facing Python, CLI, MCP, help, and packaged guidance surfaces now use only structured
+  `learning capture/assess` and governed memory-promotion routes; obsolete `learn` and `confirm`
+  actions are no longer public.
+- Historical exact-owner learning markers migrate automatically to structured obligations during
+  bootstrap, while unowned markers remain forensic evidence without granting or blocking authority.
+- Databricks guidance now distinguishes package installation, Python restart, host setup,
+  per-process bootstrap, and per-task `new_session` so healthy sessions avoid repeated setup.
+
+### Fixed
+
+- Checkpoints now accept and commit only structured learning payloads and require the resulting
+  obligation to reach the `assessed` terminal state.
+- Historical-marker migration fails closed when its structured obligation cannot be established.
+
 ## [0.3.18] - 2026-09-20
 
 ### Changed
@@ -370,3 +388,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.16]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.16
 [0.3.17]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.17
 [0.3.18]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.18
+[0.3.19]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.19

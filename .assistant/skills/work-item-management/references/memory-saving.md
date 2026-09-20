@@ -340,8 +340,7 @@ result = anchor("reject", "mem_def456")
 
 **NEVER leave stale entries unrejected** — they pollute future `anchor("memory")` loads and cause the agent to repeat old mistakes.
 
-`anchor("confirm", ...)` is blocked legacy compatibility and returns `confirmation_blocked`.
-It is not a promotion path. Mechanically provable claims use the typed verifier path;
+Mechanically provable claims use the typed verifier path;
 preferences, conventions, policy, and procedural authority use separate governed owner
 requests: `request_owner_activation` for candidate→active, then
 `request_owner_confirmation` for active→confirmed. Retrieval, application, evaluation,
@@ -352,9 +351,5 @@ authority mutation, then requires the owner to send that phrase in a new Genie m
 second call supplies `in_session_approval`. Its immutable receipt labels an in-session assertion,
 not authenticated identity; workspace or Genie execution approval alone is insufficient.
 
-### Compatibility-only historical recovery
-
-Legacy `anchor("learn", session_events=[...])` remains callable only for historical recovery
-that technically requires its old payload. It is not the normal closure route. A gate or
-checkpoint opens an obligation; explicit captures record Observations and `learning assess`
-closes it. A truthful no-learning assessment creates no memory.
+A gate or checkpoint opens a learning obligation. Explicit captures record Observations and
+`learning assess` closes it. A truthful no-learning assessment creates no memory.

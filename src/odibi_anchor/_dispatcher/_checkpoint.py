@@ -52,7 +52,6 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
         test_target: Optional focused test target (file/pattern).
         learning_captures: Optional evidence-backed capture payloads.
         learning_assessment: Required when files changed. Explicit assessment payload.
-        learn_events: Compatibility-only legacy payload; do not use for new callers.
         output_format: 'dict' or 'markdown'.
 
     Returns:
@@ -62,7 +61,6 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
     label = kwargs.pop("label", args[0] if args else "unnamed")
     skip_test = kwargs.pop("skip_test", False)
     test_target = kwargs.pop("test_target", None)
-    learn_events = kwargs.pop("learn_events", None)
     learning_captures = kwargs.pop("learning_captures", None)
     learning_assessment = kwargs.pop("learning_assessment", None)
     learning_project_id = kwargs.pop(
@@ -78,8 +76,6 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
         raise TypeError("generate_pr_draft must be a bool or None")
 
     structured = learning_captures is not None or learning_assessment is not None
-    if structured and learn_events is not None:
-        raise RuntimeError("checkpoint accepts structured learning or compatibility learn_events, not both")
     if structured and not isinstance(learning_assessment, dict):
         raise RuntimeError("structured checkpoint requires learning_assessment")
     if learning_captures is None:
@@ -90,14 +86,13 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
         raise TypeError("learning_captures must be a list of capture payload objects")
     if structured and learning_assessment.get("outcome") == "nothing_reusable_learned" and learning_captures:
         raise RuntimeError("nothing_reusable_learned forbids learning_captures")
-    # Legacy payloads remain callable, but structured assessment is canonical.
-    if session_files_changed and not learn_events and not structured:
+    if session_files_changed and not structured:
         raise RuntimeError(
             "BLOCKED: anchor(\"checkpoint\") requires learning_assessment= when files changed.\n"
             "Use outcome='nothing_reusable_learned', or capture genuine observations "
             "and assess their IDs."
         )
-    if not learn_events and not structured:
+    if not structured:
         structured = True
         learning_assessment = {"outcome": "nothing_reusable_learned"}
 
@@ -226,29 +221,21 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
             checkpoint_marker["obligation_id"] = obligation["obligation_id"]
             session_state.learning_obligation_id = obligation["obligation_id"]
             checkpoint_marker["learn_started"] = True
-            if structured:
-                observation_ids = set(learning_assessment.get("observation_ids", []))
-                capture_results = []
-                for capture in learning_captures:
-                    captured = anchor_fn("learning", "capture", output_format="dict", **capture)
-                    capture_results.append(captured)
-                    item = captured.get("item", {}) if isinstance(captured, dict) else {}
-                    if item.get("item_id"):
-                        observation_ids.add(item["item_id"])
-                normalized_observation_ids = sorted(observation_ids)
-                assessment_payload = dict(learning_assessment)
-                if assessment_payload.get("outcome") == "observations_recorded":
-                    assessment_payload["observation_ids"] = normalized_observation_ids
-                step_results["learning_captures"] = capture_results
-                checkpoint_marker["assessment_payload"] = assessment_payload
-                learn_result = {"deferred": True}
-            else:
-                learn_result = anchor_fn("learn", session_events=learn_events, output_format="dict")
-                step_results["learn"] = learn_result
-                if isinstance(learn_result, dict):
-                    learnings_saved = learn_result.get("metrics", {}).get("memories_added", 0)
-                    if isinstance(learnings_saved, list):
-                        learnings_saved = len(learnings_saved)
+            observation_ids = set(learning_assessment.get("observation_ids", []))
+            capture_results = []
+            for capture in learning_captures:
+                captured = anchor_fn("learning", "capture", output_format="dict", **capture)
+                capture_results.append(captured)
+                item = captured.get("item", {}) if isinstance(captured, dict) else {}
+                if item.get("item_id"):
+                    observation_ids.add(item["item_id"])
+            normalized_observation_ids = sorted(observation_ids)
+            assessment_payload = dict(learning_assessment)
+            if assessment_payload.get("outcome") == "observations_recorded":
+                assessment_payload["observation_ids"] = normalized_observation_ids
+            step_results["learning_captures"] = capture_results
+            checkpoint_marker["assessment_payload"] = assessment_payload
+            learn_result = {"deferred": True}
             if not isinstance(learn_result, dict):
                 failed_at = "learn"
         except Exception as e:
@@ -434,14 +421,11 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
             not checkpoint_marker.get("learn_committed")):
         try:
             checkpoint_marker["learn_phase"] = "commit"
-            if structured:
-                committed_learn = anchor_fn(
-                    "learning", "assess", output_format="dict",
-                    **checkpoint_marker["assessment_payload"],
-                )
-                step_results["assessment"] = committed_learn
-            else:
-                committed_learn = anchor_fn("learn", session_events=learn_events, output_format="dict")
+            committed_learn = anchor_fn(
+                "learning", "assess", output_format="dict",
+                **checkpoint_marker["assessment_payload"],
+            )
+            step_results["assessment"] = committed_learn
             if not isinstance(committed_learn, dict):
                 raise RuntimeError("checkpoint learning did not return structured evidence")
             from odibi_anchor.codebase.structured_learning_context import learning_obligation
@@ -450,16 +434,11 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
                 project_id=learning_project_id,
                 task_window_id=session_state.task_window_id,
             )
-            if terminal is None or terminal.get("status") not in {"assessed", "legacy_closed"}:
+            if terminal is None or terminal.get("status") != "assessed":
                 raise RuntimeError(
                     "checkpoint learning obligation did not reach its required terminal status"
                 )
             checkpoint_marker["learn_committed"] = True
-            if not structured:
-                step_results["learn"] = committed_learn
-                learnings_saved = committed_learn.get("metrics", {}).get("memories_added", 0)
-                if isinstance(learnings_saved, list):
-                    learnings_saved = len(learnings_saved)
         except Exception as exc:
             step_results["learn"] = {"error": str(exc)}
             failed_at = "learn"
@@ -545,12 +524,12 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
             "tests_failed": tests_failed,
             "gate_risk": gate_risk,
             "learnings_saved": learnings_saved,
-            "closure_route": "structured" if structured else "legacy",
+            "closure_route": "structured",
             "assessment_id": (
                 step_results.get("assessment", {}).get("assessment", {}).get("assessment_id")
                 if structured else None
             ),
-            "assessment_outcome": learning_assessment.get("outcome") if structured else None,
+            "assessment_outcome": learning_assessment.get("outcome"),
             "observations_recorded": (
                 normalized_observation_ids
                 if structured else []

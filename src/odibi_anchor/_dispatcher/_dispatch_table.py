@@ -74,10 +74,8 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "known_error":  'anchor("known_error", "traceback text")',
     "trace":        'anchor("trace", "error text")',
     "lookup":       'anchor("lookup", "symbol_or_story")',
-    "learn":        'anchor("learn", ...)  # compatibility-only historical recovery when old persisted state technically requires it',
     "learning":     'anchor("learning", "capture|assess|safe_stop|list|show|insights|triage|export|backup", ...)',
     "save":         'anchor("save", entry_type="gotcha|convention|pattern|decision|discovery", content="...")',
-    "confirm":      'anchor("confirm", "entry_id")  # blocked legacy compatibility; use governed memory promotion',
     "reject":       'anchor("reject", "entry_id")',
     "memory_stats": 'anchor("memory_stats")',
     "db_migrate":  'anchor("db_migrate")  # run all schema migrations on memory DB',
@@ -152,7 +150,7 @@ _ACTION_GROUP_MEMBERS: dict[str, list[str]] = {
         "delta_changes", "run_diff", "observe_table", "table_trend",
     ],
     "Debugging & Learning": [
-        "known_error", "trace", "lookup", "learn", "learning", "save", "confirm", "reject",
+        "known_error", "trace", "lookup", "learning", "save", "reject",
     ],
     "Session & Snapshots": [
         "snapshot", "save_snap", "load_snap", "archive", "export_md", "import_md",
@@ -557,7 +555,6 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "known_error":  'anchor("known_error", "AnalysisException: Column \'order_id\' does not exist")',
     "trace":        'anchor("trace", traceback_text)',
     "lookup":       'anchor("lookup", "schema_diff_context")',
-    "learn":        'anchor("learn", session_events=[...])  # compatibility-only historical recovery when old persisted state technically requires it',
     "learning":     [
         'anchor("learning", "capture", observation_type="reusable_practice", summary="...", signal_key="...")',
         'anchor("learning", "assess", outcome="observations_recorded", observation_ids=["lrn_..."])',
@@ -565,7 +562,6 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("learning", "safe_stop", status="blocked", reason="required evidence unavailable")',
     ],
     "save":         'anchor("save", entry_type="gotcha", content="Delta MERGE fails silently on null keys", tags=["delta", "merge"])',
-    "confirm":      'anchor("confirm", "entry_abc123")  # blocked legacy compatibility; use governed memory promotion',
     "reject":       'anchor("reject", "entry_abc123")  # reject a pending memory entry',
     # Session & Snapshots
     "save_snap":    'anchor("save_snap", snapshot_result, "snapshots/bronze_fix.json")',

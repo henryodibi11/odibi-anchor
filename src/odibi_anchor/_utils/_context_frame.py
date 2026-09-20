@@ -302,7 +302,7 @@ class MemoryContext:
     # Memory entries that matched during known_bad check
 
     new_memories: list[dict] = field(default_factory=list)
-    # Memories created this session via anchor("save") or anchor("learn")
+    # Memories created this session via anchor("save")
 
     auto_promoted: list[str] = field(default_factory=list)
     # Entry IDs that were auto-promoted to confirmed this session

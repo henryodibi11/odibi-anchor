@@ -14,6 +14,11 @@ Preferred configured startup: run `.assistant/agent_bootstrap.py` in-process wit
 resolves the sibling portfolio, exact host, state restore, route, orientation, and copy-ready
 artifact actions. `portfolio prepare` and manual environment application are recovery paths.
 
+Install only when missing or changing versions; restart Python only after that install/upgrade.
+Run `setup_host` for initial setup, upgrade reconciliation, or diagnosed guidance drift.
+Bootstrap once per fresh Python process. In a healthy process, begin later logical work with
+`anchor("new_session", ...)`—not another install, restart, setup, or bootstrap.
+
 The process-bound `anchor` callable comes from the launcher namespace or `launch()` return
 value. It is intentionally not available through `from odibi_anchor import anchor`.
 
@@ -105,7 +110,7 @@ If all pending memories are irrelevant, dispose them once with `all_pending=True
 | known_bad before .py edits | REQUIRED — RuntimeError if skipped |
 | Tests pass for .py changes | REQUIRED at gate — RuntimeError if failed |
 | Learning assessment after gate (when files changed) | REQUIRED; no-learning is valid |
-| Prior session learn debt | Blocks anchor("task") until cleared |
+| Prior session learning debt | Blocks anchor("task") until structured assessment clears it |
 | Config mutations without planning | RuntimeError |
 | Task policy requires a Spec but exact linked Spec is not reviewed | RuntimeError — persist and review the required Spec |
 | Required skills not loaded | RuntimeError — `anchor("skill_loaded", "name")` for each |
@@ -196,9 +201,8 @@ anchor("learning", "assess", outcome="observations_recorded",
    observation_ids=[observation["item"]["item_id"]])
 ```
 
-`assess` accepts a disposition and IDs, not observation content. Legacy `anchor("learn",
-session_events=[...])` is compatibility-only for historical recovery that technically
-requires the old payload. Do not use memory as a substitute for project evidence or defect authority:
+`assess` accepts a disposition and IDs, not observation content. Do not use memory as a
+substitute for project evidence or defect authority:
 
 - reusable cross-project lesson → structured Observation
 - project-specific run result or environment deviation → managed evidence artifact
@@ -215,7 +219,7 @@ anchor("checkpoint", label="feature_name",
    learning_assessment={"outcome": "nothing_reusable_learned"})
 ```
 When observations exist, pass genuine `learning_captures` and assess their returned
-IDs. `learn_events=` remains compatibility-only; do not invent an event.
+IDs. Do not invent an observation merely to satisfy closure.
 
 ## New Session Template
 

@@ -97,9 +97,8 @@ Every `anchor("action", ...)` call, where it lives in the codebase, and what it 
 | `memory` | `codebase/` | Load relevant prior session learnings |
 | `save` | `codebase/` | Append a finding to memory bank |
 | `memory promotion` | `codebase/` | Typed-verifier promotion, or governed owner-presence activation then confirmation for conventions/preferences |
-| `confirm` | `codebase/` | Blocked legacy compatibility: returns `confirmation_blocked` and does not promote |
 | `reject` | `codebase/` | Reject a pending memory entry |
-| `learn` | `codebase/` | Compatibility-only historical recovery when old persisted debt technically requires it; normal route is `learning capture/assess` |
+| `learning` | `codebase/` | Capture observations and assess the task's structured learning obligation |
 
 ---
 

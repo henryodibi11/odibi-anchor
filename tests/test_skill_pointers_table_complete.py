@@ -378,11 +378,7 @@ def test_planning_guidance_orders_pre_task_evidence_before_accepted_task_memory(
     memory_runtime = (
         ROOT / "src" / "odibi_anchor" / "codebase" / "memory_context.py"
     ).read_text(encoding="utf-8")
-    learn_runtime = (
-        ROOT / "src" / "odibi_anchor" / "codebase" / "learn_context.py"
-    ).read_text(encoding="utf-8")
     assert "MUST: If you solve a novel problem" not in memory_runtime
-    assert "MUST: Call memory_context at next session start" not in learn_runtime
 
     boot_runtime = (
         ROOT / "src" / "odibi_anchor" / "_dispatcher" / "_boot.py"

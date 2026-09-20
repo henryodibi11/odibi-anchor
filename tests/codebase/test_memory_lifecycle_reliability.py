@@ -89,37 +89,6 @@ def test_memory_dispatcher_allows_explicit_surface_telemetry(tmp_path):
     ).fetchone()[0] == 1
 
 
-def test_learn_novelty_lookup_is_not_a_surface_event(tmp_path, monkeypatch):
-    import importlib
-    from odibi_anchor.codebase.learn_context import learn_context
-    memory_module = importlib.import_module("odibi_anchor.codebase.memory_context")
-
-    db = str(tmp_path / "memory.db")
-    existing = _entry(db, "Error: socket timeout while loading data -> Fix: retry safely")
-    calls = []
-    real_memory_context = memory_module.memory_context
-
-    def spy_memory_context(*args, **kwargs):
-        calls.append(kwargs.copy())
-        return real_memory_context(*args, **kwargs)
-
-    monkeypatch.setattr(memory_module, "memory_context", spy_memory_context)
-    learn_context(
-        tmp_path,
-        session_events=[{
-            "type": "error", "resolved": True,
-            "text": "socket timeout while loading data", "fix": "retry safely",
-        }],
-        db_path=db,
-        project="proj",
-    )
-
-    assert calls and calls[0]["surfaced"] is False
-    assert get_db(db).execute(
-        "SELECT surface_count FROM memories WHERE id=?", (existing,)
-    ).fetchone()[0] == 0
-
-
 def test_explicit_lifecycle_and_confirmation_telemetry(tmp_path):
     db = str(tmp_path / "memory.db")
     confirmed = _entry(db)
