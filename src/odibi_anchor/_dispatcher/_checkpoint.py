@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 def checkpoint(anchor_fn, session_files_changed, session_state, *args, **kwargs) -> dict | str:
@@ -95,6 +96,12 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
     if not structured:
         structured = True
         learning_assessment = {"outcome": "nothing_reusable_learned"}
+    assert isinstance(learning_assessment, dict)
+    raw_observation_ids = learning_assessment.get("observation_ids", [])
+    if not isinstance(raw_observation_ids, list) or any(
+        not isinstance(item, str) for item in raw_observation_ids
+    ):
+        raise TypeError("learning_assessment observation_ids must be a list of strings")
 
     # Validate skip_test: only allowed when no .py files were changed
     if skip_test and any(f.endswith(".py") for f in session_files_changed):
@@ -221,16 +228,17 @@ def _checkpoint_impl(anchor_fn, session_files_changed, session_state, *args, **k
             checkpoint_marker["obligation_id"] = obligation["obligation_id"]
             session_state.learning_obligation_id = obligation["obligation_id"]
             checkpoint_marker["learn_started"] = True
-            observation_ids = set(learning_assessment.get("observation_ids", []))
+            observation_ids: set[str] = set(raw_observation_ids)
             capture_results = []
             for capture in learning_captures:
                 captured = anchor_fn("learning", "capture", output_format="dict", **capture)
                 capture_results.append(captured)
                 item = captured.get("item", {}) if isinstance(captured, dict) else {}
-                if item.get("item_id"):
-                    observation_ids.add(item["item_id"])
+                item_id = item.get("item_id") if isinstance(item, dict) else None
+                if isinstance(item_id, str):
+                    observation_ids.add(item_id)
             normalized_observation_ids = sorted(observation_ids)
-            assessment_payload = dict(learning_assessment)
+            assessment_payload: dict[str, Any] = dict(learning_assessment)
             if assessment_payload.get("outcome") == "observations_recorded":
                 assessment_payload["observation_ids"] = normalized_observation_ids
             step_results["learning_captures"] = capture_results

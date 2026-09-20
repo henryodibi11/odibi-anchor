@@ -27,11 +27,12 @@ launcher returns a ready startup packet.
 
    | Condition | Exact action |
    |---|---|
-   | Package missing or version must change | Execute the exact pinned `%pip install` remediation, restart Python once, then rerun the launcher. |
+   | Package missing or version must change | Execute the launcher's exact pinned latest-stable `%pip install` remediation, restart Python once, then rerun the launcher. |
    | Fresh Python process with the correct package | Run the launcher once. Do not reinstall or restart. |
    | Healthy runtime, new logical task | Call `new_session`; do not reinstall, restart, rerun `setup_host`, or re-bootstrap. |
    | Initial host setup, released-guidance reconciliation after upgrade, or diagnosed drift | Run `setup_host`, then launch in the current fresh process unless installation itself required a restart. |
 
+   After installation, run `dbutils.library.restartPython()` exactly once.
    Never guess a version or use an unrecorded moving install. The launcher verifies
    distribution/runtime agreement. Restarting is required after installation or upgrade, not
    after ordinary setup, bootstrap, session creation, or task completion.

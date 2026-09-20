@@ -12,7 +12,7 @@ it closes over ~20 session-state variables and is the natural product of init().
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -823,7 +823,7 @@ _ACTION_DETAILS: dict[str, list[str]] = {
 
 def build_help_text(
     target: str | None,
-    action_funcs: dict[str, Callable[..., Any]] | None = None,
+    action_funcs: Mapping[str, Callable[..., Any]] | None = None,
 ) -> str:
     """Build the help text for anchor("help") or anchor("help", "action_name").
 
@@ -859,7 +859,7 @@ def build_help_text(
 
 def _build_action_detail(
     target: str,
-    action_funcs: dict[str, Callable[..., Any]] | None,
+    action_funcs: Mapping[str, Callable[..., Any]] | None,
 ) -> str:
     """Build detailed help for a single action."""
     has_sig = bool(action_funcs and target in action_funcs)

@@ -309,7 +309,6 @@ def init(
         promote_by_sessions_seen as _db_promote_by_sessions_seen,
         add_tag_to_entry as _db_add_tag_to_entry,
         count_similar_entries as _db_count_similar_entries,
-        insert_audit as _db_insert_audit,
         query_audits as _db_query_audits,
         audit_trend as _db_audit_trend,
         _DEFAULT_DB_PATH,
@@ -393,7 +392,6 @@ def init(
         _status as _status_impl, _audit_history as _audit_history_impl,
     )
     from odibi_anchor._dispatcher._session_health import (
-        capture_session_health as _capture_session_health,
         check_cross_session_drift as _check_cross_session_drift,
         session_delta_context as _session_delta_context_impl,
     )

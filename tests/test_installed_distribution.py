@@ -2091,9 +2091,12 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
     legacy_active = run_probe("legacy-setup", legacy_home)
     assert legacy_active["active"]["status"] == "active"
     restarted_closed = run_probe("restart-close", legacy_home)
-    assert restarted_closed["assessed"]["assessment"]["outcome"] == "nothing_reusable_learned"
-    assert restarted_closed["exported"]["obligations"][-1]["status"] == "assessed"
-    assert restarted_closed["exported"]["items"] == []
+    restarted_assessed = cast(dict[str, Any], restarted_closed["assessed"])
+    restarted_assessment = cast(dict[str, Any], restarted_assessed["assessment"])
+    restarted_exported = cast(dict[str, Any], restarted_closed["exported"])
+    assert restarted_assessment["outcome"] == "nothing_reusable_learned"
+    assert restarted_exported["obligations"][-1]["status"] == "assessed"
+    assert restarted_exported["items"] == []
 
     # Stateful CLI batch and shell preserve one JSON result per request and exit zero.
     for transport in ("batch", "shell"):

@@ -332,11 +332,9 @@ def test_public_task_before_change_lifecycle_pays_planning(tmp_path, monkeypatch
     anchor("test", target="tests", output_format="dict")
     gate = anchor("gate", output_format="dict")
     anchor(
-        "learn",
-        session_events=[{
-            "type": "discovery",
-            "detail": "The accepted task paid planning through exact timing provenance.",
-        }],
+        "learning", "assess",
+        outcome="nothing_reusable_learned",
+        notes="The test exercises lifecycle accounting without a reusable observation.",
         output_format="dict",
     )
 

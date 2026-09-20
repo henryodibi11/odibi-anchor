@@ -3,6 +3,11 @@
 All imports are lazy-loaded via __getattr__ to avoid ~530ms FUSE latency at boot.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from odibi_anchor.codebase.memory_context import append_memory, reject_memory
+
 # Module → exported names mapping
 _LAZY_MODULES = {
     "codebase_map_context": ("odibi_anchor.codebase.codebase_map_context",
