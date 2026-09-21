@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.19"
+python -m pip install "odibi-anchor==0.3.20"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.19"
+python -m pip install "odibi-anchor[mcp]==0.3.20"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.19"
+%pip install "odibi-anchor[databricks]==0.3.20"
 dbutils.library.restartPython()
 ```
 
@@ -96,6 +96,11 @@ latest-stable install and Python-restart remediation; run it and rerun the same 
 The `anchor` callable is process-bound and comes from the launcher namespace (or the return
 value of `odibi_anchor.launch()`); `from odibi_anchor import anchor` is intentionally unsupported.
 Run doctor only when additional startup diagnostics are needed.
+
+On Databricks shared/serverless compute, the configured `local_state_root` remains a stable
+user-specific base. Managed preparation selects an effective-UID-isolated physical root and uses
+verified v2 snapshots when compute identities change; do not persist transient UIDs in the
+portfolio or repair ownership with broad permissions.
 
 Host setup refuses to overwrite an existing user-owned `.assistant` tree. The setup guide explains
 both safe choices: retain existing guidance under a dedicated Anchor instruction root, or remove an

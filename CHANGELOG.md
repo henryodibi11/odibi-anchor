@@ -2,6 +2,23 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.20] - 2026-09-21
+
+### Changed
+
+- Databricks portfolios now keep a stable user-specific local-state base while managed preparation
+  selects a physical runtime root isolated by effective UID and OS-account fingerprint.
+- Startup packets expose the configured and physical local-state roots, compute UID, selection,
+  and one-time legacy migration status for auditable recovery.
+
+### Fixed
+
+- Databricks compute identity recycling no longer blocks startup on a prior identity's protected
+  local state or requires repeated portfolio rewrites; inaccessible legacy roots remain untouched
+  while verified v2 snapshots restore database, artifacts, and continuity into the current root.
+- Accessible pre-0.3.20 local state migrates atomically to the identity-isolated root, preventing a
+  recycled UID from later reopening stale state at the configured base.
+
 ## [0.3.19] - 2026-09-20
 
 ### Changed
@@ -389,3 +406,4 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.17]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.17
 [0.3.18]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.18
 [0.3.19]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.19
+[0.3.20]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.20

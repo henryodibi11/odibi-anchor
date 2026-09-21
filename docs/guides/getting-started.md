@@ -93,9 +93,13 @@ assert portfolio["validation"]["status"] == "valid", portfolio
 
 `scaffold_portfolio` refuses to overwrite an existing portfolio. Keep this file at
 `<instruction_root>/.odibi-anchor/anchor.toml`: that is the managed launcher's default persistent
-location. A plain Workspace directory is sufficient for artifact-only work. For source changes,
-create the project target as a Databricks Git Folder instead so Anchor can attest repository
-identity and bounded diffs.
+location. `local_state_root` is a stable logical base: on shared/serverless compute the launcher
+uses a physical root isolated by effective UID and OS-account fingerprint, then restores verified
+v2 state when the compute identity changes. Do not rewrite the portfolio with each observed UID.
+A plain
+Workspace directory is sufficient for artifact-only work. For source changes, create the project
+target as a Databricks Git Folder instead so Anchor can attest repository identity and bounded
+diffs.
 
 ### 3. Resolve an unmanaged-guidance collision safely
 

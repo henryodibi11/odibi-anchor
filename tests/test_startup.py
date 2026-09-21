@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -75,6 +76,13 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
             "ANCHOR_AUTHORITY_ID": "owner", "ANCHOR_TRUST_DOMAIN": "work",
             "ANCHOR_PROJECT_ID": "alpha", "ANCHOR_PROJECT_ROOT": str(target),
         },
+        "local_state": {
+            "configured_root": str(home), "runtime_root": str(home),
+            "selection": "configured", "compute_uid": None,
+            "compute_identity": None,
+            "configured_root_status": "not_applicable",
+            "migration": "not_applicable",
+        },
         "target_root": str(target), "restore": {"action": "not_applicable"},
     }
     observed = {}
@@ -110,6 +118,7 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
         "host_id": "local", "target_root": str(target), "artifact_root": str(artifact),
         "binding_source": "explicit",
         "guidance": {"status": "unchanged", "verified_files": 92, "verified_skills": 18},
+        "local_state": prepared["local_state"],
         "restore": {"action": "not_applicable"}, "project_created": False,
         "portfolio_change": None, "durable_checkpoint": None,
         "managed_artifact_actions": result["orientation"]["managed_artifact_actions"],
@@ -202,6 +211,13 @@ def test_bootstrap_managed_project_explicit_creation_checkpoints_state(
             "ANCHOR_AUTHORITY_ID": "owner", "ANCHOR_TRUST_DOMAIN": "work",
             "ANCHOR_PROJECT_ID": "new-project", "ANCHOR_PROJECT_ROOT": str(target),
             "ANCHOR_DURABLE_ROOT": str(durable),
+        },
+        "local_state": {
+            "configured_root": str(home), "runtime_root": str(home),
+            "selection": "configured", "compute_uid": None,
+            "compute_identity": None,
+            "configured_root_status": "not_applicable",
+            "migration": "not_applicable",
         },
         "target_root": str(target), "restore": {"action": "created"},
     }
@@ -624,6 +640,166 @@ def test_prepare_portfolio_runtime_relocates_continuity_to_new_local_state_root(
     assert status["runtime"]["route_binding"]["project_id"] == "alpha"
 
 
+def test_prepare_databricks_runtime_restores_v2_into_current_identity_root(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    configured_state = tmp_path / "state"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    register_project(anchor_home=configured_state, project_id="alpha", project_root=target)
+    database = configured_state / ".agent_memory.db"
+    projects = configured_state / "workspace" / "projects"
+    recovered_record = projects / "alpha" / "problems" / "P-1.md"
+    recovered_record.parent.mkdir(parents=True, exist_ok=True)
+    recovered_record.write_text("# Recovered\n")
+    durability.ensure_database_authority(
+        database, authority_id="work", trust_domain="work", initialize=True
+    )
+    snapshot = durability.snapshot_state(
+        source_db=database,
+        source_artifacts=projects,
+        durable_root=durable,
+        authority_id="work",
+    )
+    simulated_uid = os.geteuid() + 10_000
+    compute_identity = "current12345"
+    runtime_state = Path(
+        f"{configured_state}.identity-{simulated_uid}-{compute_identity}"
+    )
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"serverless": {
+                "adapter": "databricks", "local_state_root": str(configured_state),
+                "durable_root": "/Volumes/catalog/schema/anchor",
+            }},
+            "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+            "personas": {},
+        },
+    )
+    actual_restore = durability.restore_latest
+    monkeypatch.setattr(
+        startup_module, "_databricks_compute_identity",
+        lambda: (simulated_uid, compute_identity),
+    )
+    monkeypatch.setattr(durability, "qualify_durability", lambda **_kwargs: None)
+
+    def restore_from_test_storage(**kwargs):
+        return actual_restore(
+            durable_root=durable,
+            destination_db=kwargs["destination_db"],
+            destination_artifacts=kwargs["destination_artifacts"],
+            authority_id=kwargs["authority_id"],
+        )
+
+    monkeypatch.setattr(durability, "restore_latest", restore_from_test_storage)
+
+    result = prepare_portfolio_runtime(
+        config_path=config, host_id="serverless", project_id="alpha"
+    )
+
+    assert result["environment"]["ANCHOR_HOME"] == str(runtime_state)
+    assert result["environment"]["ANCHOR_MEMORY_DB"] == str(
+        runtime_state / ".agent_memory.db"
+    )
+    assert result["local_state"] == {
+        "configured_root": str(configured_state),
+        "runtime_root": str(runtime_state),
+        "selection": "identity_isolated",
+        "compute_uid": simulated_uid,
+        "compute_identity": compute_identity,
+        "configured_root_status": "different_identity",
+        "migration": "not_required",
+    }
+    assert result["restore"]["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert (runtime_state / "workspace" / "projects" / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
+    assert recovered_record.read_text() == "# Recovered\n"
+
+
+def test_prepare_databricks_runtime_fails_closed_when_identity_root_is_unowned(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    configured_state = tmp_path / "state"
+    target.mkdir()
+    configured_state.mkdir()
+    simulated_uid = os.geteuid() + 10_000
+    compute_identity = "current12345"
+    runtime_state = Path(
+        f"{configured_state}.identity-{simulated_uid}-{compute_identity}"
+    )
+    runtime_state.mkdir()
+    write_portfolio(
+        config,
+        {
+            "schema_version": 1,
+            "authority": {"id": "work", "trust_domain": "work"},
+            "hosts": {"serverless": {
+                "adapter": "databricks", "local_state_root": str(configured_state),
+                "durable_root": "/Volumes/catalog/schema/anchor",
+            }},
+            "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+            "personas": {},
+        },
+    )
+    monkeypatch.setattr(
+        startup_module, "_databricks_compute_identity",
+        lambda: (simulated_uid, compute_identity),
+    )
+    monkeypatch.setattr(durability, "qualify_durability", lambda **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="identity-isolated local state root") as caught:
+        prepare_portfolio_runtime(
+            config_path=config, host_id="serverless", project_id="alpha"
+        )
+
+    recovery_error = cast(Any, caught.value)
+    assert recovery_error.error_code == "databricks_local_state_identity_collision"
+    assert recovery_error.context == {
+        "configured_root": str(configured_state),
+        "runtime_root": str(runtime_state),
+        "compute_uid": simulated_uid,
+        "compute_identity": compute_identity,
+        "runtime_root_status": "different_identity",
+    }
+    assert recovery_error.next_operations == []
+
+
+def test_databricks_runtime_root_changes_when_account_changes_under_recycled_uid(
+    tmp_path, monkeypatch
+):
+    environment = {
+        "ANCHOR_HOME": str(tmp_path / "state"),
+        "ANCHOR_MEMORY_DB": str(tmp_path / "state" / ".agent_memory.db"),
+    }
+    monkeypatch.setattr(
+        startup_module, "_databricks_compute_identity", lambda: (9763, "first1234567")
+    )
+    first, _first_state = startup_module._runtime_environment(
+        environment, adapter="databricks"
+    )
+    monkeypatch.setattr(
+        startup_module, "_databricks_compute_identity", lambda: (9763, "second123456")
+    )
+    second, _second_state = startup_module._runtime_environment(
+        environment, adapter="databricks"
+    )
+
+    assert first["ANCHOR_HOME"] != second["ANCHOR_HOME"]
+    assert first["ANCHOR_HOME"].endswith(".identity-9763-first1234567")
+    assert second["ANCHOR_HOME"].endswith(".identity-9763-second123456")
+
+
 @pytest.mark.parametrize("remove", ["database", "projects"])
 def test_prepare_portfolio_runtime_refuses_partial_local_v2_state(tmp_path, remove):
     from odibi_anchor import durability
@@ -751,9 +927,14 @@ def test_prepare_databricks_runtime_and_launch_use_sdk_without_volume_fuse(
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
 
-    anchor = launch(anchor_home=state, project_id="alpha", project_root=target)
+    anchor = launch(
+        anchor_home=result["environment"]["ANCHOR_HOME"],
+        project_id="alpha",
+        project_root=target,
+    )
 
     assert result["restore"] == {"status": "restored", "snapshot_id": "one"}
+    assert result["local_state"]["selection"] == "identity_isolated"
     assert callable(anchor)
     assert [name for name, _ in calls] == ["qualify", "restore"]
     assert all(arguments["databricks"] is True for _, arguments in calls)
@@ -842,9 +1023,15 @@ def test_prepare_databricks_runtime_skips_remote_snapshot_io_when_local_state_is
         config_path=config, host_id="serverless", project_id="alpha",
     )
 
+    runtime_state = Path(result["environment"]["ANCHOR_HOME"])
     assert result["restore"] == {
         "status": "not_applicable", "reason": "local database already exists",
     }
+    assert result["local_state"]["migration"] == "moved_configured_root"
+    assert runtime_state.name.startswith(f"{state.name}.identity-{os.geteuid()}-")
+    assert len(result["local_state"]["compute_identity"]) == 12
+    assert not state.exists()
+    assert (runtime_state / ".agent_memory.db").is_file()
 
 
 def test_prepare_portfolio_runtime_refuses_existing_unowned_database(tmp_path):
@@ -945,12 +1132,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.19"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.20"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.19"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.20"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -1040,7 +1227,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
     shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
     payload = {
         "releases": {
-            "0.3.19": [{"yanked": False}],
+            "0.3.20": [{"yanked": False}],
             "0.4.0rc1": [{"yanked": False}],
             "9.9.9": [{"yanked": True}],
         }
@@ -1057,7 +1244,7 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
         runpy.run_path(str(launcher))
 
     message = str(raised.value)
-    assert '%pip install "odibi-anchor[databricks]==0.3.19"' in message
+    assert '%pip install "odibi-anchor[databricks]==0.3.20"' in message
     assert "dbutils.library.restartPython()" in message
     assert "0.4.0rc1" not in message
     assert "9.9.9" not in message
