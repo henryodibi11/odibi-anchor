@@ -15,11 +15,16 @@ anchor portfolio scaffold \
 anchor portfolio validate --config /absolute/private/path/anchor.toml --host databricks-work
 ```
 
-For Databricks, configure `local_state_root` on local compute and `durable_root` on
-approved durable storage. On shared/serverless compute, use a stable user-specific path
-(for example `/tmp/odibi-anchor-hodibi`) rather than a generic path another OS user can own.
-Never use a live SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository`
-and `artifact_namespace` are optional metadata; exact host/project targets are routing authority.
+For Databricks, configure `local_state_root` as a stable user-specific local-compute base and
+`durable_root` on approved durable storage. On shared/serverless compute, use a base such as
+`/tmp/odibi-anchor-hodibi`, not a generic path. The managed preparation path derives the physical
+runtime root from the effective UID and a non-reversible OS-account fingerprint without mutating
+the portfolio. This prevents a recycled numeric UID from reopening stale local state. It
+atomically migrates an accessible pre-0.3.20 base once; if the base belongs to a prior compute
+identity, it leaves that directory untouched and restores the current identity from the latest
+verified v2 snapshot. Never append ephemeral UIDs to the portfolio yourself. Never use a live
+SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository` and
+`artifact_namespace` are optional metadata; exact host/project targets are routing authority.
 
 To bound snapshot accumulation, opt into portfolio-wide automatic retention through the
 guarded public API. Do not edit the TOML or snapshot storage directly:

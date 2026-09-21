@@ -112,9 +112,13 @@ launcher returns a ready startup packet.
    Do not set `ANCHOR_HOME` manually, map `ANCHOR_DURABLE_ROOT` to it, or probe the durable
    Volume through FUSE. Preparation keeps live state on local compute and restores immutable
    snapshots through the Databricks Files API. Apply every returned environment field exactly.
-   On shared/serverless compute, configure a stable user-specific local state path rather than
-   a generic `/tmp/odibi-anchor` path that another OS user can own. A verified v2 restore safely
-   relocates continuity records when that configured local path changes.
+   On shared/serverless compute, configure a stable user-specific local state base rather than
+   a generic `/tmp/odibi-anchor` path. The launcher derives a physical root from the effective UID
+   and a non-reversible OS-account fingerprint so recycled numeric UIDs never reopen another
+   identity's live SQLite state.
+   It atomically migrates an accessible legacy base once; when the base belongs to a prior
+   identity, a verified v2 restore safely relocates database, artifact, and continuity state.
+   Do not persist an ephemeral UID in the portfolio or update the portfolio after each restart.
    Other hosts may use `anchor portfolio prepare --config <path> --host <id> --project <id>`.
    The `anchor` callable comes from the launcher namespace or `launch()` return value; never
    attempt `from odibi_anchor import anchor`.
