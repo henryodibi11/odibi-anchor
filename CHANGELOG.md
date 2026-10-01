@@ -2,6 +2,26 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.21] - 2026-10-01
+
+### Fixed
+
+- Gate-time managed-artifact boundaries now use the accepted execution mode, including
+  explicit artifact-only implementation tasks and documentation tasks.
+- Pytest isolation preserves mandatory installed-distribution qualification and offline
+  wheelhouse controls while removing Anchor routing variables.
+- Dirty-worktree recovery requests missing semantic inputs through `prepare` rather than
+  suggesting an incomplete task invocation.
+- Memory-ID Markdown rendering uses the entry renderer, and help describes project-scoped lookup.
+- Problem Record validation preserves reader defaults and exposes malformed records in Markdown.
+
+### Changed
+
+- Every accepted task projects explicit source-authority status, capabilities, and actionable
+  guidance. Non-source modes do not probe Git or repository providers.
+- Non-Git and rejected Git Folder diagnostics show the managed-artifact route and source-change
+  prerequisites. Plain non-Git source editing remains blocked; no permissions are broadened.
+
 ## [0.3.20] - 2026-09-21
 
 ### Changed

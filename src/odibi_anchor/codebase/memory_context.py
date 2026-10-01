@@ -83,8 +83,14 @@ def _get_current_session_id() -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _format_memory_entry(result: dict[str, Any], output_format: str) -> str:
-    """Render an exact-id lookup. Only markdown reaches here; toon is dispatcher-side."""
+def render_memory_entry_report(result: dict[str, Any]) -> str:
+    """Render an exact-id lookup as markdown.
+
+    Public because the dispatcher has to pick a renderer by result kind. An id
+    lookup returns `kind="memory_entry"`, which carries neither the `summary` nor
+    the `metrics` a relevance query produces, so `render_memory_report` raises
+    `KeyError: 'summary'` on it. The two shapes need two renderers.
+    """
     if not result["found"]:
         return f"# Memory {result['memory_id']}\n\nNot found. {result.get('reason', '')}".rstrip()
     entry = result["entries"][0]
@@ -197,7 +203,7 @@ def memory_context(
             )
         if output_format == "dict":
             return result
-        return _format_memory_entry(result, output_format)
+        return render_memory_entry_report(result)
 
     # Build status filter. Explicit inspection is validated rather than using
     # ``None`` (which means the normal retrievable statuses in query_memories).

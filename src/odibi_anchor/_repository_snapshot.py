@@ -206,6 +206,68 @@ def databricks_repository_capabilities() -> dict[str, str]:
     return dict(_DATABRICKS_CAPABILITIES)
 
 
+def source_authority_guidance() -> dict[str, str]:
+    """Describe explicit routes, without probing or changing source authority."""
+    return {
+        "boundary": (
+            "artifact_only cannot write target source; source changes require canonical local "
+            "Git or an attested Databricks Git Folder. Git Folder conversion is only needed "
+            "for source changes, not managed-artifact deliverables. Never relabel source as artifacts."
+        ),
+        "artifact_only_invocation": (
+            'anchor("task", "<description>", goal="<goal>", mode="implementation", '
+            'work_type="change", execution_mode="artifact_only", '
+            'acceptance_criteria=["<completion check>"])'
+        ),
+        "local_git_prerequisites": (
+            "Use an existing or explicitly approved clone at the canonical Git worktree root, "
+            "with a clean task-start worktree; request execution_mode=\"source_change\"."
+        ),
+        "git_folder_prerequisites": (
+            "Use an attested Databricks Git Folder, not a plain Workspace DIRECTORY. Supply "
+            "an explicit repository_provider at init, then non-empty repository_scope and "
+            "accept_unknown_git_state=True on the task. Local Git cleanliness, history, "
+            "merge-base, and PR readiness remain unavailable."
+        ),
+        "git_folder_invocation": (
+            'anchor("task", "<description>", goal="<goal>", mode="implementation", '
+            'work_type="change", execution_mode="source_change", '
+            'repository_scope=["<relative-source-path>"], accept_unknown_git_state=True, '
+            'acceptance_criteria=["<completion check>"])'
+        ),
+    }
+
+
+def task_source_authority(execution_mode: str, baseline: Any) -> dict[str, Any]:
+    """Project only captured authority; non-source tasks do not probe providers."""
+    if execution_mode != "source_change":
+        status = "not_requested"
+        reason = "This execution mode did not request a source baseline; capabilities were not probed."
+        capabilities = {key: "not_requested" for key in _DATABRICKS_CAPABILITIES}
+    elif is_databricks_git_folder_baseline(baseline):
+        status = "available_databricks_git_folder"
+        reason = "Host identity and scoped task-start bytes captured; local Git state is unknown."
+        capabilities = databricks_repository_capabilities()
+    elif isinstance(baseline, (TaskRepositoryBaseline, UnbornTaskRepositoryBaseline)):
+        status = "available_local_git"
+        reason = "Canonical local Git baseline captured; PR readiness requires separate verification."
+        capabilities = {key: "available" for key in _DATABRICKS_CAPABILITIES}
+        capabilities["host_repository_identity"] = "unavailable"
+        capabilities["pr_readiness"] = "not_verified"
+        if isinstance(baseline, UnbornTaskRepositoryBaseline):
+            capabilities["merge_base_and_history"] = "unavailable"
+    else:
+        status = "unavailable"
+        reason = "No source baseline was captured."
+        capabilities = {key: "unavailable" for key in _DATABRICKS_CAPABILITIES}
+    return {
+        "status": status,
+        "reason": reason,
+        "capabilities": capabilities,
+        "guidance": source_authority_guidance(),
+    }
+
+
 def _databricks_block(reason: str) -> RuntimeError:
     return RuntimeError(
         "BLOCKED: Databricks Git Folder source evidence is insufficient: "
@@ -214,7 +276,8 @@ def _databricks_block(reason: str) -> RuntimeError:
         "staged/unstaged/untracked state, conflicts, merge-base, history, and PR readiness "
         "remain unavailable. "
         "Operations that do not consume task-source evidence may remain available under their "
-        "normal task policy."
+        "normal task policy. "
+        + " ".join(source_authority_guidance().values())
     )
 
 
@@ -251,6 +314,11 @@ def _provider_identity(
     try:
         raw = capture(target_worktree)
     except Exception as exc:
+        # Only this fixed public contract diagnostic is safe to project. Arbitrary
+        # provider exceptions may contain credentials or private API responses.
+        # ContractError derives from ValueError; bootstrap may reload its class.
+        if isinstance(exc, ValueError) and str(exc) == "workspace path is not a Databricks Git Folder":
+            raise _databricks_block("provider rejected the target: not a Databricks Git Folder") from exc
         raise _databricks_block("read-only host identity acquisition failed") from exc
     required_names = ("repository_id", "workspace_path", "branch", "head_sha", "remote_url")
     names = (*required_names, "git_provider")
@@ -540,11 +608,12 @@ def _dirty_worktree_block(
         ))
     next_operations.append(
         dispatcher_operation(
-            "task",
-            kwargs={"mode": "planning"},
+            "prepare",
+            kwargs={"operation": "task.create", "inputs": {"mode": "planning"}},
             reason=(
                 "if the intended work writes only managed artifacts and no source, "
-                "use an artifact-only mode instead of claiming source-change authority"
+                "prepare an artifact-only task and supply its description, goal and scope "
+                "instead of claiming source-change authority"
             ),
         )
     )
@@ -1056,7 +1125,8 @@ def _task_git(
             "explicit repository provider with task-scoped evidence. The target path is known, "
             "but branch, HEAD, working-tree status, changed paths, merge-base, and history are "
             "unavailable. Read-only orientation/analysis and approved managed-artifact operations "
-            "remain allowed."
+            "remain allowed. "
+            + " ".join(source_authority_guidance().values())
         ) from exc
     if top != root:
         raise ValueError("target_worktree must be the canonical Git worktree root")

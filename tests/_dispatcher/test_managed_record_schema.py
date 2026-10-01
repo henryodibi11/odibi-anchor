@@ -121,8 +121,17 @@ def test_read_error_names_every_missing_field(malformed_problem):
     error: Any = excinfo.value
     missing = error.context["missing_fields"]
     assert "problem_id" in missing, "the reported case renamed problem_id to id"
-    for field in ("stage", "rigor_level", "revision", "created_at", "updated_at", "next_action"):
+    # Only fields with no reader default are missing. This assertion used to demand
+    # `stage`, `rigor_level`, `revision` and `next_action` as well, which is what
+    # made records omitting them fail even though the reader has always supplied a
+    # documented default for each.
+    # The fixture supplies `title` and `status`, so the undefaulted absentees are:
+    for field in ("project_id", "created_at", "updated_at"):
         assert field in missing
+    for defaulted in ("stage", "rigor_level", "revision", "next_action"):
+        assert defaulted not in missing, (
+            f"{defaulted} has a reader default and must not be reported missing"
+        )
 
 
 def test_read_error_carries_a_copy_ready_repair_call(malformed_problem):

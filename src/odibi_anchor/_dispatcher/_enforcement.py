@@ -541,24 +541,10 @@ def should_block_gate_learn(timings: list[dict]) -> tuple[bool, str]:
     return False, ""
 
 
-def _read_only_legacy_modes() -> frozenset[str]:
-    """Legacy mode names whose declared execution mode forbids any file change.
-
-    Derived rather than listed. The previous hardcoded set named `planning`,
-    `decision` and `retrospective`, all of which declare `artifact_only` — so modes
-    whose purpose is writing managed records were rejected at gate for writing
-    them, leaving no way to deliver artifact-only work (issue #13).
-    """
-    from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
-
-    return frozenset(
-        name for name, defaults in _LEGACY_DEFAULTS.items() if defaults[1] == "read_only"
-    )
-
-
 def should_block_mode_mismatch(
     timings: list[dict], files_changed: set[str], *,
     artifact_root: str | None = None, target_root: str | None = None,
+    execution_mode: str | None = None,
 ) -> tuple[bool, str]:
     """Reject file delivery incompatible with the latest task mode.
 
@@ -579,9 +565,12 @@ def should_block_mode_mismatch(
     planned_mode = last_task.get("task_mode", "planning") if last_task else None
     from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
 
-    defaults = _LEGACY_DEFAULTS.get(planned_mode) if planned_mode else None
-    execution_mode = defaults[1] if defaults else None
-    if execution_mode == "artifact_only" and planned_mode != "documentation":
+    # The accepted profile is authoritative, including explicit overrides. Legacy
+    # timing-only callers retain their defaults when no profile was captured.
+    if execution_mode is None:
+        defaults = _LEGACY_DEFAULTS.get(planned_mode) if planned_mode else None
+        execution_mode = defaults[1] if defaults else None
+    if execution_mode == "artifact_only":
         from odibi_anchor._utils._session_state import is_managed_artifact_path
 
         invalid = sorted(
@@ -598,12 +587,12 @@ def should_block_mode_mismatch(
                 "source-change task for repository files."
             )
         return False, ""
-    if planned_mode not in _read_only_legacy_modes():
+    if execution_mode != "read_only":
         return False, ""
     return True, (
         f"Mode mismatch — planned as '{planned_mode}' but files were modified.\n"
         f"Changed files: {sorted(files_changed)[:5]}\n"
-        f"'{planned_mode}' is a read-only mode. Re-run anchor(\"task\", goal=\"...\") with a\n"
+        f"The accepted execution mode is '{execution_mode}'. Re-run anchor(\"task\", goal=\"...\") with a\n"
         "mode that may write: an artifact_only mode such as \"documentation\" or \"planning\"\n"
         "for managed records, or \"implementation\" for source changes. Then re-run\n"
         "anchor(\"gate\")."

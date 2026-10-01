@@ -480,6 +480,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     # Codebase & Memory
     "memory":       [
         'anchor("memory", query="how do we handle nulls")  # accepted task context was insufficient',
+        'anchor("memory", memory_id="...")  # resolve an id handed to you by a blocking message',
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...")',
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...", provider="databricks_in_session")',
         'anchor("memory", "promotion", command="request_owner_confirmation", memory_id="...")',
@@ -786,6 +787,16 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`query`: use existing filters with `limit` and `offset` to page the final relevance-ranked '
         'matches. The response metrics include `total_matches`, `returned_count`, `offset`, '
         '`next_offset`, and `has_more`.',
+        '`memory_id`: retrieve one exact record with `anchor("memory", memory_id="...")`. Use it '
+        'when a blocking message or an assess projection decision hands you an id: a free-text '
+        '`query` for that id finds nothing, because the id is not part of the entry content. '
+        'This is a lookup, not a search: it is not relevance-ranked. It resolves only within '
+        'your authorized scope — the active project plus shared (`all`) memories, and only '
+        'retrievable statuses (`candidate`, `active`, `confirmed`). An id belonging to another '
+        'project, or to a retired or archived entry, reports as not found rather than crossing '
+        'that boundary. The result is '
+        '`{"kind": "memory_entry", "found": bool, "entries": [...], "count": int}`; an unknown id '
+        'returns `found=False` with empty `entries` and a `reason`, never an unrelated match.',
         '`apply`: identify one task selection with `selection_id` or `memory_id`; '
         'provide non-empty `action` and optional JSON-object `context`.',
         '`disposition`: identify one pending selection with `selection_id` or `memory_id`; '

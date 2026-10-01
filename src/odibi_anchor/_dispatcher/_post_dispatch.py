@@ -569,6 +569,12 @@ def run_post_dispatch(
                         session_state.target_root, config["default_target_ref"],
                         task_authority_context=recovery_context,
                     )
+        if isinstance(result, dict) and staged_profile is not None:
+            from odibi_anchor._repository_snapshot import task_source_authority
+
+            result["source_authority"] = task_source_authority(
+                staged_profile.execution_mode, task_baseline
+            )
         # Validate baseline qualification before any managed-record write. A
         # rejected task must leave no durable artifact or task-visible state.
         task_window_id = getattr(session_state, "task_window_id", None)

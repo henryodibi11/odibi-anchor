@@ -96,10 +96,51 @@ assert portfolio["validation"]["status"] == "valid", portfolio
 location. `local_state_root` is a stable logical base: on shared/serverless compute the launcher
 uses a physical root isolated by effective UID and OS-account fingerprint, then restores verified
 v2 state when the compute identity changes. Do not rewrite the portfolio with each observed UID.
-A plain
-Workspace directory is sufficient for artifact-only work. For source changes, create the project
-target as a Databricks Git Folder instead so Anchor can attest repository identity and bounded
-diffs.
+A plain Workspace directory is sufficient for managed-artifact work. Choose the task's
+`execution_mode` by its deliverable, not by whether `repository_evidence` is present:
+
+| Deliverable | Execution mode | Repository requirement |
+| --- | --- | --- |
+| Inspect, analyze, review | `read_only` | None; no source baseline or provider calls |
+| Only Anchor-managed artifacts | `artifact_only` | None; arbitrary target files are not artifacts |
+| Target source files | `source_change` | Canonical local Git, or an attested Databricks Git Folder |
+| Tables or other data | `data_change` | Separate data policy; does not grant source authority |
+
+For managed artifacts in a plain folder, after bootstrap and session creation:
+
+```python
+task = anchor("task", "<description>", goal="<goal>", mode="implementation",
+              work_type="change", execution_mode="artifact_only",
+              acceptance_criteria=["<completion check>"])
+```
+
+`artifact_only` cannot write target source. Gate rejects non-artifact target changes even
+when the legacy mode is `implementation`. Do not relabel source edits as artifacts or switch
+to documentation mode to bypass this boundary.
+
+For source edits, use an existing or explicitly approved clone at its canonical local Git
+worktree root with a clean task-start worktree. Alternatively, use a Databricks Git Folder
+and supply an explicit `repository_provider` at initialization, then:
+
+```python
+task = anchor("task", "<description>", goal="<goal>", mode="implementation",
+              work_type="change", execution_mode="source_change",
+              repository_scope=["<relative-source-path>"], accept_unknown_git_state=True,
+              acceptance_criteria=["<completion check>"])
+```
+
+The Git Folder route captures host identity and scoped task-start bytes, **not** local Git
+cleanliness, history, merge-base, or PR readiness. A provider that rejects a plain Workspace
+`DIRECTORY` does not grant source authority. If neither source route is available, stop and ask
+the owner; use artifacts only when they actually meet the goal. Git Folder conversion is only
+needed for source changes, not managed-artifact deliverables. No automatic conversion occurs.
+
+Every accepted task returns `source_authority` with `status`, `reason`, `capabilities`, and
+concrete `guidance`. Non-source modes report `not_requested` without probing Git or providers;
+this is not a claim that source authority is available or unavailable. Source tasks report
+`available_local_git` or `available_databricks_git_folder` only after baseline capture.
+Local Git `pr_readiness: not_verified` requires separate verification; it is not a passed check.
+Plain-folder source tasks remain blocked, with the managed-artifact invocation in the error.
 
 ### 3. Resolve an unmanaged-guidance collision safely
 

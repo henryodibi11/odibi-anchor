@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from odibi_anchor.pytest_runner import PRESERVED_ENV_NAMES
+
 # On Databricks, portfolio preparation sets ANCHOR_HOME to local compute while
 # ANCHOR_DURABLE_ROOT separately identifies durable snapshots. For the test session,
 # use a temp directory so tests never require external state configuration and
@@ -23,7 +25,11 @@ import pytest
 #
 # Tests that need specific routing pass an explicit environment to a subprocess,
 # which is unaffected by what the session sets here.
-for _name in [name for name in os.environ if name.startswith("ANCHOR_")]:
+# Suite controls must survive both subprocess launch and conftest initialization.
+for _name in [
+    name for name in os.environ
+    if name.startswith("ANCHOR_") and name not in PRESERVED_ENV_NAMES
+]:
     del os.environ[_name]
 _cw_test_root = tempfile.mkdtemp(prefix="odibi-anchor-tests-")
 _cw_test_home = os.path.join(_cw_test_root, "home")

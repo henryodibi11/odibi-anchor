@@ -1019,7 +1019,17 @@ def memory_action(
             for entry in result.get("entries", []):
                 if isinstance(entry, dict):
                     entry["available_operations"] = _memory_entry_operations(entry)
-        return render_fn(result) if saved_format == "markdown" else result
+        if saved_format != "markdown":
+            return result
+        # Pick the renderer by result kind. An exact-id lookup returns
+        # `kind="memory_entry"`, which has no `summary` or `metrics`, so handing it
+        # to the relevance-query renderer raised `KeyError: 'summary'` for both
+        # found and missing ids — the id lookup had no working markdown path at all.
+        if isinstance(result, dict) and result.get("kind") == "memory_entry":
+            from odibi_anchor.codebase.memory_context import render_memory_entry_report
+
+            return render_memory_entry_report(result)
+        return render_fn(result)
 
     payload = dict(kwargs)
     payload.pop("output_format", None)

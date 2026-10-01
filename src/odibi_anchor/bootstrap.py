@@ -91,6 +91,17 @@ def init(
             mode="implementation", work_type="change", and
             execution_mode="source_change"; stale agents must refresh and rerun the
             current bootstrap rather than fall back to documentation mode.
+            Choose by deliverable: inspection uses execution_mode="read_only";
+            only Anchor-managed artifacts use execution_mode="artifact_only";
+            target source edits use execution_mode="source_change". With no Git
+            and no provider, read-only and artifact-only tasks need no repository
+            evidence; source changes remain blocked. For managed artifacts use:
+            anchor("task", "<description>", goal="<goal>", mode="implementation",
+                   work_type="change", execution_mode="artifact_only",
+                   acceptance_criteria=["<completion check>"]).
+            artifact_only cannot write target source. Source changes require a
+            canonical local Git worktree or an attested Databricks Git Folder;
+            conversion is not needed for managed-artifact deliverables.
         rebind_task: Explicitly restore the newest open accepted task for the resolved
             project and target without recapturing or requiring a clean worktree.
         frame_enabled: Whether to enable the context frame for session tracking.

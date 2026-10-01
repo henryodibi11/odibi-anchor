@@ -48,6 +48,17 @@ class ManagedRecordSchema(NamedTuple):
     identifier_field: str | None
     create_call: str | None
     enforcement: str = ENFORCEMENT_READ
+    #: Fields the reader substitutes a documented default for. They are part of
+    #: the canonical form but their absence is not a violation, because records
+    #: omitting them parsed correctly long before this contract existed.
+    defaulted_fields: frozenset[str] = frozenset()
+
+
+def _problem_defaulted_fields() -> frozenset[str]:
+    """Derive the defaulted set from the reader, so the two cannot disagree."""
+    from odibi_anchor._dispatcher._problem import READER_DEFAULTS
+
+    return frozenset(READER_DEFAULTS)
 
 
 def _problem_required_fields() -> frozenset[str]:
@@ -82,6 +93,7 @@ def managed_record_schemas() -> dict[str, ManagedRecordSchema]:
             required_fields=_problem_required_fields(),
             identifier_field="problem_id",
             create_call='anchor("problem", "create", title="...", rigor_level=...)',
+            defaulted_fields=_problem_defaulted_fields(),
         ),
         "work_item": ManagedRecordSchema(
             kind="work_item",
@@ -131,8 +143,13 @@ def read_enforced_schemas() -> dict[str, ManagedRecordSchema]:
 
 
 def missing_required_fields(meta: dict[str, Any], schema: ManagedRecordSchema) -> list[str]:
-    """Return the canonical fields absent from this record's frontmatter."""
-    return sorted(schema.required_fields - set(meta))
+    """Return the canonical fields absent from this record's frontmatter.
+
+    Fields the reader defaults are not reported: the record parses correctly
+    without them, so calling it malformed would both reject working records and
+    make the snapshot scan disagree with what a read actually does.
+    """
+    return sorted(schema.required_fields - schema.defaulted_fields - set(meta))
 
 
 def repair_guidance(
