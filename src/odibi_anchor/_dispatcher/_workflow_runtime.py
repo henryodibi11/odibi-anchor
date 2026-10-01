@@ -15,13 +15,14 @@ from odibi_anchor.codebase._workflow import (
 )
 
 READ_COMMANDS = frozenset({"status", "prepare_delivery"})
-WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify",
+WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
                             "request_delivery_approval", "verify_delivery", "block", "resume", "cancel", "replan"})
 
 
 def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     request_id=None, expected_generation=None, plan=None, findings=None,
-                    reason=None, blocker_kind=None, resolution=None, output_format="dict"):
+                    reason=None, blocker_kind=None, resolution=None, criterion_id=None,
+                    output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
     Create returns a draft ID to bind at a fresh task acceptance via workflow_id.
@@ -35,9 +36,11 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     )
     from odibi_anchor._dispatcher._workflow_evidence import (
         _accepted_task,
+        collect_artifact_measurement,
         collect_candidate,
         collect_review,
         qualify_recorded,
+        validate_producer_policy,
     )
 
     if command not in READ_COMMANDS | WRITE_COMMANDS:
@@ -49,6 +52,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     public_request = {"command": command, "expected_generation": expected_generation,
                       "plan": plan, "findings": findings, "reason": reason,
                       "blocker_kind": blocker_kind, "resolution": resolution}
+    if criterion_id is not None:
+        public_request["criterion_id"] = criterion_id
     replayed = False
     if command == "status":
         if workflow_id is None:
@@ -111,8 +116,14 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                 operation = command
                 if command == "accept_plan":
                     record = _accepted_task(path, session_state, session_state.task_window_id)
+                    validate_producer_policy(state["plan"], session_state.active_task_profile)
                     payload = {"baseline": {"accepted_task_record": record["record_id"]},
                                "authority_ref": "accepted_task:" + session_state.task_window_id}
+                elif command == "check_artifact":
+                    operation = "record_check"
+                    payload = collect_artifact_measurement(
+                        path, session_state=session_state, workflow_id=workflow_id, criterion_id=criterion_id,
+                    )
                 elif command == "implemented":
                     payload = {"candidate": collect_candidate(path, session_state=session_state, workflow_id=workflow_id)}
                 elif command == "review":
@@ -153,12 +164,13 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
 def bind_task_workflow(path, *, session_state, workflow_id):
     """Prepare binding before immutable task persistence; never alter an old record."""
     from odibi_anchor._dispatcher._workflow_admission import bind_workflow
-    from odibi_anchor._dispatcher._workflow_evidence import bind_review
+    from odibi_anchor._dispatcher._workflow_evidence import bind_review, validate_producer_policy
 
     profile = session_state.active_task_profile
     if profile.execution_mode == "read_only" and profile.work_type == "verify":
         return bind_review(path, session_state=session_state, workflow_id=workflow_id)
     state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
+    validate_producer_policy(state["plan"], profile)
     ranks = {"low": 0, "medium": 1, "high": 2}
     if ranks[profile.risk] < ranks[state["plan"]["risk"]]:
         raise WorkflowError("wrong_authority", "accepted task cannot downgrade workflow risk")

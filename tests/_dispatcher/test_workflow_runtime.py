@@ -1,12 +1,13 @@
 """Public workflow operations cannot launder caller evidence into qualification."""
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch):
+def runtime(tmp_path, monkeypatch, request):
     from odibi_anchor._dispatcher._project import project_action
     from odibi_anchor.bootstrap import init
 
@@ -37,6 +38,10 @@ def runtime(tmp_path, monkeypatch):
             "destination": {"kind": "managed_artifacts"},
             "criteria": [{"id": "report", "expected": "Report contract holds", "method": "pytest",
                           "test_targets": ["test_report.py"]}]}
+    if getattr(request, "param", None) == "artifact":
+        plan["criteria"] = [{"id": "report", "expected": "Exact Result: 5 line",
+                             "method": "artifact_sha256", "expected_sha256": {
+                                 "notebooks/report.md": hashlib.sha256(b"Result: 5\n").hexdigest()}}]
     draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
     anchor("review", output_format="dict")
     anchor("gate", output_format="dict")
@@ -423,3 +428,53 @@ def test_caller_cannot_redirect_context_authority_database(runtime, action):
     with pytest.raises(TypeError, match="memory_db"):
         anchor(action, memory_db=str(target / "forged.db"), output_format="dict", **kwargs)
     assert not (target / "forged.db").exists()
+
+
+@pytest.mark.parametrize("runtime", ["artifact"], indirect=True)
+@pytest.mark.parametrize("content", [b"Result: 5\n", b"Result: 6\n"])
+def test_artifact_byte_check_qualifies_only_planned_content_without_pytest(runtime, monkeypatch, content):
+    from odibi_anchor._dispatcher import _workflow_evidence
+
+    anchor, home, _, _ = runtime
+    implement(runtime)
+    (home / "workspace/projects/alpha/notebooks/report.md").write_bytes(content)
+    advance(anchor, "implemented")
+    checked = advance(anchor, "check_artifact", criterion_id="report")
+    measurement = checked["measurements"]["report"]
+    assert measurement["status"] == ("satisfied" if content == b"Result: 5\n" else "failed")
+    assert measurement["collector"] == "anchor.managed_artifact_sha256"
+    assert measurement["result"]["expected_sha256"]["notebooks/report.md"] == hashlib.sha256(b"Result: 5\n").hexdigest()
+    assert "environment" not in measurement
+    advance(anchor, "review", findings=[])
+    monkeypatch.setattr(_workflow_evidence, "runtime_environment", lambda: {"python": "different-host"})
+    if content == b"Result: 5\n":
+        assert advance(anchor, "qualify")["progress"] == "qualified"
+    else:
+        with pytest.raises(RuntimeError, match="not satisfied"):
+            advance(anchor, "qualify")
+
+
+@pytest.mark.parametrize("runtime", ["artifact"], indirect=True)
+def test_artifact_check_rejects_changed_candidate_and_does_not_record_pass(runtime):
+    anchor, home, _, _ = runtime
+    implemented = implement(runtime)
+    (home / "workspace/projects/alpha/notebooks/report.md").write_text("changed\n")
+    with pytest.raises(RuntimeError, match="changed before measurement"):
+        advance(anchor, "check_artifact", criterion_id="report")
+    current = anchor("workflow", output_format="dict")["state"]
+    assert current["generation"] == implemented["generation"] and current["measurements"] == {}
+
+
+@pytest.mark.parametrize("runtime", ["artifact"], indirect=True)
+def test_artifact_check_retry_is_historical_and_criterion_is_part_of_request(runtime):
+    anchor, home, _, _ = runtime
+    implemented = implement(runtime)
+    kwargs = {"expected_generation": implemented["generation"], "request_id": "measure",
+              "criterion_id": "report", "output_format": "dict"}
+    first = anchor("workflow", "check_artifact", **kwargs)
+    (home / "workspace/projects/alpha/notebooks/report.md").write_text("changed\n")
+    repeated = anchor("workflow", "check_artifact", **kwargs)
+    assert repeated["state"] == first["state"] and repeated["replayed"] is True
+    assert repeated["observation_semantics"] == "historical acknowledgement"
+    with pytest.raises(RuntimeError, match="request_id reused"):
+        anchor("workflow", "check_artifact", **{**kwargs, "criterion_id": "different"})

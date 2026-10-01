@@ -184,6 +184,9 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
     if operation == "replan":
         _text(payload.get("reason"), "reason")
         plan = _plan(payload.get("plan"))
+        ranks = {"low": 0, "medium": 1, "high": 2}
+        if ranks[plan["risk"]] < ranks[state["plan"]["risk"]]:
+            raise WorkflowError("risk_downgrade", "replan cannot authorize a risk downgrade")
         result.update(phase="plan", status="active", progress="draft", plan=plan,
                       plan_sha256=digest(plan), admission=None, candidate=None, qualification=None,
                       approval=None, delivery=None, verification=None, blocker=None,

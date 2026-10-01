@@ -275,3 +275,62 @@ def test_managed_artifact_candidate_observes_bytes_and_rejects_links(work, tmp_p
     artifact.symlink_to(outside)
     with pytest.raises(WorkflowError, match="managed regular artifacts"):
         collect_candidate(db, session_state=producer, workflow_id=workflow["workflow_id"])
+
+
+@pytest.mark.parametrize("risk,traits", [("high", []), ("medium", []), ("low", ["destructive"])])
+def test_plan_binding_cannot_downgrade_producer_risk(work, risk, traits):
+    from odibi_anchor._dispatcher._workflow_runtime import bind_task_workflow
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    db, producer, workflow = work
+    profile = normalize_task_profile(work_type="change", execution_mode="source_change", risk=risk, traits=traits)
+    observer = fresh_state(producer, active_task_profile=profile)
+    draft = create_workflow(db, owner=workflow_owner(producer), request_id="low-plan",
+                            plan={**workflow["plan"], "risk": "low"})
+    with pytest.raises(WorkflowError, match="accepted producer risk"):
+        bind_task_workflow(db, session_state=observer, workflow_id=draft["workflow_id"])
+
+
+def test_candidate_uses_immutable_producer_risk_not_mutable_runtime_profile(work):
+    db, producer, workflow = work
+    draft = create_workflow(db, owner=workflow_owner(producer), request_id="old-low-plan",
+                            plan={**workflow["plan"], "risk": "low"})
+    older = fresh_state(producer, task_window_id="ltw_older_policy", workflow_binding=None,
+                        active_task_profile=producer.active_task_profile, bps_kernel=producer.bps_kernel,
+                        task_repository_baseline=producer.task_repository_baseline)
+    older.workflow_binding = bind_workflow(db, session_state=older, workflow_id=draft["workflow_id"])
+    persist_accepted_task(db, session_state=older, task_stage={"trust_domain": "personal"}, task_result=result())
+    older.active_task_profile = normalize_task_profile(legacy_mode="implementation", risk="low")
+    with pytest.raises(WorkflowError, match="accepted producer risk"):
+        collect_candidate(db, session_state=older, workflow_id=draft["workflow_id"])
+
+
+@pytest.mark.parametrize("path,expected", [("../secret", "a" * 64), ("notebooks/result.md", "A" * 64),
+                                           ("notebooks/result.md", "short"), ("notebooks/result.md", None)])
+def test_artifact_policy_rejects_unplanned_paths_and_invalid_digests(work, path, expected):
+    from odibi_anchor._dispatcher._workflow_evidence import validate_producer_policy
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    _, _, workflow = work
+    profile = normalize_task_profile(legacy_mode="documentation", risk="low")
+    plan = {**workflow["plan"], "risk": "low", "execution_mode": "artifact_only", "criteria": [
+        {"id": "result", "expected": "Exact result", "method": "artifact_sha256", "expected_sha256": {path: expected}}]}
+    with pytest.raises(WorkflowError, match="exact planned paths and SHA256"):
+        validate_producer_policy(plan, profile)
+
+
+def test_artifact_policy_cannot_omit_a_planned_file_or_accept_caller_pass(work):
+    from odibi_anchor._dispatcher._workflow_evidence import validate_producer_policy
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    _, _, workflow = work
+    profile = normalize_task_profile(legacy_mode="documentation", risk="low")
+    plan = {**workflow["plan"], "risk": "low", "execution_mode": "artifact_only",
+            "artifact_paths": ["notebooks/result.md", "notebooks/other.md"], "criteria": [
+                {"id": "result", "expected": "Exact result", "method": "artifact_sha256",
+                 "expected_sha256": {"notebooks/result.md": "a" * 64}}]}
+    with pytest.raises(WorkflowError, match="cover all planned"):
+        validate_producer_policy(plan, profile)
+    plan["criteria"][0]["method"] = "caller_says_pass"
+    with pytest.raises(WorkflowError, match="no supported trusted collector"):
+        validate_producer_policy(plan, profile)

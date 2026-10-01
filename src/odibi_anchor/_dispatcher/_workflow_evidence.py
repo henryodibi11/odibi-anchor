@@ -61,6 +61,8 @@ def _paths(plan, key):
 def collect_candidate(path: str | Path, *, session_state: Any,
                       workflow_id: str) -> dict[str, Any]:
     """Read exact current bytes under the persisted producing task's authority."""
+    from odibi_anchor.planning._task_profile import TaskProfile
+
     state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
     producer = (state.get("candidate") or {}).get("producer") or session_state.task_window_id
     record = _accepted_task(path, session_state, producer)
@@ -69,6 +71,7 @@ def collect_candidate(path: str | Path, *, session_state: Any,
             or binding.get("plan_sha256") != state["plan_sha256"]):
         raise WorkflowError("stale_plan", "producing task is not bound to this exact plan")
     plan = state["plan"]
+    validate_producer_policy(plan, TaskProfile.from_dict(record["task"]["profile"]))
     mode = plan["execution_mode"]
     if record["task"]["profile"]["execution_mode"] != mode:
         raise WorkflowError("wrong_mode", "candidate producer execution mode differs from plan")
@@ -129,6 +132,62 @@ def collect_candidate(path: str | Path, *, session_state: Any,
         raise WorkflowError("unavailable", "this candidate kind has no supported content collector")
     return {"kind": kind, "identity": digest(snapshot), "producer": producer,
             "snapshot": snapshot}
+
+
+def validate_producer_policy(plan: dict[str, Any], profile: Any) -> None:
+    """Enforce declared producer risk and supported checks, not semantic certainty."""
+    from odibi_anchor.assurance.evaluator import build_assurance_plan
+
+    ranks = {"low": 0, "medium": 1, "high": 2}
+    floor = "high" if build_assurance_plan(profile).tier == "T3" else profile.risk
+    if ranks[plan["risk"]] < ranks[floor]:
+        raise WorkflowError("risk_downgrade", "workflow plan cannot downgrade accepted producer risk")
+    artifact_checks = set()
+    has_pytest = False
+    for criterion in plan.get("criteria", []):
+        method = criterion.get("method")
+        if method == "pytest":
+            targets = criterion.get("test_targets")
+            if (not isinstance(targets, list) or not targets
+                    or any(not isinstance(t, str) or not t.strip() for t in targets)):
+                raise WorkflowError("missing_evidence", "pytest criterion requires explicit test_targets")
+            has_pytest = True
+        elif method == "artifact_sha256" and plan["execution_mode"] == "artifact_only":
+            expected = criterion.get("expected_sha256")
+            if (not isinstance(expected, dict) or not expected
+                    or set(expected) - set(_paths(plan, "artifact_paths"))
+                    or any(not isinstance(value, str) or len(value) != 64
+                           or any(char not in "0123456789abcdef" for char in value)
+                           for value in expected.values())):
+                raise WorkflowError("missing_evidence", "artifact criterion requires exact planned paths and SHA256 digests")
+            artifact_checks.update(expected)
+        else:
+            raise WorkflowError("unavailable", "criterion method has no supported trusted collector")
+    if artifact_checks and not has_pytest and artifact_checks != set(_paths(plan, "artifact_paths")):
+        raise WorkflowError("missing_evidence", "artifact checks must cover all planned artifact paths")
+
+
+def collect_artifact_measurement(path: str | Path, *, session_state: Any,
+                                 workflow_id: str, criterion_id: str) -> dict[str, Any]:
+    """Compare observed bytes with independently planned digests, without pytest."""
+    state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
+    criteria = [c for c in state["plan"].get("criteria", []) if c["id"] == criterion_id]
+    if (state["progress"] != "implemented" or state["status"] != "active"
+            or len(criteria) != 1 or criteria[0]["method"] != "artifact_sha256"):
+        raise WorkflowError("missing_evidence", "artifact measurement requires an implemented artifact criterion")
+    before = collect_candidate(path, session_state=session_state, workflow_id=workflow_id)
+    if before != state["candidate"] or before["kind"] != "managed_artifacts":
+        raise WorkflowError("stale_evidence", "artifact candidate changed before measurement")
+    expected = criteria[0]["expected_sha256"]
+    observed = {name: before["snapshot"][name]["sha256"] for name in expected}
+    if collect_candidate(path, session_state=session_state, workflow_id=workflow_id) != before:
+        raise WorkflowError("stale_evidence", "artifact candidate changed across measurement")
+    result = {"expected_sha256": expected, "observed_sha256": observed}
+    return {"plan_sha256": state["plan_sha256"], "candidate_sha256": digest(before),
+            "criterion_id": criterion_id, "method": "artifact_sha256",
+            "collector": "anchor.managed_artifact_sha256",
+            "status": "satisfied" if observed == expected else "failed",
+            "evidence_ref": digest(result), "result": result}
 
 
 def bind_review(path: str | Path, *, session_state: Any, workflow_id: str) -> dict[str, Any]:
@@ -244,7 +303,7 @@ def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
         raise WorkflowError("review_required", "no retained review evidence")
     environment_sha256 = digest(runtime_environment())
     if any(check.get("environment_sha256") != environment_sha256
-           for check in state.get("measurements", {}).values()):
+           for check in state.get("measurements", {}).values() if check["method"] == "pytest"):
         raise WorkflowError("stale_evidence", "qualification environment differs from retained measurement")
     return transition_workflow(
         path, owner=owner, workflow_id=workflow_id, expected_generation=expected_generation,

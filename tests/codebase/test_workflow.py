@@ -24,8 +24,8 @@ def owner(tmp_path):
 
 
 @pytest.fixture
-def plan():
-    return {"schema_version": 1, "goal": "Reject malformed orders", "risk": "high",
+def plan(request):
+    return {"schema_version": 1, "goal": "Reject malformed orders", "risk": getattr(request, "param", "high"),
             "execution_mode": "source_change", "scope": ["parser"], "exclusions": ["UI"],
             "constraints": ["No data writes"], "risks": ["Compatibility"],
             "stop_conditions": ["Changed input contract"], "unresolved_decisions": [],
@@ -203,8 +203,8 @@ def test_high_risk_cannot_self_qualify(run, kind, reviewer):
         run("qualify", payload)
 
 
-def test_low_risk_self_review_is_sufficient(run, plan):
-    run("replan", {"reason": "explicit revised scope", "plan": {**plan, "risk": "low"}})
+@pytest.mark.parametrize("plan", ["low"], indirect=True)
+def test_low_risk_self_review_is_sufficient(run):
     state = implemented(run)
     payload = qualification(state)
     payload["review"].update(kind="self", reviewer="agent:implementer")
@@ -317,3 +317,11 @@ def test_event_corruption_rejected_even_after_trigger_restored(run, owner):
 def test_noncanonical_or_unbounded_packets_rejected(value):
     with pytest.raises(ValueError):
         workflow.canonical(value)
+
+
+@pytest.mark.parametrize("risk", ["low", "medium"])
+def test_replan_cannot_erase_risk_and_review_requirement(run, owner, plan, risk):
+    before = implemented(run)
+    with pytest.raises(workflow.WorkflowError, match="risk downgrade"):
+        run("replan", {"reason": "avoid review", "plan": {**plan, "risk": risk}})
+    assert workflow.read_workflow(run.path, owner=owner, workflow_id=before["workflow_id"]) == before
