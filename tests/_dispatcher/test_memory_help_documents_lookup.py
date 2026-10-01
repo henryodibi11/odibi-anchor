@@ -19,9 +19,19 @@ def test_help_explains_why_a_query_cannot_substitute():
     assert "not part of the entry content" in HELP
 
 
-def test_help_says_the_lookup_is_not_scoped():
-    """Documenting the scoping is the point: a scoped lookup would be a dead end."""
-    assert "not scoped by project or status" in HELP
+def test_help_documents_the_authorized_scope():
+    """The lookup is project- and status-scoped; help must not claim otherwise.
+
+    This assertion previously demanded the opposite. The lookup shipped unscoped,
+    the help said so, and a later fix scoped it to the active project and
+    retrievable statuses without updating the help — leaving the public
+    documentation describing a boundary the code no longer has.
+    """
+    assert "not scoped by project or status" not in HELP
+    assert "authorized scope" in HELP
+    assert "active project" in HELP
+    for status in ("candidate", "active", "confirmed"):
+        assert status in HELP
 
 
 def test_help_states_the_result_shape():

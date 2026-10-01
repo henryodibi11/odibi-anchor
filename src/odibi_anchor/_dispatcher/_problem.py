@@ -95,6 +95,18 @@ def normalize_problem_rigor(value: int | str) -> str:
     return rigor
 
 
+#: Frontmatter fields a Problem Record may omit, with the value the reader has
+#: always substituted. Every entry here corresponds to an existing `meta.get(...,
+#: default)` in this module; fields without such a default stay required, because
+#: nothing ever supplied one and `_render` indexes them directly.
+READER_DEFAULTS: dict[str, Any] = {
+    "rigor_level": "full",
+    "revision": 1,
+    "stage": 1,
+    "next_action": "",
+}
+
+
 def _empty_record(problem_id: str, project_id: str, title: str, rigor_level: int | str) -> dict[str, Any]:
     """Build a new in-memory Problem Record."""
     rigor = normalize_problem_rigor(rigor_level)
@@ -228,6 +240,13 @@ def _parse(path: Path) -> dict[str, Any]:
         missing_required_fields,
         repair_guidance,
     )
+
+    # Apply the defaults the reader already documents before validating. These
+    # fields were supported without being present long before the schema check
+    # existed, so demanding them rejected records that used to parse. Applying the
+    # default here also keeps `meta[...]` indexing elsewhere safe.
+    for field, default in READER_DEFAULTS.items():
+        meta.setdefault(field, default)
 
     schema = managed_record_schemas()["problem"]
     missing = missing_required_fields(meta, schema)
@@ -562,8 +581,23 @@ def render_problem_result(selector: str, result: dict[str, Any]) -> str:
             f"- **{item['problem_id']}** — {item['status']} — stage {item['stage']}/7 — {item['title']}"
             for item in result.get("problems", [])
         )
+        malformed = result.get("malformed_records") or []
         if not result.get("problems"):
-            lines.append("No Problem Records.")
+            # Only claim an empty directory when it really is empty. Saying "No
+            # Problem Records." while malformed files sit on disk hid the
+            # corruption from every caller using the default markdown output.
+            lines.append(
+                "No readable Problem Records." if malformed else "No Problem Records."
+            )
+        if malformed:
+            lines.extend(["", f"## Malformed records ({len(malformed)})", ""])
+            for item in malformed:
+                name = Path(str(item.get("path", "?"))).name
+                missing = ", ".join(item.get("missing_fields") or []) or "unreadable frontmatter"
+                lines.append(f"- **{name}** — missing: {missing}")
+                repair = item.get("repair")
+                if repair:
+                    lines.append(f"  - {repair}")
         return "\n".join(lines)
     if result.get("error"):
         return str(result["error"])

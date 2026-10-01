@@ -17,6 +17,19 @@ SUMMARY_ENV = "ODIBI_ANCHOR_PYTEST_SUMMARY"
 # Anchor routing variables (ANCHOR_HOME, ANCHOR_MEMORY_DB, ANCHOR_PROJECT_ID,
 # ANCHOR_PROJECT_ROOT, ...). SUMMARY_ENV starts with ODIBI_ANCHOR_ and is unaffected.
 ANCHOR_ENV_PREFIX = "ANCHOR_"
+#: `ANCHOR_` names that are deliberate test-suite controls rather than runtime
+#: routing, and so must survive into the child. Stripping the whole prefix removed
+#: these too, which silently disabled a *required* control: the quality workflow
+#: exports ANCHOR_REQUIRE_INSTALLED_QUALIFICATION=1 and the installed-distribution
+#: suite reads it, so the qualification it demands quietly stopped being enforced.
+#: ANCHOR_OFFLINE_WHEELHOUSE is the same shape — it points the suite at a local
+#: wheel directory, and losing it turns an offline run into a network install.
+#: Nothing here selects a project, home, database or target, which is what makes
+#: these safe to keep while routing is still removed.
+PRESERVED_ENV_NAMES = frozenset({
+    "ANCHOR_REQUIRE_INSTALLED_QUALIFICATION",
+    "ANCHOR_OFFLINE_WHEELHOUSE",
+})
 _CANONICAL_PLUGIN_NAME = "odibi_anchor.pytest_runner"
 _GIT_CONFIG = (
     ("commit.gpgSign", "false"),
@@ -36,9 +49,15 @@ def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     reproduce under plain pytest. Stripping the prefix gives the child the same
     environment a contributor's `pytest` invocation sees. `ODIBI_ANCHOR_` names,
     including the summary hand-off below, do not match the prefix and are kept.
+
+    `PRESERVED_ENV_NAMES` are exempt: they are suite controls, not routing, and
+    stripping them silently disabled a required qualification gate.
     """
     env = dict(os.environ if base is None else base)
-    for name in [key for key in env if key.startswith(ANCHOR_ENV_PREFIX)]:
+    for name in [
+        key for key in env
+        if key.startswith(ANCHOR_ENV_PREFIX) and key not in PRESERVED_ENV_NAMES
+    ]:
         del env[name]
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     start = int(env.get("GIT_CONFIG_COUNT", "0"))
