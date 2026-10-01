@@ -230,3 +230,48 @@ def test_qualified_candidate_is_frozen_but_readback_remains_available(runtime):
                                    source_targets=("src/parser.py",))
     enforce_workflow_admission(db, session_state=session, effects=("read",))
     assert workflow_packet(db, session_state=session)["next_step"] == "request_delivery_authority"
+
+
+@pytest.mark.parametrize("mode,traits,eligible", [
+    ("data_change", [], True), ("data_change", ["source-change"], True),
+    ("data_change", ["source-change", "data-change"], False),
+    ("source_change", ["source-change", "data-change"], False),
+    ("source_change", [], False), ("artifact_only", [], False), ("read_only", [], False),
+])
+def test_data_only_exception_is_effect_based_and_never_delivery_evidence(tmp_path, mode, traits, eligible):
+    from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception
+
+    profile = normalize_task_profile(work_type="change", execution_mode=mode, traits=traits)
+    session = SessionState(active_task_profile=profile)
+    assert data_only_legacy_exception(profile) is eligible
+    packet = workflow_packet(tmp_path / "absent.db", session_state=session)
+    if eligible:
+        assert packet["status"] == "unphased_unsupported_collector"
+        assert packet["completed"] is False and packet["delivery_verified"] is False
+        assert packet["compatibility_exception"]["id"] == "temporary_data_only_legacy"
+        assert packet["compatibility_exception"]["removal_criteria"]
+        assert "state" not in packet and "workflow_id" not in packet
+        enforce_workflow_admission(tmp_path / "absent.db", session_state=session, effects=("data_write",))
+        with pytest.raises(RuntimeError, match="never permits source"):
+            enforce_workflow_admission(tmp_path / "absent.db", session_state=session,
+                                       effects=("data_write", "source_write"))
+    else:
+        assert "compatibility_exception" not in packet
+    assert not (tmp_path / "absent.db").exists()
+
+
+def test_unbound_data_exception_rejects_resolved_source_effect_before_handler(tmp_path, monkeypatch):
+    from odibi_anchor._dispatcher._boot import _ENV
+    from odibi_anchor._dispatcher._effects import ActionContract, InvocationSemantics
+    from odibi_anchor._dispatcher._pre_dispatch import run_pre_dispatch_enforcement
+
+    monkeypatch.setitem(_ENV, "memory_db", str(tmp_path / "absent.db"))
+    session = SessionState(active_task_profile=normalize_task_profile(legacy_mode="data"))
+    contract = ActionContract(frozenset({"source_write"}), frozenset({"task_required"}),
+                              lambda _a, _k: InvocationSemantics("source_write", "task_required"))
+    with pytest.raises(RuntimeError, match="never permits source"):
+        run_pre_dispatch_enforcement(
+            "map", (), {}, session_state=session, session_timings=[], session_files_changed=set(),
+            session_boot_manifest={}, planning_required_actions=frozenset(), root=str(tmp_path),
+            action_contract=contract,
+        )

@@ -14,6 +14,14 @@ from typing import Any
 from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow
 
 
+def data_only_legacy_exception(profile: Any) -> bool:
+    """Temporary compatibility is determined by capability, never mode spelling."""
+    from odibi_anchor._dispatcher._effects import task_profile_effect_compatible
+
+    return (task_profile_effect_compatible("data_write", profile)
+            and not task_profile_effect_compatible("source_write", profile))
+
+
 def workflow_owner(session_state: Any) -> dict[str, str]:
     """Derive exact ownership from runtime authority, never transport arguments."""
     result = {"project_id": session_state.active_project,
@@ -88,6 +96,8 @@ def enforce_workflow_admission(path: str | Path, *, session_state: Any,
     """
     if not set(effects).intersection({"source_write", "data_write", "external_mutation"}):
         return
+    if data_only_legacy_exception(session_state.active_task_profile) and "source_write" in effects:
+        raise WorkflowError("wrong_mode", "data-only compatibility never permits source-write effects")
     state = bound_workflow(path, session_state=session_state)
     if state is None:
         return
@@ -124,6 +134,19 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
     """Return a complete content-addressed projection, not executable authority."""
     state = bound_workflow(path, session_state=session_state)
     if state is None:
+        if data_only_legacy_exception(session_state.active_task_profile):
+            return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
+                    "status": "unphased_unsupported_collector", "completed": False,
+                    "delivery_verified": False, "next_step": "legacy_data_checks",
+                    "compatibility_exception": {
+                        "id": "temporary_data_only_legacy", "source_effects_permitted": False,
+                        "reason": "No bounded data candidate collector; existing data policies still apply.",
+                        "removal_criteria": [
+                            "Bounded data collector with exact resource identities and independent readback",
+                            "Scope, authority, stale evidence and negative-path qualification on supported hosts",
+                            "Safe-boundary enrollment of fresh tasks without rewriting legacy evidence",
+                        ],
+                    }}
         return {"kind": "workflow_packet", "schema_version": 1, "status": "legacy_unphased",
                 "next_step": "enroll_at_safe_boundary", "authority": "projection"}
     if state["status"] == "blocked":

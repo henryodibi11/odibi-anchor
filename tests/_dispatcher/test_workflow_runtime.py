@@ -732,3 +732,25 @@ def test_public_exact_owner_revocation_and_historical_retry(runtime, monkeypatch
         if change == "candidate":
             with pytest.raises(RuntimeError, match="changed after qualification"):
                 anchor("workflow", "prepare_delivery", output_format="dict")
+
+
+def test_public_data_only_exception_stays_unphased_through_task_closure(runtime):
+    anchor, _, _, _ = runtime
+    finish_producer(anchor)
+    anchor("new_session", name="legacy_data_only", inline=True, output_format="dict")
+    accepted = anchor("task", "Update bounded test data", goal="Retain existing data-only policy",
+                      mode="implementation", execution_mode="data_change", risk="low", rigor="direct", trust_domain="personal",
+                      in_scope=["scratch fixture data"], constraints=["No source edits"],
+                      acceptance_criteria=["Data-only compatibility stays explicit"], output_format="dict")
+    packet = accepted["workflow"]
+    assert packet["status"] == "unphased_unsupported_collector"
+    assert packet["completed"] is False and packet["delivery_verified"] is False
+    for skill in ("data-operations", "writing-specs"):
+        anchor("skill_loaded", skill, output_format="dict")
+    for command in ("implemented", "qualify", "verify_delivery"):
+        with pytest.raises(RuntimeError, match="exact accepted task workflow binding"):
+            anchor("workflow", command, expected_generation=0, request_id=command, output_format="dict")
+    finish_producer(anchor)
+    from odibi_anchor.codebase._workflow import digest
+
+    assert anchor("workflow", output_format="dict") == {**packet, "packet_sha256": digest(packet)}

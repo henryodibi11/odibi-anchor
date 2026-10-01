@@ -1004,3 +1004,26 @@ No gate-wide or exposure-based bulk confirmation occurs.
   Capture, gate, or closure assessment creates the task's local SQLite obligation as needed,
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
   `nothing_reusable_learned`. State is local—no cloud replication.
+
+## Temporary data-only workflow compatibility
+
+Until a bounded data candidate collector is qualified, unbound tasks that permit
+`data_write` but **do not permit `source_write`** retain existing data execution
+checks. This is an owner-approved compatibility exception, not workflow completion.
+The workflow projection reports `status="unphased_unsupported_collector"`,
+`completed=false`, `delivery_verified=false` and
+`compatibility_exception.id="temporary_data_only_legacy"`.
+
+Eligibility follows effective profile permissions, not legacy mode names. Dual
+source/data tasks are excluded. An invocation containing any source-write effect
+cannot use the exception, even alongside a data-write effect. Existing skill,
+Spec, scope, human authority and data safety requirements still apply. Explicitly
+workflow-bound data writes remain blocked while their collector is unsupported.
+Task gate/learning closure does not promote this exception to qualified, delivered
+or delivery-verified status. Do not claim destination verification from it.
+
+Remove the exception only after a bounded data collector supplies exact resource
+identities and independent destination readback, scope/authority/staleness/negative
+tests and supported-host qualification pass, and fresh tasks can enroll at safe
+boundaries. Keep prior records visibly unphased; never backfill plan, qualification
+or delivery evidence. This exception does not authorize plain non-Git source edits.

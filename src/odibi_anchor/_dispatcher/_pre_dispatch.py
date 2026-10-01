@@ -341,7 +341,12 @@ def run_pre_dispatch_enforcement(
             raise ValueError("invocation_resolution or action_contract is required")
         resolution = resolve_invocation(action_contract, args, kwargs)
 
-    if resolution.error is None and getattr(session_state, "workflow_binding", None) is not None:
+    from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception
+
+    if resolution.error is None and (
+        getattr(session_state, "workflow_binding", None) is not None
+        or data_only_legacy_exception(session_state.active_task_profile)
+    ):
         from odibi_anchor._dispatcher._boot import _ENV
         from odibi_anchor._dispatcher._workflow_admission import enforce_workflow_admission
 
