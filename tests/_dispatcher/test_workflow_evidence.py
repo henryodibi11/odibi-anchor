@@ -388,3 +388,47 @@ def test_corrupted_producer_closure_cannot_qualify(work, table, column):
     with pytest.raises(RuntimeError, match=r"checksum|integrity"):
         qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
                           expected_generation=4, request_id="corrupt-closure")
+
+
+@pytest.mark.parametrize("change", [None, "bytes", "stage", "untracked", "commit", "withdraw"])
+def test_plan_admission_preserves_exact_adoption_not_later_drift(tmp_path, change):
+    import subprocess
+
+    from odibi_anchor._dispatcher._workflow_evidence import _accepted_task, collect_plan_baseline
+    from odibi_anchor.codebase._adopted_dirty import withdraw_adoption
+    from odibi_anchor.codebase._workflow import WorkflowError
+    from tests.codebase.test_task_authority import _approved_dirty_task
+
+    db, original, approval, prepared = _approved_dirty_task(tmp_path)
+    producer = fresh_state(original, task_window_id="ltw_adopted",
+                           active_task_profile=original.active_task_profile,
+                           bps_kernel=original.bps_kernel, task_repository_baseline=prepared["baseline"])
+    accepted = persist_accepted_task(
+        db, session_state=producer, task_stage={"repository_scope": (), "trust_domain": "private"},
+        task_result=result(), supersede_task_window_id="ltw_durable", prepared_adoption=prepared,
+    )
+    target = Path(producer.target_root)
+    if change == "bytes":
+        (target / "source.py").write_text("VALUE = 3\n")
+    elif change == "untracked":
+        (target / "other.py").write_text("VALUE = 4\n")
+    elif change in {"stage", "commit"}:
+        subprocess.run(["git", "add", "source.py"], cwd=target, check=True, capture_output=True)
+        if change == "commit":
+            subprocess.run(["git", "commit", "-m", "changed since approval"], cwd=target,
+                           check=True, capture_output=True)
+    elif change == "withdraw":
+        withdraw_adoption(db, adoption_id=accepted["adoption"]["adoption_id"],
+                          reason="Owner withdrew authority", actor_ref="owner-1")
+    record = _accepted_task(db, producer, producer.task_window_id)
+    if change:
+        with pytest.raises(WorkflowError, match="before plan acceptance"):
+            collect_plan_baseline(db, session_state=producer, record=record)
+    else:
+        observed = collect_plan_baseline(db, session_state=producer, record=record)
+        assert observed["accepted_task_record"] == record["record_id"]
+        observation = observed["source_observation"]
+        assert observation["basis"] == "adopted_pre_plan_source"
+        assert observation["approval_id"] == approval["approval_id"]
+        assert observation["repository"]["changed_paths"] == ["source.py"]
+        assert observation["repository"]["worktree_fingerprint"] == prepared["subject"]["repository"]["worktree_fingerprint"]

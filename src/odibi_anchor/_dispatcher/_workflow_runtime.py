@@ -38,6 +38,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         _accepted_task,
         collect_artifact_measurement,
         collect_candidate,
+        collect_plan_baseline,
         collect_review,
         qualify_recorded,
         validate_producer_policy,
@@ -115,9 +116,9 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             else:
                 operation = command
                 if command == "accept_plan":
-                    record = _accepted_task(path, session_state, session_state.task_window_id)
+                    record = _accepted_task(path, session_state, session_state.task_window_id, require_open=True)
                     validate_producer_policy(state["plan"], session_state.active_task_profile)
-                    payload = {"baseline": {"accepted_task_record": record["record_id"]},
+                    payload = {"baseline": collect_plan_baseline(path, session_state=session_state, record=record),
                                "authority_ref": "accepted_task:" + session_state.task_window_id}
                 elif command == "check_artifact":
                     operation = "record_check"

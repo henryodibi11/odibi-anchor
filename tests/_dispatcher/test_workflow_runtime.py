@@ -569,3 +569,105 @@ def test_out_of_band_source_drift_blocks_artifact_gate_and_workflow_qualificatio
         anchor("gate", output_format="dict")
     with pytest.raises(RuntimeError, match="completed gate-and-learning"):
         advance(anchor, "qualify")
+
+
+@pytest.fixture
+def source_runtime(tmp_path, monkeypatch, request):
+    import subprocess
+
+    from odibi_anchor._dispatcher._project import project_action
+    from odibi_anchor.bootstrap import init
+    from tests._dispatcher.test_databricks_repository_integration import SimulatedDatabricksProvider
+
+    kind = getattr(request, "param", "git")
+    home, target = tmp_path / "home", tmp_path / "target"
+    home.mkdir()
+    target.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=target, check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    if kind != "unborn":
+        (target / "source.py").write_text("VALUE = 1\n")
+        (target / "test_source.py").write_text("import source\ndef test_value():\n    assert source.VALUE == 2\n")
+    if kind != "databricks":
+        git("init", "-b", "main")
+        if kind != "unborn":
+            git("add", ".")
+            git("commit", "-m", "base")
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / "memory.db"))
+    project_action(home, "create", name="alpha", target=target, output_format="dict")
+    provider = SimulatedDatabricksProvider() if kind == "databricks" else None
+    anchor, _, _ = init(root=str(target), project="alpha", repository_provider=provider, output_format="dict")
+    anchor("orient", output_format="dict")
+    anchor("new_session", name="plan_source", inline=True, output_format="dict")
+    anchor("task", "Plan constant correction", goal="Make VALUE equal 2", mode="analysis",
+           risk="low", rigor="direct", trust_domain="personal", in_scope=["source.py"],
+           constraints=["Do not edit source before plan acceptance"],
+           acceptance_criteria=["A bounded plan exists"], output_format="dict")
+    anchor("skill_loaded", "code-comprehension", output_format="dict")
+    plan = {"schema_version": 1, "goal": "Make VALUE equal 2", "risk": "low",
+            "execution_mode": "source_change", "scope": ["source.py"], "source_paths": ["source.py"],
+            "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
+            "unresolved_decisions": [], "destination": {"kind": "github_ref", "repository": "acme/app", "ref": "refs/heads/main"},
+            "criteria": [{"id": "constant", "expected": "VALUE equals 2", "method": "pytest",
+                          "test_targets": ["test_source.py"]}]}
+    draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
+    anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
+    anchor("new_session", name="produce_source", inline=True, output_format="dict")
+    kwargs = {"repository_scope": ["source.py"], "accept_unknown_git_state": True} if provider else {}
+    anchor("task", "Implement constant correction", goal="Make VALUE equal 2", mode="implementation",
+           risk="low", rigor="direct", trust_domain="personal", in_scope=["source.py"],
+           constraints=["Only source.py may change"], acceptance_criteria=["VALUE equals 2"],
+           workflow_id=draft["workflow_id"], output_format="dict", **kwargs)
+    return anchor, target, git
+
+
+@pytest.mark.parametrize("change", ["unstaged", "staged", "untracked", "committed", "empty_commit"])
+def test_source_changed_before_plan_acceptance_cannot_be_laundered(source_runtime, change):
+    anchor, target, git = source_runtime
+    before = anchor("workflow", output_format="dict")["state"]
+    if change != "empty_commit":
+        (target / ("extra.py" if change == "untracked" else "source.py")).write_text("VALUE = 2\n")
+    if change in {"staged", "committed"}:
+        git("add", "source.py")
+    if change in {"committed", "empty_commit"}:
+        git("commit", "--allow-empty", "-m", "premature change")
+    with pytest.raises(RuntimeError, match="before plan acceptance"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"] == before
+
+
+@pytest.mark.parametrize("source_runtime", ["git", "unborn", "databricks"], indirect=True)
+def test_unchanged_source_can_enter_plan_and_exact_retry_is_historical(source_runtime):
+    anchor, target, _ = source_runtime
+    planned = advance(anchor, "accept_plan")
+    assert planned["progress"] == "planned"
+    assert planned["admission"]["baseline"]["source_observation"]["basis"] == "unchanged_task_source"
+    (target / "source.py").write_text("VALUE = 2\n")
+    repeated = anchor("workflow", "accept_plan", expected_generation=0,
+                      request_id="accept_plan:0", output_format="dict")
+    assert repeated["replayed"] is True and repeated["state"] == planned
+
+
+@pytest.mark.parametrize("source_runtime", ["unborn", "databricks"], indirect=True)
+def test_recording_a_premature_source_edit_does_not_grant_plan_admission(source_runtime):
+    anchor, target, _ = source_runtime
+    before = anchor("workflow", output_format="dict")["state"]
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    with pytest.raises(RuntimeError, match="before plan acceptance"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"] == before
+
+
+def test_closed_producer_cannot_accept_new_plan(runtime):
+    anchor, _, _, _ = runtime
+    before = anchor("workflow", output_format="dict")["state"]
+    finish_producer(anchor)
+    with pytest.raises(RuntimeError, match="gated or closed"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"] == before

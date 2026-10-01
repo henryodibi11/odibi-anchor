@@ -56,6 +56,64 @@ def _accepted_task(path, session_state, task_window_id, *, require_open=False):
         connection.close()
 
 
+def collect_plan_baseline(path, *, session_state, record):
+    """Observe source admission without laundering pre-plan edits or adoption."""
+    baseline_ref = {"accepted_task_record": record["record_id"]}
+    if record["task"]["profile"]["execution_mode"] != "source_change":
+        return baseline_ref
+    from odibi_anchor._repository_snapshot import capture_task_change_scope
+    from odibi_anchor.codebase._task_authority import _restore_baseline
+
+    baseline = _restore_baseline(record.get("repository_baseline"), session_state.repository_provider)
+    if baseline is None:
+        raise WorkflowError("unavailable", "source admission requires accepted repository evidence")
+    scope = capture_task_change_scope(baseline, session_state.task_repository_write_fingerprints)
+    provenance = scope.provenance
+    adoption = getattr(baseline, "adoption_provenance", None)
+    if adoption:
+        from odibi_anchor.codebase._adopted_dirty import (
+            _connect,
+            _verify_approval_row,
+            adoption_status,
+        )
+
+        if adoption_status(path, adoption_id=adoption["adoption_id"])["status"] != "active":
+            raise WorkflowError("wrong_authority", "source adoption withdrawn before plan acceptance")
+        connection = _connect(path, read_only=True)
+        try:
+            row = connection.execute(
+                "SELECT * FROM dirty_adoption_approvals WHERE approval_id=?",
+                (adoption["approval_id"],),
+            ).fetchone()
+            if row is None:
+                raise WorkflowError("unavailable", "source adoption approval is unavailable")
+            approval = _verify_approval_row(row)
+        finally:
+            connection.close()
+        observed = {key: getattr(scope, key) for key in (
+            "branch", "head_sha", "configured_target_ref", "target_sha", "merge_base_sha",
+        )}
+        observed.update({key: list(getattr(scope, key)) for key in (
+            "staged_paths", "unstaged_paths", "untracked_paths", "changed_paths",
+        )})
+        observed.update({key: provenance[key] for key in ("index_fingerprint", "worktree_fingerprint")})
+        if (observed != approval["subject"]["repository"]
+                or provenance.get("target_drift") or scope.local_conflict_result != "clear"):
+            raise WorkflowError("stale_evidence", "adopted source changed before plan acceptance")
+        observation = {"basis": "adopted_pre_plan_source", "adoption_id": adoption["adoption_id"],
+                       "approval_id": adoption["approval_id"], "repository": observed}
+    else:
+        head = getattr(scope, "head_sha", None)
+        if (scope.changed_paths or provenance.get("target_drift") or provenance.get("target_birth")
+                or head != getattr(baseline, "task_start_head_sha", head)
+                or getattr(scope, "local_conflict_result", "clear") != "clear"):
+            raise WorkflowError("stale_evidence", "source changed before plan acceptance; preserve work and recover authority")
+        observation = {"basis": "unchanged_task_source", "head_sha": head,
+                       "evidence_kind": getattr(scope, "evidence_kind", "local_git"),
+                       "changed_paths": []}
+    return {**baseline_ref, "source_observation": observation}
+
+
 def producer_completion(path, *, session_state, producer):
     """Verify existing task closure; never synthesize a gate or learning receipt."""
     from odibi_anchor.codebase._task_authority import _canonical, _connect, _verify_schema
