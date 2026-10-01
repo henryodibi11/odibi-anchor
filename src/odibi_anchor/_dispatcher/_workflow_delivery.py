@@ -111,7 +111,8 @@ def _fresh(path, session_state, workflow_id, *, allow_unknown=False):
     if state["qualification"].get("producer_terminal_record_sha256") != completion:
         raise WorkflowError("stale_evidence", "qualification lacks this exact producer terminal proof; requalify")
     environment = digest(runtime_environment())
-    if any(check.get("environment_sha256") != environment for check in state["qualification"]["checks"]):
+    if any(check.get("environment_sha256") != environment
+           for check in state["qualification"]["checks"] if check["method"] == "pytest"):
         raise WorkflowError("stale_evidence", "qualification environment changed before delivery")
     return state
 

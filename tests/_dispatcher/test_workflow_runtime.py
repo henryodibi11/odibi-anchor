@@ -311,8 +311,11 @@ def approved_runtime(runtime, monkeypatch):
     from odibi_anchor import human_input, human_input_owner
 
     anchor, _, _, _ = runtime
-    implement(runtime)
-    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    implemented = implement(runtime)
+    if implemented["plan"]["criteria"][0]["method"] == "artifact_sha256":
+        advance(anchor, "check_artifact", criterion_id="report")
+    else:
+        anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
     advance(anchor, "review", findings=[])
     finish_producer(anchor)
     advance(anchor, "qualify")
@@ -325,6 +328,26 @@ def approved_runtime(runtime, monkeypatch):
         request_id="fixture-request", response_message_id="fixture-response"))
     advance(anchor, "request_delivery_approval")
     return runtime
+
+
+@pytest.mark.parametrize("runtime", [None, "artifact"], indirect=True)
+def test_delivery_environment_freshness_applies_only_to_pytest(approved_runtime, monkeypatch):
+    from odibi_anchor._dispatcher import _workflow_delivery
+
+    anchor, _, _, _ = approved_runtime
+    approved = anchor("workflow", output_format="dict")["state"]
+    method = approved["plan"]["criteria"][0]["method"]
+    monkeypatch.setattr(_workflow_delivery, "runtime_environment", lambda: {"python": "different-host"})
+    if method == "pytest":
+        with pytest.raises(RuntimeError, match="environment changed before delivery"):
+            advance(anchor, "verify_delivery")
+        assert anchor("workflow", output_format="dict")["state"] == approved
+    else:
+        assert approved["qualification"]["checks"][0]["collector"] == "anchor.managed_artifact_sha256"
+        assert "environment_sha256" not in approved["qualification"]["checks"][0]
+        verified = advance(anchor, "verify_delivery")
+        assert verified["completed"] is True and verified["progress"] == "delivery_verified"
+        assert verified["verification"]["observed"]["files"]["notebooks/report.md"]["size"] == 10
 
 
 def test_approval_retry_does_not_prompt_again(approved_runtime, monkeypatch):
