@@ -505,6 +505,7 @@ def gate_with_auto_confirm(
         scope_files,
         artifact_root=getattr(session_state, "artifact_root", None),
         target_root=getattr(session_state, "target_root", None) or str(root),
+        execution_mode=getattr(getattr(session_state, "active_task_profile", None), "execution_mode", None),
     )
     if _blocked:
         raise RuntimeError(f"BLOCKED: {_message}")

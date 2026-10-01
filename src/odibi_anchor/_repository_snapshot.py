@@ -540,11 +540,12 @@ def _dirty_worktree_block(
         ))
     next_operations.append(
         dispatcher_operation(
-            "task",
-            kwargs={"mode": "planning"},
+            "prepare",
+            kwargs={"operation": "task.create", "inputs": {"mode": "planning"}},
             reason=(
                 "if the intended work writes only managed artifacts and no source, "
-                "use an artifact-only mode instead of claiming source-change authority"
+                "prepare an artifact-only task and supply its description, goal and scope "
+                "instead of claiming source-change authority"
             ),
         )
     )

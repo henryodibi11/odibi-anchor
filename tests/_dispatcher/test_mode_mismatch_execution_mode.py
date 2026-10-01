@@ -10,6 +10,11 @@ The source-edit boundary is `task_profile_effect_compatible`, which refuses the
 `source_write` effect unless the execution mode is `source_change`. This check only
 has to reject `read_only`.
 """
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import pytest
 
 from odibi_anchor._dispatcher._effects import task_profile_effect_compatible
@@ -90,16 +95,45 @@ def test_source_and_data_modes_are_unaffected():
         assert blocked is False
 
 
-@pytest.mark.parametrize("mode", [mode for mode in ARTIFACT_ONLY_MODES if mode != "documentation"])
+@pytest.mark.parametrize("mode", ARTIFACT_ONLY_MODES)
 def test_artifact_only_modes_reject_target_root_drift(mode):
     blocked, message = _check(mode, {"src/package.py"})
     assert blocked is True
     assert "Non-artifact files" in message
 
 
-def test_documentation_mode_retains_its_markdown_specific_policy():
+def test_documentation_markdown_is_not_automatically_a_managed_artifact():
     blocked, _ = _check("documentation", {"README.md"})
-    assert blocked is False
+    assert blocked is True
+
+
+@pytest.mark.parametrize("mode", ["implementation", "analysis", "documentation"])
+@pytest.mark.parametrize("execution", ["artifact_only", "read_only", "source_change"])
+def test_accepted_profile_overrides_legacy_defaults(mode, execution):
+    blocked, _ = should_block_mode_mismatch(
+        _timings(mode), CHANGED, execution_mode=execution,
+        artifact_root=ARTIFACT_ROOT, target_root=ARTIFACT_ROOT,
+    )
+    assert blocked is (execution == "read_only")
+
+
+def test_artifact_boundary_resolves_paths_and_symlinks(tmp_path):
+    artifact = tmp_path / "artifacts"
+    target = tmp_path / "target"
+    (artifact / "work_items").mkdir(parents=True)
+    target.mkdir()
+    (artifact / "work_items" / "escape").symlink_to(target, target_is_directory=True)
+    for path, expected in [
+        (artifact / "work_items" / "valid.md", False),
+        (target / "work_items" / "fake.md", True),
+        (artifact / "work_items" / "escape" / "source.md", True),
+        (artifact / "work_items" / ".." / "source.md", True),
+    ]:
+        blocked, _ = should_block_mode_mismatch(
+            _timings("implementation"), {str(path)}, execution_mode="artifact_only",
+            artifact_root=str(artifact), target_root=str(target),
+        )
+        assert blocked is expected, path
 
 
 # ── the boundary this check is not responsible for ───────────────────────────
@@ -119,3 +153,47 @@ def test_read_only_modes_cannot_write_anything(mode):
     profile = normalize_task_profile(legacy_mode=mode)
     assert task_profile_effect_compatible("artifact_write", profile) is False
     assert task_profile_effect_compatible("source_write", profile) is False
+
+
+@pytest.mark.parametrize("execution_mode", ["artifact_only", "read_only"])
+@pytest.mark.parametrize("registered", [False, True])
+def test_public_gate_rejects_explicit_profile_target_drift(tmp_path, execution_mode, registered):
+    from odibi_anchor.pytest_runner import child_environment
+
+    script = textwrap.dedent('''
+        import sys
+        from pathlib import Path
+        from odibi_anchor.startup import launch, register_project
+        base = Path(sys.argv[1])
+        target = base / "target"
+        target.mkdir()
+        path = target / "config.json"
+        path.write_text('{"value":1}\\n')
+        register_project(anchor_home=base / "home", project_id="probe", project_root=target)
+        anchor = launch(anchor_home=base / "home", project_id="probe", project_root=target)
+        orientation = anchor("orient", output_format="dict")
+        session = anchor("new_session", name="boundary", inline=True, output_format="dict")
+        task = anchor("task", "Verify explicit execution boundaries", goal="Reject target drift",
+                      mode="implementation", execution_mode=sys.argv[2],
+                      acceptance_criteria=["Unauthorized target changes cannot pass"], output_format="dict")
+        skill = anchor("skill_loaded", "code-comprehension", output_format="dict")
+        path.write_text('{"value":2}\\n')
+        if sys.argv[3] == "True":
+            try:
+                touched = anchor("touched", "config.json", output_format="dict")
+            except RuntimeError as error:
+                assert "incompatible" in str(error)
+        review = anchor("review", output_format="dict")
+        try:
+            gate = anchor("gate", output_format="dict")
+        except RuntimeError as error:
+            assert "Mode mismatch" in str(error), str(error)
+        else:
+            raise AssertionError("Unauthorized target drift passed gate")
+    ''')
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), execution_mode, str(registered)],
+        env={**child_environment(), "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -99,3 +99,39 @@ def test_this_session_is_itself_isolated():
     """The running suite must already be pointed at the temp store."""
     assert os.environ["ANCHOR_MEMORY_DB"].startswith(tempfile.gettempdir())
     assert os.environ["ANCHOR_HOME"].startswith(tempfile.gettempdir())
+
+
+def test_real_pytest_preserves_qualification_controls(tmp_path):
+    plugin = tmp_path / "qualification_probe.py"
+    plugin.write_text('''
+import os
+def pytest_collection_finish(session):
+    suite = session.items[0].module
+    assert suite.installed_qualification_is_required()
+    assert str(suite.offline_wheelhouse()) == os.environ["EXPECTED_WHEELHOUSE"]
+    assert os.environ.get("ANCHOR_PROJECT_ID") is None
+    assert os.environ["ANCHOR_HOME"] != "/nonexistent/operator/home"
+    suite._unavailable("deliberately unavailable qualification")
+''')
+    wheelhouse = tmp_path / "wheels"
+    wheelhouse.mkdir()
+    (wheelhouse / "sentinel.whl").touch()
+    environment = dict(os.environ)
+    environment.update({
+        "PYTHONPATH": str(tmp_path),
+        "ANCHOR_REQUIRE_INSTALLED_QUALIFICATION": "1",
+        "ANCHOR_OFFLINE_WHEELHOUSE": str(wheelhouse),
+        "EXPECTED_WHEELHOUSE": str(wheelhouse),
+        "ANCHOR_HOME": SENTINEL_HOME,
+        "ANCHOR_PROJECT_ID": SENTINEL_PROJECT,
+    })
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_installed_distribution.py",
+         "--collect-only", "-p", "qualification_probe", "-q"],
+        cwd=PROJECT_ROOT, env=environment, capture_output=True, text=True, timeout=60,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Failed: installed-wheel qualification unavailable: deliberately unavailable qualification" in output
+    assert "coverage may not be skipped" in output
+    assert "AssertionError" not in output

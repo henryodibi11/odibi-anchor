@@ -3504,7 +3504,10 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_error["context"]["ownership_state"] == "unowned_or_ambiguous"
         assert [
             operation["action"] for operation in dirty_error["next_operations"]
-        ] == ["task"]
+        ] == ["prepare"]
+        assert dirty_error["next_operations"][0]["kwargs"] == {
+            "operation": "task.create", "inputs": {"mode": "planning"},
+        }
         assert _git_snapshot(dirty) == dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3877,7 +3880,10 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert [
             operation["action"]
             for operation in mcp_dirty_envelope_error["next_operations"]
-        ] == ["task"]
+        ] == ["prepare"]
+        assert mcp_dirty_envelope_error["next_operations"][0]["kwargs"] == {
+            "operation": "task.create", "inputs": {"mode": "planning"},
+        }
         assert _git_snapshot(dirty) == mcp_dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3933,7 +3939,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert mcp_dirty_error["context"]["ownership_state"] == "interrupted_source_task"
         assert [
             operation["action"] for operation in mcp_dirty_error["next_operations"]
-        ] == ["task_rebind", "task"]
+        ] == ["task_rebind", "prepare"]
         prior_window = mcp_unborn_result["v2_envelope"]["result"]["task_window_id"]
         assert mcp_dirty_error["next_operations"][0]["kwargs"] == {
             "task_window_id": prior_window,
