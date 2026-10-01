@@ -6,6 +6,7 @@ import pytest
 
 from odibi_anchor._dispatcher._workflow_admission import bind_workflow, workflow_owner
 from odibi_anchor._dispatcher._workflow_evidence import (
+    bind_review,
     collect_candidate,
     collect_review,
     collect_test_measurement,
@@ -57,13 +58,16 @@ def work(tmp_path, request):
     return db, producer, workflow
 
 
-def reviewer(work, *, mode="review"):
-    db, producer, _ = work
+def reviewer(work, *, mode="review", binding_changes=None):
+    db, producer, workflow = work
     observer = fresh_state(
         producer, task_window_id="ltw_review", session_id="review-session",
         active_task_profile=normalize_task_profile(legacy_mode=mode), workflow_binding=None,
         bps_kernel=producer.bps_kernel,
     )
+    if mode == "review":
+        observer.workflow_binding = bind_review(db, session_state=observer, workflow_id=workflow["workflow_id"])
+        observer.workflow_binding.update(binding_changes or {})
     persist_accepted_task(db, session_state=observer, task_stage={"trust_domain": "personal"}, task_result=result())
     return observer
 
@@ -99,9 +103,25 @@ def test_review_records_task_separation_without_inventing_authentication(work):
     assert review["kind"] == "independent"
     assert review["reviewer"] == "ltw_review"
     assert review["independence"] == "separate_read_only_accepted_task"
+    assert review["separate_read_only_accepted_task"] is True
     assert review["reviewer_authentication"] == "none"
     assert review["distinct_session"] is True
     assert review["evidence_kind"] == "agent_judgment"
+
+
+@pytest.mark.parametrize("field", ["plan_sha256", "review_candidate_sha256"])
+def test_review_task_cannot_accept_wrong_subject(work, field):
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    with pytest.raises(WorkflowError, match="exact plan and candidate"):
+        reviewer(work, binding_changes={field: "other"})
+
+
+def test_review_task_cannot_accept_unknown_workflow(work):
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    with pytest.raises(WorkflowError, match="workflow not found"):
+        reviewer(work, binding_changes={"workflow_id": "other"})
 
 
 def test_write_capable_reviewer_is_not_independent(work):
@@ -186,6 +206,8 @@ def test_only_retained_fresh_evidence_qualifies_and_retry_is_idempotent(work):
 
 
 def test_retained_skips_block_qualification(work):
+    from odibi_anchor.codebase._workflow import WorkflowError
+
     db, producer, workflow = work
     retained = retain_evidence(work, skipped=1)
     assert retained["measurements"]["constant"]["status"] == "failed"
@@ -216,13 +238,14 @@ def test_measurement_rejects_environment_change(work):
 
 def test_qualification_rejects_environment_change(work, monkeypatch):
     from odibi_anchor._dispatcher import _workflow_evidence
+    from odibi_anchor.codebase._workflow import WorkflowError
 
     db, producer, workflow = work
     retain_evidence(work)
     monkeypatch.setattr(_workflow_evidence, "runtime_environment", lambda: {"python": "other"})
     with pytest.raises(WorkflowError, match="differs from retained measurement"):
-        qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
-                          expected_generation=4, request_id="qualify")
+        _workflow_evidence.qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
+                                           expected_generation=4, request_id="qualify")
 
 
 def test_new_implementation_clears_previous_measurements_and_review(work):

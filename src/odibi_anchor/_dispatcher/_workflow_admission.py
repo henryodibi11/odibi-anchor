@@ -53,6 +53,9 @@ def bound_workflow(path: str | Path, *, session_state: Any) -> dict[str, Any] | 
         return None
     keys = {"schema_version", "workflow_id", "task_window_id", "owner_sha256",
             "plan_sha256", "execution_mode"}
+    is_review = isinstance(binding, dict) and "review_candidate_sha256" in binding
+    if is_review:
+        keys.add("review_candidate_sha256")
     if (not isinstance(binding, dict) or set(binding) != keys
             or type(binding["schema_version"]) is not int or binding["schema_version"] != 1):
         raise WorkflowError("integrity", "unsupported or incomplete workflow binding")
@@ -63,6 +66,13 @@ def bound_workflow(path: str | Path, *, session_state: Any) -> dict[str, Any] | 
             or profile is None or binding["execution_mode"] != profile.execution_mode):
         raise WorkflowError("wrong_authority", "workflow binding does not match accepted task authority")
     state = read_workflow(path, owner=owner, workflow_id=binding["workflow_id"])
+    if is_review:
+        if (profile.execution_mode != "read_only" or profile.work_type != "verify"
+                or binding["plan_sha256"] != state["plan_sha256"]
+                or state["candidate"] is None
+                or binding["review_candidate_sha256"] != digest(state["candidate"])):
+            raise WorkflowError("stale_evidence", "review task requires exact plan and candidate with read-only authority")
+        return state
     if (binding["plan_sha256"] != state["plan_sha256"]
             or binding["execution_mode"] != state["plan"]["execution_mode"]):
         raise WorkflowError("stale_plan", "plan changed; establish a fresh task at a safe boundary")

@@ -130,6 +130,21 @@ def collect_candidate(path: str | Path, *, session_state: Any,
             "snapshot": snapshot}
 
 
+def bind_review(path: str | Path, *, session_state: Any, workflow_id: str) -> dict[str, Any]:
+    """Prepare exact review subject for persistence with a read-only task."""
+    owner = workflow_owner(session_state)
+    state = read_workflow(path, owner=owner, workflow_id=workflow_id)
+    profile = session_state.active_task_profile
+    if profile is None or profile.execution_mode != "read_only" or profile.work_type != "verify":
+        raise WorkflowError("review_required", "review binding requires read-only verification task")
+    if state["progress"] != "implemented" or state["status"] != "active":
+        raise WorkflowError("missing_evidence", "review binding requires an active implemented candidate")
+    return {"schema_version": 1, "workflow_id": workflow_id,
+            "task_window_id": session_state.task_window_id, "owner_sha256": digest(owner),
+            "plan_sha256": state["plan_sha256"], "execution_mode": "read_only",
+            "review_candidate_sha256": digest(state["candidate"])}
+
+
 def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
                    findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Bind critique to runtime task separation without claiming authentication."""
@@ -147,6 +162,10 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
         raise WorkflowError("review_required", "independent critique requires an accepted read-only verification task")
     if state["plan"]["risk"] == "high" and not distinct:
         raise WorkflowError("review_required", "high-risk work cannot review its own candidate")
+    if distinct:
+        expected = bind_review(path, session_state=session_state, workflow_id=workflow_id)
+        if reviewer["task"].get("workflow_binding") != expected:
+            raise WorkflowError("stale_evidence", "review task is not bound to this exact plan and candidate")
     if not isinstance(findings, list):
         raise ValueError("review findings must be an explicit array")
     findings = json.loads(canonical(findings))
@@ -159,6 +178,7 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
             "status": "failed" if any(f["status"] == "open" for f in findings) else "satisfied",
             "findings": findings, "evidence_ref": digest(findings),
             "independence": "separate_read_only_accepted_task" if distinct else "self_verification",
+            "separate_read_only_accepted_task": distinct,
             "reviewer_authentication": "none", "evidence_kind": "agent_judgment",
             "distinct_session": reviewer["identity"]["session_id"] != producer["identity"]["session_id"]}
 
