@@ -62,10 +62,10 @@ def test_exact_pre_task_access_assignment_for_all_builtins():
 
 
 @pytest.mark.parametrize("action,selector,effect,access", [
-    *[("workflow", value, "read", "context_collection") for value in (None, "status", "prepare_delivery")],
+    *[("workflow", value, "read", "context_collection") for value in (None, "status", "prepare_delivery", "prepare_revocation")],
     *[("workflow", value, "governance_write", "task_required") for value in (
         "create", "accept_plan", "implemented", "review", "qualify", "request_delivery_approval",
-        "verify_delivery", "block", "resume", "cancel", "replan",
+        "check_artifact", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan",
     )],
     *[("problem", value, "read", "context_collection") for value in (None, "list", "status", "show", "resume")],
     *[("problem", value, "artifact_write", "task_required") for value in ("create", "update", "link_spec", "close")],

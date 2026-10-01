@@ -39,7 +39,7 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "task":         'anchor("task", "description", goal="...", mode="...", problem="PRB-...", spec="...", work_item="WI-YYYY-NNNN")',
     "task_rebind":  'anchor("task_rebind", task_window_id="ltw_...")  # exact ID resolves interrupted-task ambiguity',
     "task_adoption": 'anchor("task_adoption", "inspect|request|withdraw", ...)  # authenticated takeover of dirty work only',
-    "workflow":     'anchor("workflow", "status|create|accept_plan|implemented|review|qualify|prepare_delivery|request_delivery_approval|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
+    "workflow":     'anchor("workflow", "status|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
     "gate":         'anchor("gate")  # no args — gate derives ALL evidence from session state',
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',

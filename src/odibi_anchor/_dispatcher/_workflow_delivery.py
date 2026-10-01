@@ -164,6 +164,52 @@ def request_delivery_approval(path, *, session_state, workflow_id, request_id, t
     )
 
 
+def prepare_revocation(path, *, session_state, workflow_id):
+    """Bind withdrawal to retained authority even when the candidate is stale."""
+    state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
+    if state["progress"] != "approved_for_delivery" or not state.get("approval"):
+        raise WorkflowError("invalid_transition", "revocation requires an unused delivery approval")
+    if (state.get("blocker") or {}).get("kind") == "outcome_unknown":
+        raise WorkflowError("recovery_required", "reconcile the unknown delivery outcome first")
+    subject = {"workflow_id": workflow_id, "generation": state["generation"],
+               "owner": state["owner"], "plan_sha256": state["plan_sha256"],
+               "candidate_sha256": digest(state["candidate"]),
+               "approval_sha256": digest(state["approval"]),
+               "destination": state["plan"]["destination"], "operation": "revoke_delivery"}
+    return {"kind": "workflow_revocation_request", "subject": subject,
+            "approval_response": "REVOKE " + digest(subject), "authority_granted": False}
+
+
+def request_delivery_revocation(path, *, session_state, workflow_id, request_id,
+                                timeout_minutes=5, public_request=None):
+    """Withdraw only the exact retained grant confirmed by the configured owner."""
+    from odibi_anchor.human_input import request_human_input_record
+    from odibi_anchor.human_input_owner import select_owner_approval_provider
+
+    prepared = prepare_revocation(path, session_state=session_state, workflow_id=workflow_id)
+    subject = prepared["subject"]
+    provider = select_owner_approval_provider()
+    message = ("Revoke this exact unused delivery approval. This does not roll back any destination "
+               "or prove that an external operation did not occur.\n" + canonical(subject)
+               + "\nReply exactly: " + prepared["approval_response"])
+    response = request_human_input_record(message, timeout_minutes=timeout_minutes, transport=provider.transport)
+    if (response.response != prepared["approval_response"]
+            or response.response_user_id != provider.expected_owner_id
+            or response.transport != provider.transport.name
+            or not response.request_id or not response.response_message_id):
+        raise WorkflowError("authority_required", "human response does not match exact challenge and owner")
+    if prepare_revocation(path, session_state=session_state, workflow_id=workflow_id) != prepared:
+        raise WorkflowError("stale_evidence", "workflow approval changed during revocation")
+    return transition_workflow(
+        path, owner=workflow_owner(session_state), workflow_id=workflow_id,
+        expected_generation=subject["generation"], request_id=request_id, operation="revoke_delivery",
+        payload={**subject, "actor_kind": "human", "owner": provider.expected_owner_id,
+                 "authority_ref": response.request_id, "response_message_id": response.response_message_id,
+                 "owner_assurance": provider.assurance},
+        public_request=public_request,
+    )
+
+
 def observe_destination(path, *, session_state, workflow_id, workspace_client=None):
     """Read current destination state without changing it or inferring permission."""
     state = _fresh(path, session_state, workflow_id, allow_unknown=True)

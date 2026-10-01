@@ -671,3 +671,64 @@ def test_closed_producer_cannot_accept_new_plan(runtime):
     with pytest.raises(RuntimeError, match="gated or closed"):
         advance(anchor, "accept_plan")
     assert anchor("workflow", output_format="dict")["state"] == before
+
+
+@pytest.mark.parametrize("change", [None, "candidate", "wrong_owner", "generation", "unknown", "completed"])
+def test_public_exact_owner_revocation_and_historical_retry(runtime, monkeypatch, change):
+    from odibi_anchor import human_input, human_input_owner
+
+    anchor, home, _, _ = runtime
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    advance(anchor, "review", findings=[])
+    finish_producer(anchor)
+    advance(anchor, "qualify")
+    prepared = anchor("workflow", "prepare_delivery", output_format="dict")
+    provider = SimpleNamespace(expected_owner_id="test-owner", assurance="fixture",
+                               transport=SimpleNamespace(name="fixture"))
+    monkeypatch.setattr(human_input_owner, "select_owner_approval_provider", lambda: provider)
+    monkeypatch.setattr(human_input, "request_human_input_record", lambda *a, **k: SimpleNamespace(
+        response=prepared["approval_response"], response_user_id="test-owner", transport="fixture",
+        request_id="approval-request", response_message_id="approval-response"))
+    approved = advance(anchor, "request_delivery_approval")
+    if change == "candidate":
+        (home / "workspace/projects/alpha/notebooks/report.md").write_text("Changed after approval\n")
+    if change == "unknown":
+        advance(anchor, "block", reason="Host outcome uncertain", blocker_kind="outcome_unknown")
+    if change == "completed":
+        advance(anchor, "verify_delivery")
+    if change in {"unknown", "completed"}:
+        with pytest.raises(RuntimeError, match=r"unknown delivery|unused delivery approval"):
+            anchor("workflow", "prepare_revocation", output_format="dict")
+        return
+    revocation = anchor("workflow", "prepare_revocation", output_format="dict")
+    assert revocation["authority_granted"] is False
+    assert revocation["subject"]["destination"] == {"kind": "managed_artifacts"}
+    assert revocation["subject"]["generation"] == approved["generation"]
+    calls = []
+
+    def reply(*args, **kwargs):
+        calls.append(args)
+        if change == "generation":
+            advance(anchor, "block", reason="New blocker while waiting", blocker_kind="unavailable")
+        return SimpleNamespace(response=revocation["approval_response"],
+                               response_user_id="other" if change == "wrong_owner" else "test-owner",
+                               transport="fixture", request_id="revoke-request", response_message_id="revoke-response")
+
+    monkeypatch.setattr(human_input, "request_human_input_record", reply)
+    kwargs = {"expected_generation": approved["generation"], "request_id": "revoke-once", "output_format": "dict"}
+    if change in {"wrong_owner", "generation"}:
+        with pytest.raises(RuntimeError, match=r"exact challenge and owner|changed during"):
+            anchor("workflow", "revoke_delivery", **kwargs)
+        assert anchor("workflow", output_format="dict")["state"]["approval"] == approved["approval"]
+    else:
+        revoked = anchor("workflow", "revoke_delivery", **kwargs)
+        assert revoked["state"]["approval"] is None
+        assert revoked["state"]["progress"] == "qualified"
+        assert revoked["state"]["completed"] is False
+        repeated = anchor("workflow", "revoke_delivery", **kwargs)
+        assert repeated["replayed"] is True and repeated["state"] == revoked["state"]
+        assert len(calls) == 1
+        if change == "candidate":
+            with pytest.raises(RuntimeError, match="changed after qualification"):
+                anchor("workflow", "prepare_delivery", output_format="dict")

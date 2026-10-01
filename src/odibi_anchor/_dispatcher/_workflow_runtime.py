@@ -14,9 +14,9 @@ from odibi_anchor.codebase._workflow import (
     transition_workflow,
 )
 
-READ_COMMANDS = frozenset({"status", "prepare_delivery"})
+READ_COMMANDS = frozenset({"status", "prepare_delivery", "prepare_revocation"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
-                            "request_delivery_approval", "verify_delivery", "block", "resume", "cancel", "replan"})
+                            "request_delivery_approval", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan"})
 
 
 def workflow_action(path, *, session_state, command="status", workflow_id=None,
@@ -32,7 +32,9 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     from odibi_anchor._dispatcher._workflow_delivery import (
         observe_destination,
         prepare_delivery,
+        prepare_revocation,
         request_delivery_approval,
+        request_delivery_revocation,
     )
     from odibi_anchor._dispatcher._workflow_evidence import (
         _accepted_task,
@@ -89,8 +91,9 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             if state is None or (workflow_id is not None and workflow_id != state["workflow_id"]):
                 raise WorkflowError("wrong_authority", "operation requires this exact accepted task workflow binding")
             workflow_id = state["workflow_id"]
-            if command == "prepare_delivery":
-                packet = prepare_delivery(path, session_state=session_state, workflow_id=workflow_id)
+            if command in {"prepare_delivery", "prepare_revocation"}:
+                prepare = prepare_delivery if command == "prepare_delivery" else prepare_revocation
+                packet = prepare(path, session_state=session_state, workflow_id=workflow_id)
                 return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
             partial = None
             if prior is None and command == "verify_delivery":
@@ -113,6 +116,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                 state = request_delivery_approval(path, session_state=session_state,
                                                   workflow_id=workflow_id, request_id=request_id,
                                                   public_request=public_request)
+            elif command == "revoke_delivery":
+                state = request_delivery_revocation(path, session_state=session_state,
+                                                    workflow_id=workflow_id, request_id=request_id,
+                                                    public_request=public_request)
             else:
                 operation = command
                 if command == "accept_plan":
