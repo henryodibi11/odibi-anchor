@@ -1286,6 +1286,11 @@ def _capture(payload: dict[str, Any]) -> dict:
             "invalid project_refs: applicability_scope 'project_local' requires "
             f"exactly 1 project_refs entry, got {len(projects)}"
         )
+    if scope == "workbench" and projects:
+        raise ValueError(
+            "invalid project_refs: applicability_scope 'workbench' accepts no "
+            f"project_refs entries, got {len(projects)}"
+        )
     if scope == "cross_project" and len(projects) < 2:
         raise ValueError(
             "invalid project_refs: applicability_scope 'cross_project' requires "
@@ -1654,7 +1659,11 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
                 "cross_project",
             }:
                 raise ValueError("invalid derived item")
-            if (scope == "project_local" and len(projects) != 1) or (scope == "cross_project" and len(projects) < 2):
+            if (
+                (scope == "project_local" and len(projects) != 1)
+                or (scope == "workbench" and projects)
+                or (scope == "cross_project" and len(projects) < 2)
+            ):
                 raise ValueError("invalid project_refs")
             evidence = _evidence(payload.get("evidence"))
             provenance = payload.get("provenance", {})

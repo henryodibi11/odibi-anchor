@@ -2,6 +2,88 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.20] - 2026-09-21
+
+### Changed
+
+- Databricks portfolios now keep a stable user-specific local-state base while managed preparation
+  selects a physical runtime root isolated by effective UID and OS-account fingerprint.
+- Startup packets expose the configured and physical local-state roots, compute UID, selection,
+  and one-time legacy migration status for auditable recovery.
+
+### Fixed
+
+- Databricks compute identity recycling no longer blocks startup on a prior identity's protected
+  local state or requires repeated portfolio rewrites; inaccessible legacy roots remain untouched
+  while verified v2 snapshots restore database, artifacts, and continuity into the current root.
+- Accessible pre-0.3.20 local state migrates atomically to the identity-isolated root, preventing a
+  recycled UID from later reopening stale state at the configured base.
+
+## [0.3.19] - 2026-09-20
+
+### Changed
+
+- Agent-facing Python, CLI, MCP, help, and packaged guidance surfaces now use only structured
+  `learning capture/assess` and governed memory-promotion routes; obsolete `learn` and `confirm`
+  actions are no longer public.
+- Historical exact-owner learning markers migrate automatically to structured obligations during
+  bootstrap, while unowned markers remain forensic evidence without granting or blocking authority.
+- Databricks guidance now distinguishes package installation, Python restart, host setup,
+  per-process bootstrap, and per-task `new_session` so healthy sessions avoid repeated setup.
+
+### Fixed
+
+- Checkpoints now accept and commit only structured learning payloads and require the resulting
+  obligation to reach the `assessed` terminal state.
+- Historical-marker migration fails closed when its structured obligation cannot be established.
+
+## [0.3.18] - 2026-09-20
+
+### Changed
+
+- Dirty-worktree recovery now distinguishes exact interrupted-task ownership, exact completed-task
+  delivery, and unowned or ambiguous changes before offering executable next operations.
+- Ambiguous task-rebind diagnostics are bounded to ten verified open windows with exact copy-ready
+  selection calls and an omitted-window count.
+
+### Fixed
+
+- Terminal task records now prevent completed windows from being rebound even when a process stops
+  between terminal-record persistence and accepted-task closure.
+- Completed artifact-only task windows remain terminal across fresh initialization instead of
+  accumulating as stale rebind candidates.
+- Historical terminal tasks claim dirty work only when branch, HEAD, and the complete changed-path
+  set match their retained repository evidence.
+
+## [0.3.17] - 2026-09-20
+
+### Added
+
+- Dirty-worktree source-task failures now carry bounded, copy-ready recovery metadata.
+- Learning and task help now documents accepted schemas, field constraints, valid modes, and
+  exact observation identifiers.
+- Managed problem, work-item, spec, and decision directories now have a canonical schema
+  registry with read enforcement or advisory reporting according to reader behavior.
+
+### Changed
+
+- Base-package help loads optional actions lazily, preserving help across minimal, MCP, and
+  Databricks installations.
+- Artifact-only tasks may deliver managed records while gates reject target-root drift that
+  requires source-change authority.
+- Pytest subprocesses and direct suite execution use isolated Anchor routing and unique state
+  roots rather than inheriting operator projects or databases.
+
+### Fixed
+
+- Exact memory-ID lookup preserves project and lifecycle scope while still resolving eligible
+  task selections and shared memories.
+- Dirty-worktree recovery no longer recommends review before task authority can exist.
+- Snapshot Markdown surfaces malformed managed records and unavailable validation; work-item
+  listing isolates malformed files instead of hiding healthy records.
+- Learning scope validation now enforces the documented `project_refs` cardinality for
+  `workbench`, `project_local`, and `cross_project` observations.
+
 ## [0.3.16] - 2026-09-13
 
 ### Added
@@ -321,3 +403,7 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 [0.3.14]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.14
 [0.3.15]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.15
 [0.3.16]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.16
+[0.3.17]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.17
+[0.3.18]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.18
+[0.3.19]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.19
+[0.3.20]: https://github.com/henryodibi11/odibi-anchor/releases/tag/v0.3.20

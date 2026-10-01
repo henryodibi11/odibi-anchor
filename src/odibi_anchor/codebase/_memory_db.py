@@ -1328,14 +1328,14 @@ def archive_stale(
 
 def get_memory_entry(
     db_path: str | None = None, *, entry_id: str,
+    project: str | None = None,
+    status: str | list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Return one entry by exact id, or None when no such entry exists.
+    """Return one eligible entry by exact id, or None when it is out of scope.
 
-    Deliberately unscoped by project and status. The caller already holds the id —
-    it is handed to them by disposition blocks and projection decisions — so
-    filtering here would reproduce the dead end this exists to remove: an id you
-    cannot resolve. The returned entry carries its own project and status, so the
-    caller can see the scope rather than having it silently applied.
+    Project scoping matches ordinary retrieval: a project may resolve its own
+    entries and shared ``project='all'`` entries. Callers that need lifecycle
+    filtering must pass the eligible statuses explicitly.
 
     Like get_all_entries, this does not update last_used timestamps: resolving what
     an id refers to is not a retrieval for relevance purposes.
@@ -1343,9 +1343,18 @@ def get_memory_entry(
     if not isinstance(entry_id, str) or not entry_id.strip():
         raise ValueError("entry_id must be a non-empty string")
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT * FROM memories WHERE id = ?", (entry_id.strip(),),
-    ).fetchone()
+    sql = "SELECT * FROM memories WHERE id = ?"
+    params: list[Any] = [entry_id.strip()]
+    if project:
+        sql += " AND project IN (?, 'all')"
+        params.append(project)
+    if status:
+        statuses = [status] if isinstance(status, str) else list(status)
+        if not statuses or any(value not in VALID_STATUSES for value in statuses):
+            raise ValueError("status must contain only valid memory lifecycle states")
+        sql += f" AND status IN ({', '.join('?' * len(statuses))})"
+        params.extend(statuses)
+    row = conn.execute(sql, params).fetchone()
     if row is None:
         return None
     entry = _row_to_dict(row)

@@ -55,8 +55,7 @@ learning capture, or merely because a task bootstrap returned memory selections.
    promote a candidate. Mechanically provable claims require a supported typed verifier.
    Preferences, conventions, policy, and procedural authority require distinct governed owner
    requests: `request_owner_activation` for candidate→active, then
-   `request_owner_confirmation` for active→confirmed. `anchor("confirm", ...)` remains blocked
-   legacy compatibility and is not an authority lane. Without complete Slack configuration,
+   `request_owner_confirmation` for active→confirmed. Without complete Slack configuration,
    an interactive Windows host uses a visible local owner-presence dialog. A single-user
    Databricks session uses a separate prepare→owner-message→approve sequence with exact challenge
    binding. Its receipt records a lower-assurance in-session assertion; workspace authentication,

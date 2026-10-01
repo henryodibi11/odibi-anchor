@@ -156,7 +156,11 @@ def session_snapshot_context(
     # Rejecting here would make a damaged file unsnapshottable and leave the
     # operator unable to checkpoint the work it belongs to; the point is to
     # surface the corruption near its cause instead of sessions later (issue #15).
-    schema_violations = _managed_record_violations()
+    managed_record_validation = _managed_record_validation()
+    schema_violations = managed_record_validation["violations"]
+    if managed_record_validation["status"] == "unavailable":
+        findings.append("Managed-record validation was unavailable during this snapshot.")
+        risks.append(managed_record_validation["reason"])
     if schema_violations:
         enforced = [v for v in schema_violations if not v.get("advisory")]
         advisory = [v for v in schema_violations if v.get("advisory")]
@@ -193,6 +197,7 @@ def session_snapshot_context(
         "findings": findings,
         "risks": risks,
         "managed_record_violations": schema_violations,
+        "managed_record_validation": managed_record_validation,
         "samples": {},
         "suggested_next_actions": (next_steps or []) + [
             "MUST: Run anchor('snapshot', mode='handoff', summary=task, state='in_progress', decisions=[...]) "
@@ -301,12 +306,12 @@ def _diff_snapshots(
 # Findings & Risks
 # ---------------------------------------------------------------------------
 
-def _managed_record_violations() -> list[dict[str, Any]]:
-    """Scan the active project's artifact root for malformed managed records.
+def _managed_record_validation() -> dict[str, Any]:
+    """Scan the active project's artifact root and report acquisition status.
 
     Best effort by design: a snapshot must still be produced when the artifact
-    root is unknown or unreadable, so any failure here yields no findings rather
-    than an error.
+    root is unknown or unreadable. Failure is explicit rather than silently
+    indistinguishable from a clean scan.
     """
     try:
         from odibi_anchor._dispatcher._managed_record_schema import scan_managed_records
@@ -314,10 +319,22 @@ def _managed_record_violations() -> list[dict[str, Any]]:
 
         artifact_root = get_state().get("artifact_root")
         if not artifact_root:
-            return []
-        return scan_managed_records(artifact_root)
-    except Exception:
-        return []
+            return {
+                "status": "unavailable",
+                "reason": "Managed-record validation unavailable: artifact root is unknown.",
+                "violations": [],
+            }
+        return {
+            "status": "available",
+            "reason": None,
+            "violations": scan_managed_records(artifact_root),
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "reason": f"Managed-record validation unavailable: {type(exc).__name__}: {exc}",
+            "violations": [],
+        }
 
 
 def _build_snapshot_findings(
@@ -482,6 +499,34 @@ def render_session_snapshot_report(ctx: dict[str, Any]) -> str:
         skipped = test_state.get("skipped", 0)
         status = "PASSING" if failed == 0 else "FAILING"
         lines.append(f"**{status}** — {passed} passed, {failed} failed, {skipped} skipped")
+        lines.append("")
+
+    findings = ctx.get("findings", [])
+    if findings:
+        lines.append("## Findings")
+        lines.append("")
+        lines.extend(f"- {finding}" for finding in findings)
+        lines.append("")
+
+    risks = ctx.get("risks", [])
+    if risks:
+        lines.append("## Risks")
+        lines.append("")
+        lines.extend(f"- {risk}" for risk in risks)
+        lines.append("")
+
+    validation = ctx.get("managed_record_validation", {})
+    violations = ctx.get("managed_record_violations", [])
+    if validation.get("status") == "unavailable" or violations:
+        lines.append("## Managed-record validation")
+        lines.append("")
+        if validation.get("status") == "unavailable":
+            lines.append(f"- **Unavailable:** {validation.get('reason', 'unknown reason')}")
+        for violation in violations:
+            lines.append(
+                f"- `{violation.get('path', 'unknown')}`: "
+                f"{violation.get('reason', 'schema violation')}"
+            )
         lines.append("")
 
     # Changes since

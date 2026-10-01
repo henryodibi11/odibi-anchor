@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
@@ -62,6 +63,104 @@ def _absolute_directory(value: str | os.PathLike[str], name: str) -> Path:
     if not path.is_absolute() or not path.is_dir():
         raise ValueError(f"{name} must be an existing absolute directory")
     return path.resolve()
+
+
+def _local_state_root_status(path: Path, *, compute_uid: int) -> str:
+    """Classify one local root without traversing its protected contents."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return "absent"
+    except PermissionError:
+        return "inaccessible"
+    if stat.S_ISLNK(metadata.st_mode):
+        return "symlink"
+    if not stat.S_ISDIR(metadata.st_mode):
+        return "not_directory"
+    if metadata.st_uid != compute_uid:
+        return "different_identity"
+    try:
+        accessible = os.access(
+            path, os.R_OK | os.W_OK | os.X_OK, effective_ids=True
+        )
+    except TypeError:  # pragma: no cover - Databricks is POSIX; protects portable imports.
+        accessible = os.access(path, os.R_OK | os.W_OK | os.X_OK)
+    return "current_identity" if accessible else "inaccessible"
+
+
+def _databricks_compute_identity() -> tuple[int, str]:
+    """Return the effective UID and a non-reversible OS-account fingerprint."""
+    get_effective_uid = getattr(os, "geteuid", None)
+    if get_effective_uid is None:  # pragma: no cover - Databricks runtimes are POSIX.
+        raise RuntimeError("Databricks local state isolation requires a POSIX effective UID")
+    import pwd
+
+    compute_uid = int(get_effective_uid())
+    account_name = pwd.getpwuid(compute_uid).pw_name
+    fingerprint = hashlib.sha256(
+        f"{compute_uid}:{account_name}".encode()
+    ).hexdigest()[:12]
+    return compute_uid, fingerprint
+
+
+def _runtime_environment(
+    environment: Mapping[str, str], *, adapter: str
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Resolve a physical runtime root without changing portfolio routing authority."""
+    resolved = dict(environment)
+    configured_root = Path(resolved["ANCHOR_HOME"])
+    if adapter != "databricks":
+        return resolved, {
+            "configured_root": str(configured_root),
+            "runtime_root": str(configured_root),
+            "selection": "configured",
+            "compute_uid": None,
+            "compute_identity": None,
+            "configured_root_status": "not_applicable",
+            "migration": "not_applicable",
+        }
+    compute_uid, compute_identity = _databricks_compute_identity()
+    configured_status = _local_state_root_status(
+        configured_root, compute_uid=compute_uid
+    )
+    if configured_status in {"symlink", "not_directory"}:
+        raise ValueError(
+            "configured Databricks local_state_root must be a real directory or absent"
+        )
+    runtime_root = Path(
+        f"{configured_root}.identity-{compute_uid}-{compute_identity}"
+    )
+    runtime_status = _local_state_root_status(
+        runtime_root, compute_uid=compute_uid
+    )
+    if runtime_status not in {"absent", "current_identity"}:
+        from odibi_anchor._recovery import attach_recovery
+
+        raise attach_recovery(
+            RuntimeError(
+                "identity-isolated local state root is unavailable for the current "
+                "Databricks compute identity"
+            ),
+            error_code="databricks_local_state_identity_collision",
+            context={
+                "configured_root": str(configured_root),
+                "runtime_root": str(runtime_root),
+                "compute_uid": compute_uid,
+                "compute_identity": compute_identity,
+                "runtime_root_status": runtime_status,
+            },
+        )
+    resolved["ANCHOR_HOME"] = str(runtime_root)
+    resolved["ANCHOR_MEMORY_DB"] = str(runtime_root / ".agent_memory.db")
+    return resolved, {
+        "configured_root": str(configured_root),
+        "runtime_root": str(runtime_root),
+        "selection": "identity_isolated",
+        "compute_uid": compute_uid,
+        "compute_identity": compute_identity,
+        "configured_root_status": configured_status,
+        "migration": "not_required",
+    }
 
 
 def _repository_provider_for_target(target: Path) -> Any | None:
@@ -191,8 +290,8 @@ def prepare_portfolio_runtime(
     """Prepare one exact configured route and restore absent local state when available.
 
     This operation never selects an ambient project and never mutates process
-    environment. It creates only the configured local state directory and missing
-    managed-project registration needed by the returned immutable binding.
+    environment. It prepares the host-qualified physical local state directory and
+    missing managed-project registration needed by the returned immutable binding.
     """
     from odibi_anchor.portfolio import load_portfolio_document, resolve_project
 
@@ -201,16 +300,44 @@ def prepare_portfolio_runtime(
         document["portfolio"], host_id=host_id, project_id=project_id,
         persona_id=persona_id,
     )
-    environment = resolved["environment"]
+    adapter = document["portfolio"]["hosts"][host_id]["adapter"]
+    environment, local_state = _runtime_environment(
+        resolved["environment"], adapter=adapter
+    )
     home = Path(environment["ANCHOR_HOME"])
     target = _absolute_directory(environment["ANCHOR_PROJECT_ROOT"], "ANCHOR_PROJECT_ROOT")
+    if (
+        adapter == "databricks"
+        and local_state["configured_root_status"] == "current_identity"
+        and not home.exists()
+    ):
+        configured_root = Path(local_state["configured_root"])
+        try:
+            configured_root.rename(home)
+        except OSError as exc:
+            from odibi_anchor._recovery import attach_recovery
+
+            raise attach_recovery(
+                RuntimeError(
+                    "failed to migrate the accessible legacy Databricks local state root "
+                    "to its identity-isolated runtime root"
+                ),
+                error_code="databricks_local_state_migration_failed",
+                context={
+                    "configured_root": str(configured_root),
+                    "runtime_root": str(home),
+                    "compute_uid": local_state["compute_uid"],
+                    "compute_identity": local_state["compute_identity"],
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+        local_state["migration"] = "moved_configured_root"
     if home.exists() and not home.is_dir():
         raise ValueError("configured local_state_root must be a directory")
 
     database = Path(environment["ANCHOR_MEMORY_DB"])
     authority_id = environment["ANCHOR_AUTHORITY_ID"]
     trust_domain = environment["ANCHOR_TRUST_DOMAIN"]
-    adapter = document["portfolio"]["hosts"][host_id]["adapter"]
     durable_root = environment.get("ANCHOR_DURABLE_ROOT")
     is_databricks = adapter == "databricks"
     if durable_root is not None and not is_databricks and not Path(durable_root).is_dir():
@@ -307,6 +434,7 @@ def prepare_portfolio_runtime(
         "project_id": route.project_id,
         "target_root": route.target_root,
         "environment": environment,
+        "local_state": local_state,
         "persona": resolved["persona"],
         "registration": registration,
         "restore": restore,
@@ -422,7 +550,7 @@ def bootstrap_managed_project(
         if project_root is None:
             raise ValueError("project_root is required when create_if_missing is true")
         target = _absolute_directory(project_root, "project_root")
-        expected_environment = {
+        expected_environment, _expected_local_state = _runtime_environment({
             "ANCHOR_HOME": host["local_state_root"],
             "ANCHOR_MEMORY_DB": os.path.join(
                 host["local_state_root"], ".agent_memory.db"
@@ -448,7 +576,7 @@ def bootstrap_managed_project(
                 if portfolio.get("durability", {}).get("retention") is not None
                 else {}
             ),
-        }
+        }, adapter=host["adapter"])
         refuse_environment_conflicts(expected_environment)
         portfolio_change = add_project(
             config_path,
@@ -461,9 +589,12 @@ def bootstrap_managed_project(
     elif create_if_missing:
         raise ValueError(f"managed project already exists: {project_id}")
     else:
-        expected_environment = resolve_project(
-            portfolio, host_id=selected_host, project_id=project_id
-        )["environment"]
+        expected_environment, _expected_local_state = _runtime_environment(
+            resolve_project(
+                portfolio, host_id=selected_host, project_id=project_id
+            )["environment"],
+            adapter=host["adapter"],
+        )
         refuse_environment_conflicts(expected_environment)
 
     prepared = prepare_portfolio_runtime(
@@ -531,6 +662,7 @@ def bootstrap_managed_project(
             "verified_files": guidance.get("verified_file_count"),
             "verified_skills": guidance.get("verified_skill_count"),
         },
+        "local_state": prepared["local_state"],
         "restore": {
             key: prepared["restore"][key]
             for key in (

@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
-def _serializable_baseline(target_worktree, configured_target_ref="main"):
+def _serializable_baseline(target_worktree, configured_target_ref="main", **_kwargs):
     from odibi_anchor._repository_snapshot import UnbornTaskRepositoryBaseline
 
     return UnbornTaskRepositoryBaseline(
@@ -1120,7 +1120,7 @@ class TestPreTaskInvocationAccessPolicy:
             "status", "audit_history", "orient",
         ] * 3
         inventory = anchor_func("tools", output_format="dict")["samples"]
-        assert len(inventory["hardcoded_tools"]) == 93
+        assert len(inventory["hardcoded_tools"]) == 91
         assert len(inventory["registered_tools"]) == 11
         assert all("allowed_pre_task_access" in row for row in inventory["hardcoded_tools"])
         assert all(row["pre_task_access_declared"] for row in inventory["registered_tools"])

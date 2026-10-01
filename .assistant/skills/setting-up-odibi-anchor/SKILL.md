@@ -23,10 +23,19 @@ launcher returns a ready startup packet.
    project, run the sibling `.assistant/agent_bootstrap.py` with only
    `init_globals={"ANCHOR_PROJECT_ID": "<project-id>"}`. Do not rediscover host, local state,
    durable state, authority, target, or portfolio paths manually.
-2. The managed Databricks launcher checks PyPI before importing Anchor. If the distribution is
-   missing or stale, execute its exact pinned latest-stable `%pip install` remediation, run
-   `dbutils.library.restartPython()`, and rerun the same launcher call. Never guess a version or
-   use an unrecorded moving install. The launcher verifies distribution/runtime agreement.
+2. The managed Databricks launcher checks PyPI before importing Anchor. Follow this decision table:
+
+   | Condition | Exact action |
+   |---|---|
+   | Package missing or version must change | Execute the launcher's exact pinned latest-stable `%pip install` remediation, restart Python once, then rerun the launcher. |
+   | Fresh Python process with the correct package | Run the launcher once. Do not reinstall or restart. |
+   | Healthy runtime, new logical task | Call `new_session`; do not reinstall, restart, rerun `setup_host`, or re-bootstrap. |
+   | Initial host setup, released-guidance reconciliation after upgrade, or diagnosed drift | Run `setup_host`, then launch in the current fresh process unless installation itself required a restart. |
+
+   After installation, run `dbutils.library.restartPython()` exactly once.
+   Never guess a version or use an unrecorded moving install. The launcher verifies
+   distribution/runtime agreement. Restarting is required after installation or upgrade, not
+   after ordinary setup, bootstrap, session creation, or task completion.
 3. Inspect `STARTUP_PACKET`: require `status=ready`, the requested project ID and exact target,
    then use its `managed_artifact_actions` for artifact discovery instead of direct traversal.
 4. If no portfolio exists, create a launch-ready PortfolioV1 without manual TOML surgery:
@@ -103,9 +112,13 @@ launcher returns a ready startup packet.
    Do not set `ANCHOR_HOME` manually, map `ANCHOR_DURABLE_ROOT` to it, or probe the durable
    Volume through FUSE. Preparation keeps live state on local compute and restores immutable
    snapshots through the Databricks Files API. Apply every returned environment field exactly.
-   On shared/serverless compute, configure a stable user-specific local state path rather than
-   a generic `/tmp/odibi-anchor` path that another OS user can own. A verified v2 restore safely
-   relocates continuity records when that configured local path changes.
+   On shared/serverless compute, configure a stable user-specific local state base rather than
+   a generic `/tmp/odibi-anchor` path. The launcher derives a physical root from the effective UID
+   and a non-reversible OS-account fingerprint so recycled numeric UIDs never reopen another
+   identity's live SQLite state.
+   It atomically migrates an accessible legacy base once; when the base belongs to a prior
+   identity, a verified v2 restore safely relocates database, artifact, and continuity state.
+   Do not persist an ephemeral UID in the portfolio or update the portfolio after each restart.
    Other hosts may use `anchor portfolio prepare --config <path> --host <id> --project <id>`.
    The `anchor` callable comes from the launcher namespace or `launch()` return value; never
    attempt `from odibi_anchor import anchor`.

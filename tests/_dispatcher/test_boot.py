@@ -285,6 +285,110 @@ def test_boot_queries_learning_with_exact_route_and_session_task(tmp_path, monke
     assert result.learning_recovery_status == "owner_checked"
 
 
+def test_boot_migrates_exact_owner_historical_marker_to_structured_obligation(
+    tmp_path, monkeypatch,
+):
+    import json
+
+    from odibi_anchor.codebase import structured_learning_context as learning
+
+    root = tmp_path / "project"
+    root.mkdir()
+    state_path = root / ".anchor_session_state.json"
+    state_path.write_text(
+        json.dumps({
+            "task_window_id": "ltw_historical",
+            "awaiting_learn": True,
+            "stage": "gated",
+            "files_changed": ["src/change.py"],
+        }),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(learning, "active_learning_obligation", lambda **_owner: None)
+    monkeypatch.setattr(learning, "latest_closed_learning_obligation", lambda **_owner: None)
+    monkeypatch.setattr(
+        learning,
+        "ensure_learning_obligation",
+        lambda **kwargs: calls.append(kwargs) or {
+            "obligation_id": "lob_migrated",
+            "status": "active",
+        },
+    )
+
+    result = run_boot(
+        str(root), str(tmp_path), state_root=str(root),
+        project_id="project:test", db_path=str(tmp_path / "memory.db"),
+        frame_enabled=False,
+    )
+
+    assert result.prior_learn_debt is True
+    assert result.learning_recovery_status == "legacy_debt_migrated_to_structured"
+    assert calls == [{
+        "task_window_id": "ltw_historical",
+        "session_ref": "legacy-session:ltw_historical",
+        "checkpoint_ref": "legacy-gate:ltw_historical",
+        "project_id": "project:test",
+    }]
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["learning_obligation_id"] == "lob_migrated"
+
+
+def test_boot_preserves_unowned_historical_marker_without_blocking(tmp_path, monkeypatch):
+    import json
+
+    from odibi_anchor.codebase import structured_learning_context as learning
+
+    root = tmp_path / "project"
+    root.mkdir()
+    state_path = root / ".anchor_session_state.json"
+    original = {"awaiting_learn": True, "stage": "gated", "files_changed": ["unknown.py"]}
+    state_path.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(
+        learning,
+        "ensure_learning_obligation",
+        lambda **_kwargs: pytest.fail("unowned marker must not create authority"),
+    )
+
+    result = run_boot(
+        str(root), str(tmp_path), state_root=str(root),
+        project_id="project:test", db_path=str(tmp_path / "memory.db"),
+        frame_enabled=False,
+    )
+
+    assert result.prior_learn_debt is False
+    assert result.learning_recovery_status == "unowned_legacy_marker_preserved"
+    assert result.debt_info["closure_routes"] == []
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+
+
+def test_boot_fails_closed_when_historical_marker_migration_fails(tmp_path, monkeypatch):
+    import json
+
+    from odibi_anchor.codebase import structured_learning_context as learning
+
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".anchor_session_state.json").write_text(
+        json.dumps({"task_window_id": "ltw_historical", "awaiting_learn": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(learning, "active_learning_obligation", lambda **_owner: None)
+    monkeypatch.setattr(learning, "latest_closed_learning_obligation", lambda **_owner: None)
+    monkeypatch.setattr(
+        learning,
+        "ensure_learning_obligation",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="could not be migrated"):
+        run_boot(
+            str(root), str(tmp_path), state_root=str(root),
+            project_id="project:test", db_path=str(tmp_path / "memory.db"),
+            frame_enabled=False,
+        )
+
+
 class TestConstants:
     """Verify constants are correctly defined."""
 

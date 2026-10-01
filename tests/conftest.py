@@ -1,5 +1,6 @@
 """Shared test fixtures for odibi_anchor."""
 import os
+import shutil
 import sys
 import tempfile
 import warnings
@@ -22,17 +23,18 @@ import pytest
 #
 # Tests that need specific routing pass an explicit environment to a subprocess,
 # which is unaffected by what the session sets here.
-_cw_test_home = os.path.join(tempfile.gettempdir(), "anchor_test_home")
-os.makedirs(_cw_test_home, exist_ok=True)
+for _name in [name for name in os.environ if name.startswith("ANCHOR_")]:
+    del os.environ[_name]
+_cw_test_root = tempfile.mkdtemp(prefix="odibi-anchor-tests-")
+_cw_test_home = os.path.join(_cw_test_root, "home")
+os.makedirs(_cw_test_home)
 os.environ["ANCHOR_HOME"] = _cw_test_home
 
 # Point the shared memory DB at a throwaway temp file for the whole test session,
 # BEFORE any odibi_anchor import resolves _DEFAULT_DB_PATH. This guarantees tests
 # never read or write a real .agent_memory.db, regardless of which environment
 # profile is detected or what the caller exported.
-os.environ["ANCHOR_MEMORY_DB"] = os.path.join(
-    tempfile.gettempdir(), "anchor_test_agent_memory.db"
-)
+os.environ["ANCHOR_MEMORY_DB"] = os.path.join(_cw_test_root, "agent_memory.db")
 
 # The orb can require signed commits globally. Test repositories are disposable
 # and deliberately unsigned, so override signing only for test subprocesses.
@@ -69,6 +71,7 @@ def _guard_tracked_state_files():
                 "Point the writer at a tmp path instead.",
                 stacklevel=2,
             )
+    shutil.rmtree(_cw_test_root, ignore_errors=True)
 
 
 def pytest_configure(config):

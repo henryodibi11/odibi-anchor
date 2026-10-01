@@ -3,6 +3,11 @@
 All imports are lazy-loaded via __getattr__ to avoid ~530ms FUSE latency at boot.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from odibi_anchor.codebase.memory_context import append_memory, reject_memory
+
 # Module → exported names mapping
 _LAZY_MODULES = {
     "codebase_map_context": ("odibi_anchor.codebase.codebase_map_context",
@@ -22,7 +27,7 @@ _LAZY_MODULES = {
     "workflow_gate_context": ("odibi_anchor.codebase.workflow_gate_context",
         ["workflow_gate_context", "render_workflow_gate_report"]),
     "memory_context": ("odibi_anchor.codebase.memory_context",
-        ["memory_context", "render_memory_report", "append_memory", "confirm_memory",
+        ["memory_context", "render_memory_report", "append_memory",
          "reject_memory", "archive_stale_entries", "export_markdown", "import_from_markdown"]),
     "semantic_edit_context": ("odibi_anchor.codebase.semantic_edit_context",
         ["semantic_edit_context", "render_semantic_edit_report"]),
@@ -32,8 +37,6 @@ _LAZY_MODULES = {
         ["import_resolve_context", "render_import_resolve_report"]),
     "safe_change_context": ("odibi_anchor.codebase.safe_change_context",
         ["safe_change_context", "render_safe_change_report"]),
-    "learn_context": ("odibi_anchor.codebase.learn_context",
-        ["learn_context", "render_learn_report"]),
     "known_bad_change_context": ("odibi_anchor.codebase.known_bad_change_context",
         ["known_bad_change_context", "render_known_bad_change_report"]),
 }
@@ -67,13 +70,12 @@ __all__ = [
     "framework_lookup_context", "render_framework_lookup_report",
     "workflow_gate_context", "render_workflow_gate_report",
     "memory_context", "render_memory_report",
-    "append_memory", "confirm_memory", "reject_memory",
+    "append_memory", "reject_memory",
     "archive_stale_entries", "export_markdown", "import_from_markdown",
     "semantic_edit_context", "render_semantic_edit_report",
     "preflight_context", "render_preflight_report",
     "import_resolve_context", "render_import_resolve_report",
     "safe_change_context", "render_safe_change_report",
-    "learn_context", "render_learn_report",
     "known_bad_change_context", "render_known_bad_change_report",
 ]
 

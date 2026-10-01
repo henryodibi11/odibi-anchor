@@ -90,8 +90,7 @@ own the information instead.
   influenced work. These immutable lifecycle records—not legacy mutable counters—inform
   retrieval ranking. Verify against current authority even when the memory is active.
 - For mechanically provable claims, use the supported typed verifier promotion path. For
-  owner-governed claims, use only the owner-presence commands above. `anchor("confirm", ...)`
-  is blocked legacy compatibility, not a promotion path. Authors and agents cannot promote
+  owner-governed claims, use only the owner-presence commands above. Authors and agents cannot promote
   from retrieval, application, evaluation, recurrence, task success, or counter thresholds.
 - Quarantine a contradicted, unsafe, unverifiable, or wrongly scoped claim through the
   public lifecycle. Supersede a valid but replaced claim with explicit lineage to its

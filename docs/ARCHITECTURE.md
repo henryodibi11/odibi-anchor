@@ -41,7 +41,6 @@ src/odibi_anchor/
 │   ├── preflight_context.py        Lint + type check runner
 │   ├── import_resolve_context.py   Import path resolver
 │   ├── safe_change_context.py      Full edit→verify pipeline
-│   ├── learn_context.py            Compatibility-only historical recovery when old persisted debt technically requires it
 │   └── known_bad_change_context.py Pre-edit guardrail
 └── debugging/
     ├── error_trace_context.py      Structured traceback analysis
@@ -56,9 +55,9 @@ src/odibi_anchor/
 | validation | quality_gate_context, validation_summary_context, duplicate_key_context | 3 |
 | tables | diff_tables_by_key, schema_diff_context, table_contract_summary | 3 |
 | profiling | dogfood_regression_context (+ profile_table in tools/table_profiler_tool) | 1 |
-| codebase | codebase_map_context, change_impact_context, session_snapshot_context, consistency_check_context, convention_preflight_context, test_focus_context, workflow_gate_context, framework_lookup_context, memory_context, semantic_edit_context, preflight_context, import_resolve_context, safe_change_context, learn_context, known_bad_change_context | 15 |
+| codebase | codebase_map_context, change_impact_context, session_snapshot_context, consistency_check_context, convention_preflight_context, test_focus_context, workflow_gate_context, framework_lookup_context, memory_context, semantic_edit_context, preflight_context, import_resolve_context, safe_change_context, known_bad_change_context | 14 |
 | debugging | error_trace_context, failure_pattern_context | 2 |
-| **Total** | | **27** (+ append_memory, confirm_memory, reject_memory helpers) |
+| **Total** | | **26** (+ append_memory and reject_memory helpers) |
 
 ## Dependency Graph
 
@@ -74,7 +73,6 @@ stdlib only:
   codebase/workflow_gate_context.py
   codebase/framework_lookup_context.py
   codebase/memory_context.py
-  codebase/learn_context.py
   codebase/known_bad_change_context.py
   codebase/import_resolve_context.py
   debugging/*
@@ -145,7 +143,7 @@ Each `memories` row carries:
   "content": "Human-readable description",
   "related_files": ["glob/patterns/**/*.py"],
   "tags": ["keyword", "tags"],
-  "source": "manual|learn_context|auto-learned",
+  "source": "manual|structured_learning|auto-learned",
   "added": "2026-05-12",
   "last_used": "2026-05-12",
   "use_count": 3,
@@ -158,11 +156,9 @@ Each `memories` row carries:
 }
 ```
 
-Operations: `memory_context()` (query), `append_memory()` (candidate-only write),
-`reject_memory()` (exclude wrong entries), and `learn_context()` (compatibility-only historical
-recovery when old persisted debt technically requires it). Normal learning uses
-`anchor("learning", "capture|assess", ...)`. `confirm_memory()` is blocked legacy compatibility
-and returns `confirmation_blocked`. Promotion authority comes only from supported typed
+Operations: `memory_context()` (query), `append_memory()` (candidate-only write), and
+`reject_memory()` (exclude wrong entries). Learning uses
+`anchor("learning", "capture|assess", ...)`. Promotion authority comes only from supported typed
 verifiers or separate governed owner activation and confirmation requests; retrieval,
 application, evaluation, task success, and counters never promote. Owner requests prefer a
 fully configured authenticated Slack transport, otherwise use an explicit local Windows

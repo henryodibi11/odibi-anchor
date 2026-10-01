@@ -81,11 +81,9 @@ the global operating contract; gate and debt mechanics remain runtime-owned.
 After each discrete feature (before starting the next), run checkpoint:
 
 ```python
-# Legacy-compatible atomic closure when genuine reusable content exists
-result = anchor("checkpoint", label="phantom_ref_cleanup", learn_events=[
-    {"type": "decision", "detail": "Replaced pre_join with validate+microscope across all skills"},
-    {"type": "discovery", "detail": "10 phantom actions existed — skills taught non-existent tools"},
-])
+# Atomic closure when no reusable observation was found
+result = anchor("checkpoint", label="phantom_ref_cleanup",
+    learning_assessment={"outcome": "nothing_reusable_learned"})
 ```
 
 **Expected output (success):**
@@ -95,7 +93,7 @@ result = anchor("checkpoint", label="phantom_ref_cleanup", learn_events=[
   - preflight: passed (0 issues)
   - test: passed (34/34)
   - gate: passed (risk: low)
-  - learn: 2 events saved
+  - learning: assessment committed
 ```
 
 **When checkpoint is REQUIRED:**
@@ -103,8 +101,8 @@ result = anchor("checkpoint", label="phantom_ref_cleanup", learn_events=[
 - Do NOT batch checkpoints to end of session — this defeats the purpose
 
 **When checkpoint BLOCKS:**
-- Historical checkpoint payloads require non-empty `learn_events` when files changed;
-  use standalone gate plus structured no-learning assessment when no genuine event exists
+- File-changing checkpoints require an explicit `learning_assessment`; use
+  `nothing_reusable_learned` when no genuine observation exists
 - `skip_test=True` when `.py` files were changed → RuntimeError
 
 ## Gate Blockers (RuntimeError)

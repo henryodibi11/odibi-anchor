@@ -17,15 +17,21 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SENTINEL_HOME = "/nonexistent/operator/home"
 SENTINEL_DB = "/nonexistent/operator/home/.agent_memory.db"
+SENTINEL_DURABLE = "/nonexistent/operator/durable"
+SENTINEL_PROJECT = "operator-project"
 
 _PROBE = '''
 import json, os, runpy, sys
 os.environ["ANCHOR_HOME"] = {sentinel_home!r}
 os.environ["ANCHOR_MEMORY_DB"] = {sentinel_db!r}
+os.environ["ANCHOR_DURABLE_ROOT"] = {sentinel_durable!r}
+os.environ["ANCHOR_PROJECT_ID"] = {sentinel_project!r}
 runpy.run_path({conftest!r}, run_name="conftest_probe")
 print(json.dumps({{
     "home": os.environ["ANCHOR_HOME"],
     "db": os.environ["ANCHOR_MEMORY_DB"],
+    "durable": os.environ.get("ANCHOR_DURABLE_ROOT"),
+    "project": os.environ.get("ANCHOR_PROJECT_ID"),
 }}))
 '''
 
@@ -35,6 +41,8 @@ def _run_conftest_with_sentinels():
     script = _PROBE.format(
         sentinel_home=SENTINEL_HOME,
         sentinel_db=SENTINEL_DB,
+        sentinel_durable=SENTINEL_DURABLE,
+        sentinel_project=SENTINEL_PROJECT,
         conftest=str(PROJECT_ROOT / "tests" / "conftest.py"),
     )
     completed = subprocess.run(
@@ -57,6 +65,19 @@ def test_override_points_at_a_temporary_store():
     resolved = _run_conftest_with_sentinels()
     assert resolved["home"].startswith(tempfile.gettempdir())
     assert resolved["db"].startswith(tempfile.gettempdir())
+
+
+def test_all_other_anchor_routing_is_removed():
+    resolved = _run_conftest_with_sentinels()
+    assert resolved["durable"] is None
+    assert resolved["project"] is None
+
+
+def test_independent_suites_receive_unique_state_roots():
+    first = _run_conftest_with_sentinels()
+    second = _run_conftest_with_sentinels()
+    assert first["home"] != second["home"]
+    assert first["db"] != second["db"]
 
 
 def test_the_sentinel_would_otherwise_have_been_inherited():

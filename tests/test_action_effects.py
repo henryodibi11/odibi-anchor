@@ -31,7 +31,7 @@ def resolved(action, *args, **kwargs):
 
 def test_every_static_action_has_non_empty_contract():
     assert set(CONTRACTS) == set(BUILTIN_ACTION_NAMES)
-    assert len(CONTRACTS) == 93
+    assert len(CONTRACTS) == 91
     assert all(contract.allowed_effects for contract in CONTRACTS.values())
     assert all(contract.allowed_pre_task_access for contract in CONTRACTS.values())
     assert all(contract.resolve_invocation is not None for contract in CONTRACTS.values())
@@ -124,7 +124,7 @@ def test_fixed_builtin_effect_sets_match_independent_contract_table():
     expected = {
         "source_write": {"safe", "semantic"},
         "artifact_write": {
-            "task", "checkpoint", "learn", "save", "confirm", "reject", "snapshot",
+            "task", "checkpoint", "save", "reject", "snapshot",
             "save_snap", "archive", "import_md", "db_migrate", "register_tool",
             "touched", "skill_loaded", "log", "new_session", "incident_snapshot",
             "task_rebind",

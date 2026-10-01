@@ -660,6 +660,7 @@ def run_boot(
         try:
             from odibi_anchor.codebase.structured_learning_context import (
                 active_learning_obligation,
+                ensure_learning_obligation,
                 initialize_learning_schema,
                 latest_closed_learning_obligation,
             )
@@ -706,33 +707,53 @@ def run_boot(
                     else:
                         _save_continuity_state(route_binding, _SESSION_STATE, corrected)
                 elif _prior_state.get("awaiting_learn"):
+                    active_obligation = ensure_learning_obligation(
+                        task_window_id=owner_task,
+                        session_ref=f"legacy-session:{owner_task}",
+                        checkpoint_ref=f"legacy-gate:{owner_task}",
+                        project_id=owner_project,
+                    )
+                    _SESSION_STATE.learning_obligation_id = active_obligation["obligation_id"]
                     result.prior_learn_debt = True
                     _SESSION_STATE.prior_learn_debt = True
-                    result.learning_recovery_status = "legacy_session_debt"
+                    result.learning_recovery_status = "legacy_debt_migrated_to_structured"
                     result.debt_info = {
                         "stage": _prior_state.get("stage", "gated"),
                         "files": len(_prior_state.get("files_changed", [])),
                         "timestamp": _prior_state.get("timestamp", "unknown"),
                         "session_files": _prior_state.get("files_changed", []),
-                        "closure_routes": ["legacy learn"],
+                        "closure_routes": ["structured assessment"],
                     }
+                    corrected = dict(_prior_state)
+                    corrected["learning_obligation_id"] = active_obligation["obligation_id"]
+                    if route_binding is None:
+                        _save_session_state(state_root or root, corrected, strict=True)
+                    else:
+                        _save_continuity_state(route_binding, _SESSION_STATE, corrected)
         except Exception as _exc:
             result.learning_recovery_status = "owner_lookup_failed"
+            if _prior_state.get("awaiting_learn"):
+                result.prior_learn_debt = True
+                _SESSION_STATE.prior_learn_debt = True
+                raise RuntimeError(
+                    "historical learning marker could not be migrated to a structured obligation"
+                ) from _exc
             from odibi_anchor._utils._session_state import record_degraded
             record_degraded("boot_prior_session_state", _exc)
     else:
         result.learning_recovery_status = "skipped_no_exact_owner"
         if _prior_state.get("awaiting_learn"):
-            # Legacy unstructured debt is state-local and does not require a
-            # project-global ledger lookup.
-            result.prior_learn_debt = True
-            _SESSION_STATE.prior_learn_debt = True
+            # A marker without an exact project/task owner is not actionable
+            # authority. Preserve it for forensics without blocking new work.
+            result.prior_learn_debt = False
+            _SESSION_STATE.prior_learn_debt = False
+            result.learning_recovery_status = "unowned_legacy_marker_preserved"
             result.debt_info = {
                 "stage": _prior_state.get("stage", "gated"),
                 "files": len(_prior_state.get("files_changed", [])),
                 "timestamp": _prior_state.get("timestamp", "unknown"),
                 "session_files": _prior_state.get("files_changed", []),
-                "closure_routes": ["legacy learn"],
+                "closure_routes": [],
             }
 
     if rebind_task and active_obligation is not None:
@@ -824,10 +845,7 @@ def run_boot(
         print(f"[Anchor] ** ABANDONED SESSION DETECTED (stage: {_di['stage']}, {_di['files']} files, at {_di['timestamp']})")
         if _di.get("session_files"):
             print(f"[Anchor]    Files from previous session: {', '.join(_di['session_files'][:5])}")
-        if _di.get("closure_routes") == ["legacy learn"]:
-            print('[Anchor]    BLOCKED: historical debt requires compatibility anchor("learn") recovery.')
-        else:
-            print('[Anchor]    BLOCKED: anchor("task") locked until structured assessment closes it.')
+        print('[Anchor]    BLOCKED: anchor("task") locked until structured assessment closes it.')
     print(f"[Anchor] Dispatch: anchor('action', ...) — {len(BUILTIN_ACTION_NAMES)} actions")
     print("[Anchor]")
     print(f"[Anchor] {'='*55}")

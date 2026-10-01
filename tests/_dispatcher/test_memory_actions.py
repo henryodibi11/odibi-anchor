@@ -980,12 +980,13 @@ def test_projection_rate_uses_exact_eligible_assessed_observation_cohort(tmp_pat
     )
 
     def capture(observation_type, suffix, scope="project_local"):
+        project_refs = [] if scope == "workbench" else ["project:test"]
         result = learning._structured_learning_dispatch(
             command="capture", _obligation_id=obligation["obligation_id"],
             _project_id="project:test", _task_window_id=state.task_window_id,
             observation_type=observation_type, summary=f"Observed bounded fact {suffix}.",
             signal_key=f"diagnostics.{suffix}", impact="medium",
-            applicability_scope=scope, project_refs=["project:test"],
+            applicability_scope=scope, project_refs=project_refs,
             work_package_refs=[], environment_refs=[],
             provenance={"source_action": "test", "source_version": "v1"},
             evidence=[{"reference_type": "test", "reference": "tests/test_memory_actions.py"}],

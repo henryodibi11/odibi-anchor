@@ -83,10 +83,6 @@ context = anchor("memory", "replay", task_window_id="tw_...", view="context")
 storage = anchor("memory", "storage", command="inspect")
 plan = anchor("memory", "storage", command="plan", destination="/absolute/path")
 
-# Compatibility-only confirmation call. This returns confirmation_blocked without
-# changing candidate authority; use a governed promotion lane instead.
-result = anchor("confirm", "entry_id_abc123")
-
 # Owner-governed convention/preference: each transition requires a separate authenticated
 # approval from the configured owner. The runtime derives identity, challenge, and receipt.
 result = anchor("memory", "promotion", command="request_owner_activation",
@@ -116,7 +112,6 @@ result = anchor("import_md")
 | `memory storage inspect` | Diagnose profile, trust domain, path safety, schema, and backups without movement | `anchor("memory", "storage", command="inspect")` |
 | `memory storage plan` | Produce a non-destructive migration plan; execution needs separate approval | `anchor("memory", "storage", command="plan", destination="/absolute/path")` |
 | `memory promotion` | Promote a mechanically verified claim or request governed owner authority through configured Slack, a local Windows dialog, or a lower-assurance two-step Databricks in-session assertion | `anchor("memory", "promotion", command="request_owner_activation|request_owner_confirmation", memory_id=..., provider="databricks_in_session", in_session_approval="APPROVE <prepared-challenge>")`; on Databricks omit `in_session_approval` first, stop for the owner's new exact Genie reply, then rerun with that reply; omit `provider` for default Slack-first selection |
-| `confirm` | Blocked legacy compatibility; does not promote | `anchor("confirm", "entry_id")` returns `confirmation_blocked` and points to governed promotion |
 | `reject` | A memory entry is stale, wrong, or superseded | `anchor("reject", "entry_id")` |
 | `archive` | Prune old unused entries to keep DB fast | `anchor("archive", max_unused_days=90)` |
 | `export_md` | Backup memory to markdown for review/transfer | `anchor("export_md")` |

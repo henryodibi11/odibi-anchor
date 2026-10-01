@@ -43,7 +43,6 @@ from odibi_anchor.codebase._memory_db import (
     insert_memory as _db_insert,
     query_memories as _db_query,
     get_memory_entry as _db_get_entry,
-    confirm_memory_entry as _db_confirm,
     reject_memory_entry as _db_reject,
     archive_stale as _db_archive,
     get_all_entries as _db_get_all,
@@ -176,7 +175,12 @@ def memory_context(
         # hand callers a memory id; without this they cannot see what that id
         # refers to through any action, because the id is not in the entry content
         # and so a free-text query for it matches nothing.
-        entry = _db_get_entry(db_path, entry_id=memory_id)
+        entry = _db_get_entry(
+            db_path,
+            entry_id=memory_id,
+            project=project,
+            status=["candidate", "active", "confirmed"],
+        )
         found = entry is not None
         result = {
             "kind": "memory_entry",
@@ -188,8 +192,8 @@ def memory_context(
         }
         if not found:
             result["reason"] = (
-                f"no memory entry has id {memory_id!r} in this store; it may belong "
-                "to a different Anchor home"
+                f"no retrievable memory entry has id {memory_id!r} in project "
+                f"{project!r} or shared scope"
             )
         if output_format == "dict":
             return result
@@ -445,34 +449,6 @@ def append_memory(
     )
 
     return result
-
-
-def confirm_memory(
-    root: str | Path,
-    entry_id: str,
-    *,
-    db_path: str | None = None,
-    **kwargs: Any,
-) -> dict[str, Any] | None:
-    """Return the fail-closed runtime promotion status.
-
-    This compatibility API cannot authenticate human authority and the current
-    recurrence rows do not carry terminal/evidence-authoritative lineage.  Any
-    legacy or free-form authority payload is retained only as a blocked signal.
-
-    Args:
-        root: Project root directory (kept for backward compat, not used).
-        entry_id: The memory entry ID to confirm.
-        db_path: Path to SQLite DB.
-
-    Returns:
-        The updated entry dict, or None if not found.
-    """
-    db_path = db_path or _DEFAULT_DB_PATH
-    try:
-        return _db_confirm(db_path, entry_id=entry_id, **kwargs)
-    except ValueError:
-        return None
 
 
 def reject_memory(

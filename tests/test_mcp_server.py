@@ -813,36 +813,16 @@ class TestToolInvocation:
         # duplicate id=2 should surface as a duplicate finding / not write-safe
         assert parsed["kind"] in ("quality_gate_context", "quality_gate")
 
-    def test_learn_accepts_keyword_events(self, booted, tmp_path):
-        self._start_task()
-        events = [{"type": "discovery", "detail": "MCP preserves keyword session events"}]
-        out = mcp_server.anchor_execute(
-            "learn",
-            json.dumps({"session_events": events, "db_path": str(tmp_path / "memory.db")}),
-        )
-        parsed = json.loads(out)
-        assert parsed["metrics"]["events_processed"] == 1
-        assert parsed["metrics"]["memories_added"] == 1
-
-    def test_learn_accepts_positional_event_list(self, booted, tmp_path):
-        self._start_task()
-        events = [{"type": "discovery", "detail": "MCP positional events are normalized"}]
-        out = mcp_server.anchor_execute(
-            "learn",
-            json.dumps({"arg0": events, "db_path": str(tmp_path / "memory.db")}),
-        )
-        parsed = json.loads(out)
-        assert parsed["metrics"]["events_processed"] == 1
-
-    def test_learn_without_events_is_read_only_noop(self, booted):
-        self._start_task()
-        parsed = json.loads(mcp_server.anchor_execute("learn", None))
-        assert parsed["metrics"]["events_processed"] == 0
-        assert parsed["metrics"]["memories_added"] == 0
+    @pytest.mark.parametrize("action", ["learn", "confirm"])
+    def test_removed_legacy_actions_are_rejected(self, booted, action):
+        parsed = json.loads(mcp_server.anchor_execute(action, None, response_version=2))
+        assert parsed["ok"] is False
+        assert parsed["error"]["type"] == "ValueError"
+        assert "Unknown anchor() action" in parsed["error"]["message"]
 
     def test_gateway_rejects_non_object_args(self, booted):
         with pytest.raises(ValueError, match="JSON object"):
-            mcp_server.anchor_execute("learn", json.dumps([]))
+            mcp_server.anchor_execute("learning", json.dumps([]))
 
     def test_nested_action_keyword_is_distinct_from_dispatcher_action(self, monkeypatch):
         captured = {}

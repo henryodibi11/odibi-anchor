@@ -14,7 +14,7 @@ def mock_learning_lifecycle():
     obligation = {"obligation_id": "lob_checkpoint", "status": "active"}
 
     def terminal(_obligation_id, **_owner):
-        return {**obligation, "status": "legacy_closed"}
+        return {**obligation, "status": "assessed"}
 
     with (
         patch(
@@ -36,7 +36,7 @@ def mock_learning_lifecycle():
 class TestCheckpointValidation:
     """Tests for checkpoint parameter validation."""
 
-    def _make_cw_fn(self, preflight_ok=True, test_ok=True, gate_ok=True, learn_ok=True):
+    def _make_cw_fn(self, preflight_ok=True, test_ok=True, gate_ok=True):
         """Create a mock anchor() function that returns valid results."""
         def mock_cw(action, *args, **kwargs):
             if action == "preflight":
@@ -45,8 +45,6 @@ class TestCheckpointValidation:
                 return {"metrics": {"exit_code": 0 if test_ok else 1, "passed": 10, "failed": 0 if test_ok else 2, "errors": 0}}
             elif action == "gate":
                 return {"metrics": {"risk_level": "low" if gate_ok else "high"}}
-            elif action == "learn":
-                return {"metrics": {"memories_added": 1 if learn_ok else 0}}
             elif action == "learning":
                 return {"assessment": {"outcome": kwargs.get("outcome")}}
             return {}
@@ -60,8 +58,8 @@ class TestCheckpointValidation:
         with pytest.raises(RuntimeError, match="requires learning_assessment"):
             checkpoint(anchor_fn, session_files, session_state, label="test")
 
-    def test_learn_events_not_required_when_no_files(self):
-        """checkpoint() succeeds without learn_events if no files changed."""
+    def test_learning_assessment_defaults_when_no_files(self):
+        """checkpoint() supplies an explicit no-learning assessment for a read-only cycle."""
         anchor_fn = self._make_cw_fn()
         session_files = set()  # Empty = no files changed
         session_state = SimpleNamespace(files_at_last_checkpoint=0)
@@ -77,7 +75,7 @@ class TestCheckpointValidation:
         with pytest.raises(RuntimeError, match="skip_test=True.*not allowed"):
             checkpoint(anchor_fn, session_files, session_state,
                       label="test", skip_test=True,
-                      learn_events=[{"type": "decision", "detail": "x"}])
+                      learning_assessment={"outcome": "nothing_reusable_learned"})
 
     def test_skip_test_allowed_for_non_py_files(self):
         """checkpoint(skip_test=True) is fine when only non-.py files changed."""
@@ -86,7 +84,7 @@ class TestCheckpointValidation:
         session_state = SimpleNamespace(files_at_last_checkpoint=0)
         result = checkpoint(anchor_fn, session_files, session_state,
                           label="test", skip_test=True,
-                          learn_events=[{"type": "decision", "detail": "x"}])
+                          learning_assessment={"outcome": "nothing_reusable_learned"})
         assert isinstance(result, dict)
 
     def test_label_from_positional_arg(self):
@@ -164,7 +162,7 @@ class TestCheckpointValidation:
             state,
             label="databricks-final",
             final=True,
-            learn_events=[{"type": "decision", "detail": "manual delivery remains required"}],
+            learning_assessment={"outcome": "nothing_reusable_learned"},
         )
 
         readiness = result["samples"]["pr_readiness"]
@@ -221,7 +219,7 @@ class TestCheckpointValidation:
             state,
             label="databricks-pr-draft",
             generate_pr_draft=True,
-            learn_events=[{"type": "decision", "detail": "PR claims require unavailable evidence"}],
+            learning_assessment={"outcome": "nothing_reusable_learned"},
         )
 
         assert result["metrics"]["overall_pass"] is False
@@ -253,8 +251,8 @@ class TestCheckpointValidation:
                 return {"metrics": {"exit_code": 0, "passed": 1, "failed": 0, "errors": 0}}
             if action == "gate":
                 return {"metrics": {"risk_level": "low"}}
-            if action == "learn":
-                return {"metrics": {"memories_added": 0}}
+            if action == "learning":
+                return {"assessment": {"outcome": kwargs.get("outcome")}}
             raise AssertionError(action)
 
         snapshot = RepositorySnapshot(
@@ -276,7 +274,7 @@ class TestCheckpointValidation:
         ):
             result = checkpoint(
                 anchor_fn, {"x.py"}, state, label="final", final=True,
-                learn_events=[{"type": "decision", "detail": "transaction remains atomic"}],
+                learning_assessment={"outcome": "nothing_reusable_learned"},
                 _session_timings=timings, _session_frame=frame,
             )
 
@@ -301,8 +299,6 @@ class TestCheckpointOutputContract:
                 return {"metrics": {"exit_code": 0, "passed": 5, "failed": 0, "errors": 0}}
             elif action == "gate":
                 return {"metrics": {"risk_level": "low"}}
-            elif action == "learn":
-                return {"metrics": {"memories_added": 0}}
             elif action == "learning":
                 return {"assessment": {"outcome": kwargs.get("outcome")}}
             return {}
@@ -342,7 +338,7 @@ class TestCheckpointOutputContract:
         assert result["metrics"]["failed_at"] == "preflight"
         assert "FAIL" in result["summary"]
 
-    def test_test_failure_aborts_before_gate_and_learn(self):
+    def test_test_failure_aborts_before_gate_and_learning(self):
         calls = []
         def fail_cw(action, **kwargs):
             calls.append(action)
@@ -359,7 +355,7 @@ class TestCheckpointOutputContract:
         assert calls == ["preflight", "test"]
         assert state.checkpoint_in_progress is None
 
-    def test_in_progress_marker_visible_to_nested_learn_and_always_cleared(self):
+    def test_in_progress_marker_visible_to_nested_learning_and_always_cleared(self):
         state = SimpleNamespace(
             files_at_last_checkpoint=0, checkpoint_in_progress=None,
             task_window_id="ltw_checkpoint", session_id="session-checkpoint",
@@ -367,10 +363,13 @@ class TestCheckpointOutputContract:
         )
         seen = []
         def anchor_fn(action, *args, **kwargs):
-            if action == "preflight": return {"metrics": {"errors": 0}}
-            if action == "test": return {"metrics": {"exit_code": 0}}
-            if action == "gate": return {"metrics": {"risk_level": "low"}}
-            if action in {"learn", "learning"}:
+            if action == "preflight":
+                return {"metrics": {"errors": 0}}
+            if action == "test":
+                return {"metrics": {"exit_code": 0}}
+            if action == "gate":
+                return {"metrics": {"risk_level": "low"}}
+            if action == "learning":
                 seen.append(dict(state.checkpoint_in_progress))
                 return {"metrics": {"memories_added": 0}, "assessment": {}}
         checkpoint(anchor_fn, set(), state, label="visible")

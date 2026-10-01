@@ -481,6 +481,7 @@ def gate_with_auto_confirm(
                 _auto_touched_files.append(_path)
             # Update session_files_changed so gate sees them
             session_files_changed.update(_unreg)
+            scope_files.update(_unreg)
     except RuntimeError:
         raise  # H-003 block must not be swallowed by the drift-safety catch
     except Exception as _exc:
@@ -500,7 +501,10 @@ def gate_with_auto_confirm(
     # pre-dispatch. Reject read-only task modes before gate state can advance.
     from odibi_anchor._dispatcher._enforcement import should_block_mode_mismatch
     _blocked, _message = should_block_mode_mismatch(
-        verification_timings, scope_files,
+        verification_timings,
+        scope_files,
+        artifact_root=getattr(session_state, "artifact_root", None),
+        target_root=getattr(session_state, "target_root", None) or str(root),
     )
     if _blocked:
         raise RuntimeError(f"BLOCKED: {_message}")

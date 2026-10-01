@@ -14,7 +14,6 @@ from typing import Any, cast
 
 import pytest
 
-from odibi_anchor._repository_snapshot import capture_task_repository_baseline
 from odibi_anchor.codebase._adopted_dirty import (
     AdoptionUnavailable,
     inspect_adoptions,
@@ -30,6 +29,7 @@ from odibi_anchor.codebase._task_authority import (
     inspect_task_authority,
     persist_accepted_task,
     rebind_latest_open_task,
+    task_recovery_context,
 )
 from odibi_anchor.human_input import HumanInputReply
 from odibi_anchor.planning._task_policy import BpsKernel, EvidenceEntry
@@ -37,6 +37,8 @@ from odibi_anchor.planning._task_profile import normalize_task_profile
 
 
 def state(tmp_path, *, project="project-a", target=None):
+    from odibi_anchor._repository_snapshot import capture_task_repository_baseline
+
     target = target or tmp_path / "target"
     target.mkdir(exist_ok=True)
     if not (target / ".git").exists():
@@ -137,6 +139,7 @@ def test_persist_rebind_and_repeat_are_integrity_checked_and_idempotent(tmp_path
     }
     assert inspect_task_authority(db) == {
         "schema_status": "ready", "durable_windows": 1, "rebindings": 1, "closures": 0,
+        "open_windows": 1, "terminal_without_closure": 0,
     }
 
 
@@ -165,6 +168,82 @@ def test_closed_or_wrong_identity_authority_is_unavailable(tmp_path):
     assert inspect_task_authority(db)["closures"] == 1
 
 
+def test_terminal_artifact_task_is_not_rebindable_when_closure_was_interrupted(tmp_path):
+    """A completed artifact-only window must not accumulate as open after a crash."""
+    from odibi_anchor.codebase._task_execution import (
+        build_terminal_projection,
+        persist_terminal_record,
+    )
+
+    db = tmp_path / "memory.db"
+    original = state(tmp_path)
+    original.active_task_mode = "documentation"
+    original.active_task_profile = normalize_task_profile(
+        work_type="change", execution_mode="artifact_only", risk="low", rigor="direct",
+    )
+    original.task_repository_baseline = None
+    persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    terminal = build_terminal_projection(
+        session_state=original,
+        session_timings=[{"action": "gate", "passed": True}],
+        files_changed=set(),
+        terminal_status="completed",
+        assessment={"assessment_id": "las-terminal", "outcome": "nothing_reusable_learned"},
+        unavailable=[],
+        memory_db=str(db),
+    )
+    persist_terminal_record(db, terminal)
+
+    restarted = fresh_state(original)
+    with pytest.raises(TaskAuthorityUnavailable, match="no open accepted task"):
+        rebind_latest_open_task(db, session_state=restarted)
+    diagnostics = inspect_task_authority(db)
+    assert diagnostics["terminal_without_closure"] == 1
+    assert diagnostics["open_windows"] == 0
+
+
+def test_dirty_recovery_context_distinguishes_open_and_terminal_source_tasks(tmp_path):
+    from odibi_anchor.codebase._task_execution import (
+        build_terminal_projection,
+        persist_terminal_record,
+    )
+
+    db = tmp_path / "memory.db"
+    original = state(tmp_path)
+    persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    restarted = fresh_state(original)
+
+    interrupted = task_recovery_context(db, session_state=restarted)
+    assert interrupted["ownership_state"] == "interrupted_source_task"
+    assert interrupted["matching_open_source_task_count"] == 1
+    assert interrupted["matching_open_source_task_ids"] == ["ltw_durable"]
+
+    (Path(original.target_root) / "source.py").write_text("VALUE = 2\n", encoding="utf-8")
+    terminal = build_terminal_projection(
+        session_state=original,
+        session_timings=[{"action": "gate", "passed": True}],
+        files_changed={"source.py"},
+        terminal_status="completed",
+        assessment={"assessment_id": "las-terminal", "outcome": "nothing_reusable_learned"},
+        unavailable=[],
+        memory_db=str(db),
+    )
+    persist_terminal_record(db, terminal)
+    completed = task_recovery_context(db, session_state=restarted)
+    assert completed["ownership_state"] == "terminal_source_task_candidates"
+    assert completed["matching_open_source_task_count"] == 0
+    assert completed["matching_terminal_source_task_count"] == 1
+    assert completed["matching_terminal_source_task_ids"] == ["ltw_durable"]
+    from odibi_anchor._repository_snapshot import capture_task_repository_baseline
+
+    with pytest.raises(RuntimeError) as exc:
+        capture_task_repository_baseline(
+            original.target_root, "main", task_authority_context=completed,
+        )
+    assert exc.value.context["ownership_state"] == "completed_task_delivery"
+    assert exc.value.context["matching_terminal_source_task_ids"] == ["ltw_durable"]
+
+
 def test_rebind_fails_closed_when_multiple_exact_open_tasks_match(tmp_path):
     db = tmp_path / "memory.db"
     first = state(tmp_path)
@@ -187,6 +266,14 @@ def test_rebind_fails_closed_when_multiple_exact_open_tasks_match(tmp_path):
     assert "goal=Preserve accepted authority" in str(exc.value)
     assert "all_pending=True" in str(exc.value)
     assert "task_adoption is only for authenticated takeover" in str(exc.value)
+    assert exc.value.error_code == "multiple_open_task_windows"
+    assert exc.value.context["matching_open_task_count"] == 2
+    assert exc.value.context["displayed_open_task_count"] == 2
+    assert exc.value.context["omitted_open_task_count"] == 0
+    assert all(
+        item["open_reason"] == "no terminal record or closure event"
+        for item in exc.value.context["open_tasks"]
+    )
     assert restarted.task_window_id == "ltw_new"
 
     selected = rebind_latest_open_task(
@@ -194,6 +281,25 @@ def test_rebind_fails_closed_when_multiple_exact_open_tasks_match(tmp_path):
     )
     assert selected["task_window_id"] == "ltw_second"
     assert restarted.task_window_id == "ltw_second"
+
+
+def test_multiple_open_task_recovery_context_is_bounded(tmp_path):
+    db = tmp_path / "memory.db"
+    original = state(tmp_path)
+    for index in range(12):
+        candidate = state(tmp_path)
+        candidate.task_window_id = f"ltw_{index:02d}"
+        candidate.session_id = f"session-{index:02d}"
+        persist_accepted_task(db, session_state=candidate, task_stage={}, task_result=result())
+
+    with pytest.raises(TaskAuthorityUnavailable) as exc:
+        rebind_latest_open_task(db, session_state=fresh_state(original))
+
+    assert exc.value.context["matching_open_task_count"] == 12
+    assert exc.value.context["displayed_open_task_count"] == 10
+    assert exc.value.context["omitted_open_task_count"] == 2
+    assert len(exc.value.context["open_tasks"]) == 10
+    assert len(exc.value.next_operations) == 10
 
 
 def test_rebind_rejects_unknown_or_empty_explicit_task_window(tmp_path):
@@ -371,6 +477,7 @@ def test_replacement_atomically_supersedes_prior_open_window(tmp_path):
     assert rebound["task_window_id"] == "ltw_replacement"
     assert inspect_task_authority(db) == {
         "schema_status": "ready", "durable_windows": 2, "rebindings": 1, "closures": 1,
+        "open_windows": 1, "terminal_without_closure": 0,
     }
 
 

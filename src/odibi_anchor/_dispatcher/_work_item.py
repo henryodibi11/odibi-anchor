@@ -438,15 +438,32 @@ def work_item_action(
     item_id = str(args[1]) if len(args) > 1 else work_item_id
     directory = _directory(artifact_root)
     if command in {"", "list", "status"}:
-        items = (
-            [_context(_parse(path), path) for path in sorted(directory.glob("WI-????-????.md"))]
-            if directory.is_dir()
-            else []
-        )
+        items: list[dict[str, Any]] = []
+        malformed: list[dict[str, Any]] = []
+        if directory.is_dir():
+            for path in sorted(directory.glob("WI-????-????.md")):
+                try:
+                    record = _parse(path)
+                except ValueError as exc:
+                    malformed.append(
+                        getattr(exc, "context", None)
+                        or {"path": str(path), "reason": str(exc)}
+                    )
+                    continue
+                items.append(_context(record, path))
+        next_actions = []
+        if malformed:
+            next_actions.append(
+                f"Repair {len(malformed)} malformed record(s): see malformed_records "
+                "for the missing fields and the managed call that creates a valid one."
+            )
         result: dict[str, Any] = {
             "kind": "work_item_list_context",
             "work_items": items,
             "count": len(items),
+            "malformed_records": malformed,
+            "malformed_count": len(malformed),
+            "suggested_next_actions": next_actions,
             "write_performed": False,
         }
     elif command == "create":
@@ -458,7 +475,7 @@ def work_item_action(
         directory.mkdir(parents=True, exist_ok=True)
         while True:
             new_id, now = _next_id(directory), _now()
-            record = {key: "" for key in _MATERIAL}
+            record: dict[str, Any] = {key: "" for key in _MATERIAL}
             record.update(
                 {
                     "work_item_id": new_id,
