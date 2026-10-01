@@ -186,7 +186,8 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         plan = _plan(payload.get("plan"))
         result.update(phase="plan", status="active", progress="draft", plan=plan,
                       plan_sha256=digest(plan), admission=None, candidate=None, qualification=None,
-                      approval=None, delivery=None, verification=None, blocker=None)
+                      approval=None, delivery=None, verification=None, blocker=None,
+                      measurements={}, review_result=None)
         return result
     if operation == "resume":
         if state["status"] != "blocked":
@@ -210,7 +211,25 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         for key in ("kind", "identity", "producer"):
             _text(candidate.get(key), f"candidate.{key}")
         result.update(progress="implemented", candidate=candidate, qualification=None,
-                      approval=None, delivery=None, verification=None)
+                      approval=None, delivery=None, verification=None,
+                      measurements={}, review_result=None)
+    elif operation == "record_check" and progress == "implemented":
+        _matching(payload, state)
+        criterion = payload.get("criterion_id")
+        if criterion not in {c["id"] for c in state["plan"]["criteria"]}:
+            raise WorkflowError("missing_evidence", "measurement does not match a plan criterion")
+        for key in ("method", "evidence_ref", "collector"):
+            _text(payload.get(key), key)
+        if payload.get("status") not in {"satisfied", "failed", "unavailable"}:
+            raise ValueError("invalid measurement status")
+        result.setdefault("measurements", {})[criterion] = payload
+    elif operation == "record_review" and progress == "implemented":
+        _matching(payload, state)
+        for key in ("reviewer", "evidence_ref", "independence", "reviewer_authentication"):
+            _text(payload.get(key), key)
+        if payload.get("status") not in {"satisfied", "failed", "unavailable"}:
+            raise ValueError("invalid review status")
+        result["review_result"] = payload
     elif operation == "qualify" and progress == "implemented":
         _matching(payload, state)
         checks = payload.get("checks")
@@ -383,7 +402,8 @@ def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: s
                  "owner": identity, "phase": "plan", "status": "active", "progress": "draft",
                  "plan": plan, "plan_sha256": digest(plan), "admission": None,
                  "candidate": None, "qualification": None, "approval": None,
-                 "delivery": None, "verification": None, "blocker": None, "completed": False}
+                 "delivery": None, "verification": None, "blocker": None, "completed": False,
+                 "measurements": {}, "review_result": None}
         return _append(connection, state, request_id, request, "")
 
 
