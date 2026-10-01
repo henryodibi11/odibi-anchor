@@ -146,6 +146,10 @@ def test_canonical_local_git_takes_precedence_over_databricks_provider(
     assert provider.calls == 0
     assert "databricks_implementation_guidance" not in task
     assert "repository_evidence" not in task
+    authority = task["source_authority"]
+    assert authority["status"] == "available_local_git"
+    assert authority["capabilities"]["local_worktree_status"] == "available"
+    assert authority["capabilities"]["pr_readiness"] == "not_verified"
     reset_current_session()
 
 
@@ -201,6 +205,16 @@ def test_bounded_edit_requires_acknowledgement_and_detects_later_drift(
     assert task["repository_evidence"]["evidence_kind"] == "databricks_git_folder"
     assert task["repository_evidence"]["capabilities"]["local_worktree_status"] == "unavailable"
     assert "content" not in task["repository_evidence"]["preimages"][0]
+    assert task["source_authority"]["status"] == "available_databricks_git_folder"
+    assert task["source_authority"]["capabilities"] == {
+        "host_repository_identity": "available",
+        "local_worktree_status": "unavailable",
+        "git_changed_paths_and_diff": "unavailable",
+        "merge_base_and_history": "unavailable",
+        "task_scoped_content_diff": "available",
+        "task_scoped_write_tracking": "available",
+        "pr_readiness": "unavailable",
+    }
     assert provider.calls == 2
 
     with pytest.raises(RuntimeError, match="repository_scope is required"):
@@ -480,3 +494,109 @@ def test_failed_task_restores_independent_mutable_state_with_live_provider(
     assert state.task_tags is not original_tags
     assert state.repository_provider is provider
     reset_current_session()
+
+
+@pytest.mark.parametrize("execution_mode", ["read_only", "artifact_only", "data_change"])
+@pytest.mark.parametrize("target_kind", ["plain", "local_git", "git_folder"])
+def test_non_source_task_reports_unprobed_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, target_kind: str,
+) -> None:
+    home = tmp_path.parent / f"{tmp_path.name}-home"
+    home.mkdir()
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    (tmp_path / "source.py").write_text("VALUE = 1\n", encoding="utf-8")
+    if target_kind == "local_git":
+        initialize_repository(tmp_path)
+    provider = NonCopyableDatabricksProvider() if target_kind == "git_folder" else None
+    anchor, _, _ = init(root=tmp_path, output_format="dict", repository_provider=provider)
+    anchor("status", output_format="dict")
+    anchor("audit_history", output_format="dict")
+    anchor("new_session", name="authority-projection", inline=True, output_format="dict")
+    task = anchor(
+        "task", "Verify explicit source authority diagnostics.",
+        goal="Inspect task capabilities without probing source providers.",
+        mode="implementation", work_type="change", execution_mode=execution_mode,
+        risk="low", rigor="direct", acceptance_criteria=["No source baseline captured."],
+        output_format="dict",
+    )
+    authority = task["source_authority"]
+    assert authority["status"] == "not_requested"
+    assert "not probed" in authority["reason"]
+    assert set(authority["capabilities"].values()) == {"not_requested"}
+    assert 'execution_mode="artifact_only"' in authority["guidance"]["artifact_only_invocation"]
+    assert "artifact_only cannot write target source" in authority["guidance"]["boundary"]
+    assert current_session_state().task_repository_baseline is None
+    if provider is not None:
+        assert provider.calls == 0
+
+
+@pytest.mark.parametrize("rejected_provider", [False, True])
+def test_plain_folder_source_rejection_has_actionable_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rejected_provider: bool,
+) -> None:
+    from odibi_anchor.operational._databricks import DatabricksGitFolderRepositoryProvider
+
+    provider = DatabricksGitFolderRepositoryProvider(
+        lambda operation, parameters: {"object_type": "DIRECTORY", "is_git_folder": False},
+        workspace_path="/Users/test/plain-folder", target_worktree=tmp_path,
+    )
+
+    home = tmp_path.parent / f"{tmp_path.name}-home"
+    home.mkdir()
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    (tmp_path / "source.py").write_text("VALUE = 1\n", encoding="utf-8")
+    anchor, _, _ = init(
+        root=tmp_path, output_format="dict",
+        repository_provider=provider if rejected_provider else None,
+    )
+    with pytest.raises(RuntimeError) as error:
+        accept_source_task(anchor)
+    message = str(error.value)
+    assert 'execution_mode="artifact_only"' in message
+    assert 'execution_mode="source_change"' in message
+    assert "repository_provider" in message
+    assert "repository_scope" in message
+    assert "accept_unknown_git_state=True" in message
+    assert "artifact_only cannot write target source" in message
+    assert "Git Folder conversion is only needed for source changes" in message
+    assert ("provider rejected the target: not a Databricks Git Folder" in message) is rejected_provider
+    assert current_session_state().task_repository_baseline is None
+
+
+def test_source_provider_error_does_not_disclose_arbitrary_message(tmp_path: Path) -> None:
+    from odibi_anchor._repository_snapshot import _provider_identity
+    from odibi_anchor.operational._contract import ContractError
+
+    class FailedProvider:
+        def capture_identity(self, target):
+            raise ContractError("private-api-response-with-secret")
+
+    with pytest.raises(RuntimeError) as error:
+        _provider_identity(FailedProvider(), tmp_path)
+    assert "read-only host identity acquisition failed" in str(error.value)
+    assert "private-api-response-with-secret" not in str(error.value)
+
+
+def test_guidance_invocations_and_docs_match_profiles() -> None:
+    import ast
+
+    from odibi_anchor._repository_snapshot import source_authority_guidance
+    from odibi_anchor.planning._task_profile import normalize_task_profile
+
+    guidance = source_authority_guidance()
+    for key, expected in [("artifact_only_invocation", "artifact_only"),
+                          ("git_folder_invocation", "source_change")]:
+        call = ast.parse(guidance[key], mode="eval").body
+        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords}
+        profile = normalize_task_profile(
+            legacy_mode=kwargs["mode"], work_type=kwargs["work_type"],
+            execution_mode=kwargs["execution_mode"],
+        )
+        assert profile.execution_mode == expected
+    docs = (Path(__file__).parents[2] / "docs/guides/getting-started.md").read_text()
+    for text in (docs, init.__doc__):
+        assert 'execution_mode="artifact_only"' in text
+        assert 'execution_mode="source_change"' in text
+        assert "artifact_only cannot write target source" in text.replace("`", "")
+        assert "repository_scope" in text
+        assert "accept_unknown_git_state=True" in text
