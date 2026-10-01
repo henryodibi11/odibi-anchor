@@ -1,7 +1,7 @@
 """Phase admission for runtime-owned workflow bindings.
 
 This is additive to execution-mode/path/provider enforcement, never a replacement.
-Public enrollment is deliberately not enabled until recovery and collectors exist.
+Fresh source tasks require enrollment; historical task authority stays immutable.
 """
 
 from __future__ import annotations
@@ -20,6 +20,37 @@ def data_only_legacy_exception(profile: Any) -> bool:
 
     return (task_profile_effect_compatible("data_write", profile)
             and not task_profile_effect_compatible("source_write", profile))
+
+
+def require_source_workflow(*, session_state: Any, profile: Any,
+                            trust_domain: str | None, workflow_id: str | None) -> None:
+    """Check fresh acceptance only; never reinterpret an immutable legacy task."""
+    from odibi_anchor._dispatcher._effects import task_profile_effect_compatible
+
+    if not task_profile_effect_compatible("source_write", profile):
+        return
+    missing = [name for name, value in (
+        ("project", session_state.active_project), ("trust_domain", trust_domain),
+        ("workflow_id", workflow_id),
+    ) if not isinstance(value, str) or not value.strip()]
+    if not missing:
+        return
+    error = WorkflowError(
+        "workflow_required",
+        "Fresh source tasks require explicit managed project, trust_domain and workflow_id; "
+        f"missing: {', '.join(missing)}. Bind an existing authorized project with init(project=...). "
+        "Declare its authorized trust_domain on the task (or ANCHOR_TRUST_DOMAIN). "
+        "In a planning task create a bounded plan with anchor('workflow', 'create', ...), "
+        "then bind its workflow_id on a fresh source task and accept_plan before edits. "
+        "Project creation requires separate explicit approval. For interrupted historical work "
+        "use anchor('task_rebind'), not replacement task creation.",
+    )
+    error.context = {"missing_authority": missing, "legacy_rebind_supported": True,
+                     "automatic_project_creation": False}
+    error.next_operations = [{"action": "help", "args": ["workflow"],
+                              "kwargs": {"output_format": "dict"},
+                              "copy_ready": "anchor('help', 'workflow', output_format='dict')"}]
+    raise error
 
 
 def workflow_owner(session_state: Any) -> dict[str, str]:
@@ -134,6 +165,11 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
     """Return a complete content-addressed projection, not executable authority."""
     state = bound_workflow(path, session_state=session_state)
     if state is None:
+        profile = session_state.active_task_profile
+        if profile is not None and profile.execution_mode == "read_only":
+            return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
+                    "status": "read_only_unphased", "completed": False,
+                    "delivery_verified": False, "next_step": "report_observed_result"}
         if data_only_legacy_exception(session_state.active_task_profile):
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "unphased_unsupported_collector", "completed": False,

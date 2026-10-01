@@ -414,8 +414,10 @@ def test_dispatcher_generates_canonical_handoff_and_restores_task_context(tmp_pa
             output_format="dict",
         )
     assert set(problems.glob("*.md")) == existing_problems
-    accepted = anchor(
-        "task", "Implement parser", goal="Reject malformed input",
+    from tests.workflow_fixtures import seed_legacy_source_task
+
+    accepted = seed_legacy_source_task(
+        anchor, "Implement parser", goal="Reject malformed input",
         background="Malformed input causes operator rework",
         mode="implementation", work_type="change", execution_mode="source_change",
         risk="low", rigor="direct",
@@ -437,9 +439,13 @@ def test_dispatcher_generates_canonical_handoff_and_restores_task_context(tmp_pa
         item.kind == "snapshot" and item.path.endswith(".json")
         for item in _SESSION_STATE.managed_artifact_ledger
     )
-    next_task = eval(handoff["first_action"]["copy_ready"], {"anchor": anchor})
-    assert next_task["task_profile"]["execution_mode"] == "source_change"
-    assert next_task["task_profile"]["work_type"] == "change"
+    # A historical v2 handoff cannot create new unphased source authority.
+    with pytest.raises(RuntimeError, match="Fresh source tasks require"):
+        eval(handoff["first_action"]["copy_ready"], {"anchor": anchor})
+    rebound_task = anchor("task_rebind", task_window_id=accepted["task_window_id"], output_format="dict")
+    assert rebound_task["status"] == "rebound"
+    assert _SESSION_STATE.active_task_profile.execution_mode == "source_change"
+    assert _SESSION_STATE.workflow_binding is None
     Path(binding.target_root, "source.py").write_text("VALUE = 2\n", encoding="utf-8")
     dirty_handoff = anchor("snapshot", mode="handoff", persist=False, output_format="dict")
     assert dirty_handoff["first_action"]["action"] == "bootstrap_rebind"

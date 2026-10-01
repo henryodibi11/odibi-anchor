@@ -754,3 +754,37 @@ def test_public_data_only_exception_stays_unphased_through_task_closure(runtime)
     from odibi_anchor.codebase._workflow import digest
 
     assert anchor("workflow", output_format="dict") == {**packet, "packet_sha256": digest(packet)}
+
+
+def test_fresh_standalone_source_rejection_preserves_authority_and_files(tmp_path, monkeypatch):
+    import sqlite3
+    import subprocess
+
+    from odibi_anchor.bootstrap import init
+
+    home, target = tmp_path / "home", tmp_path / "target"
+    home.mkdir()
+    target.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(target)], check=True, capture_output=True)
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / "memory.db"))
+    monkeypatch.delenv("ANCHOR_TRUST_DOMAIN", raising=False)
+    anchor, _, _ = init(root=str(target), output_format="dict")
+    anchor("orient", output_format="dict")
+    anchor("new_session", name="standalone", inline=True, output_format="dict")
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+
+    prior_window = _SESSION_STATE.task_window_id
+    with pytest.raises(RuntimeError, match="Fresh source tasks require") as caught:
+        anchor("task", "Change one source file", goal="Test fresh source admission", mode="implementation",
+               risk="low", rigor="direct", acceptance_criteria=["An explicit workflow owns the change"],
+               output_format="dict")
+    assert caught.value.context["missing_authority"] == ["project", "trust_domain", "workflow_id"]
+    assert _SESSION_STATE.task_window_id == prior_window
+    assert _SESSION_STATE.workflow_binding is None
+    assert _SESSION_STATE.active_task_profile is None
+    with sqlite3.connect(home / "memory.db") as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "accepted_task_records" in tables:
+            assert connection.execute("SELECT count(*) FROM accepted_task_records").fetchone()[0] == 0
+    assert sorted(p.name for p in target.iterdir()) == [".git"]

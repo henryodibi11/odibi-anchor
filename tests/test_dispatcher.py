@@ -160,7 +160,8 @@ class TestActionRouting:
             anchor(
                 "task", "Exercise public memory creation boundaries",
                 goal="Prove caller content cannot assign lifecycle authority",
-                mode="implementation", acceptance_criteria=["All new rows are candidates"],
+                mode="implementation", execution_mode="artifact_only",
+                acceptance_criteria=["All new rows are candidates"],
                 output_format="dict",
             )
 
@@ -725,7 +726,7 @@ class TestSessionState:
         ):
             result = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
-                mode="implementation", output_format="dict",
+                mode="implementation", execution_mode="artifact_only", output_format="dict",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -765,7 +766,7 @@ class TestSessionState:
         ):
             markdown = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
-                mode="implementation", output_format="markdown",
+                mode="implementation", execution_mode="artifact_only", output_format="markdown",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -827,6 +828,7 @@ class TestSessionState:
             bootstrap_cw["anchor"](
                 "task", "Persist selected task memory before checkpoint",
                 goal="Keep durable task state complete", mode="implementation",
+                execution_mode="artifact_only",
                 acceptance_criteria=["The checkpoint includes task memory selections"],
                 output_format="dict",
             )
@@ -850,7 +852,7 @@ class TestSessionState:
             result = anchor(
                 "task", "Build an Altair interaction with a Pydantic v2 contract",
                 goal="Emit a validated Vega-Lite specification",
-                mode="implementation", output_format="dict",
+                mode="implementation", execution_mode="artifact_only", output_format="dict",
                 acceptance_criteria=["Altair and Pydantic guidance is discoverable"],
             )
         ids = {item["id"] for item in result["reference_guidance"]}

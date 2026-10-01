@@ -125,6 +125,56 @@ def test_missing_legacy_binding_does_not_create_workflow_or_prior_evidence(tmp_p
     assert not db.exists()
 
 
+@pytest.mark.parametrize("missing", ["project", "trust_domain", "workflow_id"])
+def test_fresh_source_requires_each_explicit_authority(runtime, missing):
+    from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+
+    _, session = runtime
+    values = {"project": "project-a", "trust_domain": "personal", "workflow_id": "wf_explicit"}
+    values[missing] = None
+    session.active_project = values.pop("project")
+    original_binding = session.workflow_binding.copy()
+    with pytest.raises(RuntimeError, match="Fresh source tasks require") as caught:
+        require_source_workflow(session_state=session, profile=session.active_task_profile, **values)
+    assert caught.value.code == "workflow_required"
+    assert caught.value.context["missing_authority"] == [missing]
+    assert caught.value.context["automatic_project_creation"] is False
+    assert "task_rebind" in str(caught.value)
+    assert caught.value.next_operations[0]["args"] == ["workflow"]
+    assert session.workflow_binding == original_binding
+
+
+@pytest.mark.parametrize("mode,traits,source_capable", [
+    ("source_change", [], True),
+    ("data_change", ["source-change", "data-change"], True),
+    ("data_change", ["source-change"], False),
+    ("artifact_only", [], False), ("read_only", [], False),
+])
+def test_enrollment_uses_effects_without_widening_data_exception(mode, traits, source_capable):
+    from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+
+    profile = normalize_task_profile(work_type="change", execution_mode=mode, traits=traits)
+    session = SessionState(active_task_profile=profile)
+    if source_capable:
+        with pytest.raises(RuntimeError, match="project, trust_domain, workflow_id"):
+            require_source_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+        session.active_project = "declared"
+        require_source_workflow(session_state=session, profile=profile, trust_domain="personal", workflow_id="wf_explicit")
+    else:
+        require_source_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+
+
+def test_read_only_lightweight_projection_never_invents_delivery(tmp_path):
+    session = SessionState(active_task_profile=normalize_task_profile(legacy_mode="analysis"))
+    db = tmp_path / "absent.db"
+    packet = workflow_packet(db, session_state=session)
+    assert packet["status"] == "read_only_unphased"
+    assert packet["completed"] is False and packet["delivery_verified"] is False
+    assert packet["next_step"] == "report_observed_result"
+    assert "state" not in packet and "binding" not in packet
+    assert not db.exists()
+
+
 def test_canonical_packet_preserves_content_and_is_not_authority(runtime):
     db, session = runtime
     state = bound_workflow(db, session_state=session)

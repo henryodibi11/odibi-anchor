@@ -591,6 +591,15 @@ def run_post_dispatch(
                 target_root=session_state.target_root,
                 request=(task_stage.get("baseline_qualification") if task_stage else None),
             )
+        if task_stage is not None and "workflow_id" in task_stage:
+            # Canonical fresh-task staging always includes workflow_id, even
+            # when absent. Historical records/rebind do not pass through here.
+            from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+
+            require_source_workflow(
+                session_state=session_state, profile=staged_profile,
+                trust_domain=task_stage.get("trust_domain"), workflow_id=task_stage["workflow_id"],
+            )
         # Materialize any required managed record before replacing old state.
         # Failure here leaves the complete previous task untouched.
         created = None

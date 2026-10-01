@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from odibi_anchor.bootstrap import init
+from tests.workflow_fixtures import (
+    accept_fixture_plan,
+    init_source_runtime as init,
+    source_workflow_kwargs,
+)
 
 
 class SimulatedDatabricksProvider:
@@ -82,7 +86,7 @@ def accept_source_task(anchor, *, repository_scope: list[str] | None = None) -> 
     anchor("memory", output_format="dict")
     anchor("audit_history", output_format="dict")
     anchor("new_session", name="databricks-git-folder", inline=True, output_format="dict")
-    return anchor(
+    task = anchor(
         "task",
         "Implement bounded Databricks Git Folder source changes.",
         goal="Update only the explicitly authorized source paths.",
@@ -105,7 +109,10 @@ def accept_source_task(anchor, *, repository_scope: list[str] | None = None) -> 
         repository_scope=repository_scope,
         accept_unknown_git_state=True,
         output_format="dict",
+        **source_workflow_kwargs(repository_scope),
     )
+    accept_fixture_plan(anchor)
+    return task
 
 
 def initialize_repository(root: Path) -> str:
@@ -215,7 +222,8 @@ def test_bounded_edit_requires_acknowledgement_and_detects_later_drift(
         "task_scoped_write_tracking": "available",
         "pr_readiness": "unavailable",
     }
-    assert provider.calls == 2
+    # Task baseline plus plan acceptance independently recheck host identity.
+    assert provider.calls == 5
 
     with pytest.raises(RuntimeError, match="repository_scope is required"):
         anchor(
@@ -289,12 +297,14 @@ def test_canonical_handoff_rebinds_dirty_databricks_task_with_provider(
     anchor("touched", "source.py", output_format="dict")
 
     handoff = anchor("snapshot", mode="handoff", persist=False, output_format="dict")
-    assert handoff["first_action"]["action"] == "bootstrap_rebind"
-    namespace: dict[str, object] = {}
-    exec(handoff["first_action"]["copy_ready"], namespace)
-    rebound = namespace["anchor"]
+    assert handoff["schema_version"] == "3.0"
+    assert handoff["first_action"]["action"] == "task_rebind"
+    rebound, _, _ = init(route_binding=binding, repository_provider=provider, output_format="dict")
+    restored = eval(handoff["first_action"]["copy_ready"], {"anchor": rebound})
 
-    assert rebound._task_rebind_result["task_window_id"] == task_window_id
+    assert restored["status"] == "rebound"
+    assert restored["task_window_id"] == task_window_id
+    assert current_session_state().workflow_binding["workflow_id"] == accepted["workflow"]["state"]["workflow_id"]
     assert current_session_state().repository_provider is provider
     assert current_session_state().task_repository_baseline.identity_provider is provider
     reset_current_session()
@@ -594,7 +604,9 @@ def test_guidance_invocations_and_docs_match_profiles() -> None:
         )
         assert profile.execution_mode == expected
     docs = (Path(__file__).parents[2] / "docs/guides/getting-started.md").read_text()
-    for text in (docs, init.__doc__):
+    from odibi_anchor.bootstrap import init as public_init
+
+    for text in (docs, public_init.__doc__):
         assert 'execution_mode="artifact_only"' in text
         assert 'execution_mode="source_change"' in text
         assert "artifact_only cannot write target source" in text.replace("`", "")

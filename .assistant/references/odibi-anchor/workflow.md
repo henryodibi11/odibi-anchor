@@ -1005,6 +1005,29 @@ No gate-wide or exposure-based bulk confirmation occurs.
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
   `nothing_reusable_learned`. State is local—no cloud replication.
 
+## Fresh source authority and legacy recovery
+
+Fresh source-capable tasks require an explicitly bound managed project, an explicit
+`trust_domain`, and a `workflow_id`. This includes profiles permitting both source
+and data writes. Standalone `init(root=...)` is still available for investigation,
+but is not sufficient authority for new source work. Neither project nor trust
+identity is inferred from a directory name, login, previous selection, or mode.
+
+Bind the existing authorized project with `init(project=...)`, declare its trust
+domain on the task (or through the configured `ANCHOR_TRUST_DOMAIN`), and create a
+bounded workflow plan in a planning task using `anchor("workflow", "create", ...)`.
+Use `anchor("help", "workflow")` for the plan schema. Bind the returned workflow ID
+on a fresh source task, then accept the plan before editing. Creating a missing
+project still requires separate owner approval. This migration does not authorize
+plain non-Git source edits or any external delivery action.
+
+Interrupted legacy source tasks retain exact `anchor("task_rebind")` recovery;
+their original baseline and unphased history are not rewritten. A historical
+handoff is not permission to create new unphased source authority. Read-only tasks
+use a lightweight `read_only_unphased` projection with `completed=false` and
+`delivery_verified=false`; reporting a checked answer creates no fictional
+destination receipt. Task-window closure and verified workflow delivery differ.
+
 ## Temporary data-only workflow compatibility
 
 Until a bounded data candidate collector is qualified, unbound tasks that permit
