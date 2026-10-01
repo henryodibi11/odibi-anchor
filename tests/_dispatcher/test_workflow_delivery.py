@@ -238,7 +238,8 @@ def test_package_readback_requires_exact_release_and_each_file(delivery, monkeyp
 
 
 @pytest.mark.parametrize("change", [None, "host", "bytes", "notebook", "absent"])
-def test_workspace_readback_uses_exact_host_file_path_and_bytes(delivery, monkeypatch, change):
+@pytest.mark.parametrize("configured", [False, True])
+def test_workspace_readback_uses_exact_host_file_path_and_bytes(delivery, monkeypatch, change, configured):
     import hashlib
 
     destination = {"kind": "databricks_workspace_files", "host": "https://workspace.example"}
@@ -261,12 +262,18 @@ def test_workspace_readback_uses_exact_host_file_path_and_bytes(delivery, monkey
 
     client = SimpleNamespace(config=SimpleNamespace(host="https://other" if change == "host" else destination["host"]),
                              workspace=SimpleNamespace(get_status=status, download=download))
+    options = {"workspace_client": client}
+    if configured:
+        delivery.args["session_state"].repository_provider = SimpleNamespace(
+            api_executor=SimpleNamespace(workspace_client=client),
+        )
+        options = {}
     if change:
         with pytest.raises(delivery.d.WorkflowError):
-            delivery.d.observe_destination(delivery.db, **delivery.args, workspace_client=client)
+            delivery.d.observe_destination(delivery.db, **delivery.args, **options)
         if change == "host":
             assert calls == []
     else:
-        observed = delivery.d.observe_destination(delivery.db, **delivery.args, workspace_client=client)
+        observed = delivery.d.observe_destination(delivery.db, **delivery.args, **options)
         assert observed["observed"]["source.py"]["size"] == 10
         assert calls == [("status", "/Repos/user/project/source.py"), ("download", "/Repos/user/project/source.py")]

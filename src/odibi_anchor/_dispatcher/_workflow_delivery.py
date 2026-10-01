@@ -130,7 +130,8 @@ def prepare_delivery(path, *, session_state, workflow_id):
             "approval_response": "APPROVE " + digest(subject), "authority_granted": False}
 
 
-def request_delivery_approval(path, *, session_state, workflow_id, request_id, timeout_minutes=5):
+def request_delivery_approval(path, *, session_state, workflow_id, request_id, timeout_minutes=5,
+                              public_request=None):
     """Collect exact human response through configured owner transport, then CAS."""
     from odibi_anchor.human_input import request_human_input_record
     from odibi_anchor.human_input_owner import select_owner_approval_provider
@@ -155,6 +156,7 @@ def request_delivery_approval(path, *, session_state, workflow_id, request_id, t
         payload={**subject, "actor_kind": "human", "owner": provider.expected_owner_id,
                  "authority_ref": response.request_id, "response_message_id": response.response_message_id,
                  "owner_assurance": provider.assurance},
+        public_request=public_request,
     )
 
 
@@ -208,6 +210,11 @@ def observe_destination(path, *, session_state, workflow_id, workspace_client=No
                 raise WorkflowError("destination_unverified", "package release file digest or availability differs")
             observed[name] = {"sha256": expected["sha256"], "size": expected["size"]}
     elif kind == "databricks_workspace_files" and candidate["kind"] == "databricks_git_folder":
+        if workspace_client is None:
+            # Reuse only the configured repository provider's SDK capability. Do
+            # not create a client from a caller-selected host or ambient URL.
+            executor = getattr(session_state.repository_provider, "api_executor", None)
+            workspace_client = getattr(executor, "workspace_client", None)
         if workspace_client is None or workspace_client.config.host.rstrip("/") != destination["host"]:
             raise WorkflowError("wrong_destination", "configured workspace host differs from approved host")
         observed = {}

@@ -419,9 +419,28 @@ def read_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_id: st
         return _events(connection, workflow_id, identity)[-1]["state"]
 
 
+def replay_public_request(path: str | Path, *, owner: Mapping[str, Any], workflow_id: str,
+                          request_id: str, public_request: dict[str, Any]) -> dict[str, Any] | None:
+    """Read a verified prior receipt before repeating collectors or human prompts.
+
+    This is historical acknowledgement, not evidence that the destination remains
+    unchanged. Ownership and the full hash chain are verified on every replay.
+    """
+    identity = _owner(owner)
+    _text(request_id, "request_id")
+    with _connection(path) as connection:
+        _schema(connection)
+        for event in _events(connection, workflow_id, identity):
+            if event["request_id"] == request_id:
+                if event["request"].get("public_request") != public_request:
+                    raise WorkflowError("conflict", "request_id reused with conflicting public request")
+                return event["state"]
+    return None
+
+
 def transition_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_id: str,
                         expected_generation: int, request_id: str, operation: str,
-                        payload: dict[str, Any]) -> dict[str, Any]:
+                        payload: dict[str, Any], public_request: dict[str, Any] | None = None) -> dict[str, Any]:
     """Atomically compare generation, validate evidence, and append a transition."""
     identity = _owner(owner)
     _text(workflow_id, "workflow_id")
@@ -430,6 +449,8 @@ def transition_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_
         raise ValueError("expected_generation must be a nonnegative integer")
     request = {"operation": _text(operation, "operation"), "payload": _object(payload, "payload"),
                "expected_generation": expected_generation}
+    if public_request is not None:
+        request["public_request"] = _object(public_request, "public_request")
     if not Path(path).is_file():
         raise WorkflowError("unavailable", "workflow authority is unavailable")
     with _connection(path, write=True) as connection:

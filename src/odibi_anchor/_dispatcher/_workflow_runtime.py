@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 
 from odibi_anchor._dispatcher._workflow_admission import bound_workflow, workflow_owner, workflow_packet
-from odibi_anchor.codebase._workflow import WorkflowError, create_workflow, digest, read_workflow, transition_workflow
+from odibi_anchor.codebase._workflow import (
+    WorkflowError,
+    create_workflow,
+    digest,
+    read_workflow,
+    replay_public_request,
+    transition_workflow,
+)
 
 READ_COMMANDS = frozenset({"status", "prepare_delivery"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify",
@@ -39,6 +46,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         raise ValueError("workflow output_format must be dict or markdown")
     if command in WRITE_COMMANDS and output_format != "dict":
         raise ValueError("workflow writes require dict output for durability checkpointing")
+    public_request = {"command": command, "expected_generation": expected_generation,
+                      "plan": plan, "findings": findings, "reason": reason,
+                      "blocker_kind": blocker_kind, "resolution": resolution}
+    replayed = False
     if command == "status":
         if workflow_id is None:
             packet = workflow_packet(path, session_state=session_state)
@@ -46,29 +57,56 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
             packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection", "state": state}
     else:
-        _accepted_task(path, session_state, session_state.task_window_id)
+        accepted = _accepted_task(path, session_state, session_state.task_window_id)
         if command == "create":
             if workflow_id is not None or expected_generation is not None:
                 raise ValueError("create accepts plan and request_id, not existing workflow authority")
             state = create_workflow(path, owner=workflow_owner(session_state), request_id=request_id, plan=plan)
         else:
-            state = bound_workflow(path, session_state=session_state)
+            prior = None
+            binding = accepted["task"].get("workflow_binding")
+            if command in WRITE_COMMANDS:
+                if type(expected_generation) is not int or expected_generation < 0:
+                    raise ValueError("expected_generation must be a nonnegative integer")
+                if not isinstance(request_id, str) or not request_id.strip():
+                    raise ValueError("workflow transition requires request_id")
+                if binding and binding == session_state.workflow_binding and (
+                    workflow_id is None or workflow_id == binding["workflow_id"]
+                ):
+                    prior = replay_public_request(
+                        path, owner=workflow_owner(session_state), workflow_id=binding["workflow_id"],
+                        request_id=request_id, public_request=public_request,
+                    )
+            # A completed replan invalidates the old binding for *new* work, but
+            # its exact receipt remains readable through the immutable old task.
+            state = prior if prior is not None else bound_workflow(path, session_state=session_state)
             if state is None or (workflow_id is not None and workflow_id != state["workflow_id"]):
                 raise WorkflowError("wrong_authority", "operation requires this exact accepted task workflow binding")
             workflow_id = state["workflow_id"]
             if command == "prepare_delivery":
                 packet = prepare_delivery(path, session_state=session_state, workflow_id=workflow_id)
                 return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
-            if type(expected_generation) is not int or expected_generation != state["generation"]:
+            partial = None
+            if prior is None and command == "verify_delivery":
+                partial = replay_public_request(
+                    path, owner=workflow_owner(session_state), workflow_id=workflow_id,
+                    request_id=request_id + ":readback", public_request=public_request,
+                )
+                if partial is not None and partial["generation"] == state["generation"]:
+                    expected_generation = state["generation"]
+            if prior is None and expected_generation != state["generation"]:
                 raise WorkflowError("conflict", "refresh workflow generation before acting")
-            if not isinstance(request_id, str) or not request_id.strip():
-                raise ValueError("workflow transition requires request_id")
-            if command == "qualify":
+            if prior is not None:
+                state = prior
+                replayed = True
+            elif command == "qualify":
                 state = qualify_recorded(path, session_state=session_state, workflow_id=workflow_id,
-                                         expected_generation=expected_generation, request_id=request_id)
+                                         expected_generation=expected_generation, request_id=request_id,
+                                         public_request=public_request)
             elif command == "request_delivery_approval":
                 state = request_delivery_approval(path, session_state=session_state,
-                                                  workflow_id=workflow_id, request_id=request_id)
+                                                  workflow_id=workflow_id, request_id=request_id,
+                                                  public_request=public_request)
             else:
                 operation = command
                 if command == "accept_plan":
@@ -82,11 +120,12 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     payload = collect_review(path, session_state=session_state, workflow_id=workflow_id, findings=findings)
                 elif command == "verify_delivery":
                     payload = observe_destination(path, session_state=session_state, workflow_id=workflow_id)
-                    if state["progress"] == "approved_for_delivery":
+                    if state["progress"] == "approved_for_delivery" or state["status"] == "blocked":
                         state = transition_workflow(
                             path, owner=workflow_owner(session_state), workflow_id=workflow_id,
                             expected_generation=expected_generation, request_id=request_id + ":readback",
                             operation="reconcile_delivery", payload={**payload, "outcome": "delivered"},
+                            public_request=public_request,
                         )
                         expected_generation = state["generation"]
                 elif command == "replan":
@@ -100,10 +139,12 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                 state = transition_workflow(
                     path, owner=workflow_owner(session_state), workflow_id=workflow_id,
                     expected_generation=expected_generation, request_id=request_id,
-                    operation=operation, payload=payload,
+                    operation=operation, payload=payload, public_request=public_request,
                 )
         packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
-                  "state": state, "destination_mutation_performed": False}
+                  "state": state, "destination_mutation_performed": False,
+                  "replayed": replayed,
+                  "observation_semantics": "historical acknowledgement" if replayed else "current transition"}
     packet.pop("packet_sha256", None)
     packet = {**packet, "packet_sha256": digest(packet)}
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"

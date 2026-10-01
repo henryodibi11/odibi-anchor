@@ -228,7 +228,8 @@ def collect_test_measurement(*, state: dict[str, Any], before: dict[str, Any],
 
 
 def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
-                     expected_generation: int, request_id: str) -> dict[str, Any]:
+                     expected_generation: int, request_id: str,
+                     public_request: dict[str, Any] | None = None) -> dict[str, Any]:
     """Qualify only retained collector evidence after a fresh candidate read."""
     from odibi_anchor.codebase._workflow import transition_workflow
 
@@ -250,5 +251,5 @@ def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
         request_id=request_id, operation="qualify", payload={
             "plan_sha256": state["plan_sha256"], "candidate_sha256": digest(candidate),
             "checks": list(state.get("measurements", {}).values()), "review": review,
-        },
+        }, public_request=public_request,
     )

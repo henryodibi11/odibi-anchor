@@ -269,3 +269,106 @@ def test_workflow_writes_checkpoint_before_rendering_markdown(runtime, action, m
         assert checkpoints[0]["workflow_measurement"]["status"] == "satisfied"
         assert after["measurements"]["report"]["counts"]["passed"] == 1
         assert "PASS" in rendered
+
+
+def test_exact_retry_returns_historical_receipt_without_recollecting(runtime, monkeypatch):
+    from odibi_anchor._dispatcher import _workflow_evidence
+
+    anchor, home, _, _ = runtime
+    implemented = implement(runtime)
+    original_generation = implemented["generation"] - 1
+    (home / "workspace/projects/alpha/notebooks/report.md").write_text("Later bytes\n")
+    monkeypatch.setattr(_workflow_evidence, "collect_candidate",
+                        lambda *a, **k: pytest.fail("retry must not recollect candidate"))
+    replay = anchor("workflow", "implemented", expected_generation=original_generation,
+                    request_id=f"implemented:{original_generation}", output_format="dict")
+    assert replay["state"] == implemented
+    assert replay["replayed"] is True
+    assert replay["observation_semantics"] == "historical acknowledgement"
+    with pytest.raises(RuntimeError, match="conflicting public request"):
+        anchor("workflow", "implemented", expected_generation=original_generation,
+               request_id=f"implemented:{original_generation}", reason="changed request", output_format="dict")
+
+
+@pytest.fixture
+def approved_runtime(runtime, monkeypatch):
+    from odibi_anchor import human_input, human_input_owner
+
+    anchor, _, _, _ = runtime
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    advance(anchor, "review", findings=[])
+    advance(anchor, "qualify")
+    prepared = anchor("workflow", "prepare_delivery", output_format="dict")
+    provider = SimpleNamespace(expected_owner_id="fixture-owner", assurance="fixture",
+                               transport=SimpleNamespace(name="fixture"))
+    monkeypatch.setattr(human_input_owner, "select_owner_approval_provider", lambda: provider)
+    monkeypatch.setattr(human_input, "request_human_input_record", lambda *a, **k: SimpleNamespace(
+        response=prepared["approval_response"], response_user_id="fixture-owner", transport="fixture",
+        request_id="fixture-request", response_message_id="fixture-response"))
+    advance(anchor, "request_delivery_approval")
+    return runtime
+
+
+def test_approval_retry_does_not_prompt_again(approved_runtime, monkeypatch):
+    from odibi_anchor import human_input
+
+    anchor, _, _, _ = approved_runtime
+    approved = anchor("workflow", output_format="dict")["state"]
+    generation = approved["generation"] - 1
+    monkeypatch.setattr(human_input, "request_human_input_record",
+                        lambda *a, **k: pytest.fail("must not ask human again"))
+    replay = anchor("workflow", "request_delivery_approval", expected_generation=generation,
+                    request_id=f"request_delivery_approval:{generation}", output_format="dict")
+    assert replay["replayed"] is True and replay["state"] == approved
+
+
+def test_interrupted_readback_resumes_exact_request(approved_runtime, monkeypatch):
+    from odibi_anchor._dispatcher import _workflow_runtime
+
+    anchor, _, _, _ = approved_runtime
+    generation = anchor("workflow", output_format="dict")["state"]["generation"]
+    transition = _workflow_runtime.transition_workflow
+
+    def interrupted(*args, **kwargs):
+        if kwargs["operation"] == "verify_delivery":
+            raise RuntimeError("injected interruption after reconciliation")
+        return transition(*args, **kwargs)
+
+    monkeypatch.setattr(_workflow_runtime, "transition_workflow", interrupted)
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        anchor("workflow", "verify_delivery", expected_generation=generation,
+               request_id="readback", output_format="dict")
+    partial = anchor("workflow", output_format="dict")["state"]
+    assert partial["progress"] == "delivered" and partial["completed"] is False
+    monkeypatch.setattr(_workflow_runtime, "transition_workflow", transition)
+    verified = anchor("workflow", "verify_delivery", expected_generation=generation,
+                      request_id="readback", output_format="dict")
+    assert verified["state"]["progress"] == "delivery_verified"
+    replay = anchor("workflow", "verify_delivery", expected_generation=generation,
+                    request_id="readback", output_format="dict")
+    assert replay["state"] == verified["state"] and replay["replayed"] is True
+
+
+def test_blocked_unknown_delivery_can_be_reconciled(approved_runtime):
+    anchor, _, _, _ = approved_runtime
+    blocked = advance(anchor, "block", reason="Receipt unavailable", blocker_kind="outcome_unknown")
+    assert blocked["status"] == "blocked"
+    verified = advance(anchor, "verify_delivery")
+    assert verified["status"] == "completed" and verified["progress"] == "delivery_verified"
+    assert verified["recovery"]["outcome"] == "delivered"
+
+
+def test_replan_retry_acknowledges_receipt_without_reauthorizing_old_task(runtime):
+    anchor, _, _, _ = runtime
+    state = implement(runtime)
+    plan = {**state["plan"], "goal": "Revised report contract"}
+    kwargs = {"expected_generation": state["generation"], "request_id": "revised-plan",
+              "plan": plan, "reason": "Owner changed outcome", "output_format": "dict"}
+    result = anchor("workflow", "replan", **kwargs)
+    assert result["state"]["progress"] == "draft"
+    replay = anchor("workflow", "replan", **kwargs)
+    assert replay["replayed"] is True and replay["state"] == result["state"]
+    with pytest.raises(RuntimeError, match=r"plan changed|Plan changed"):
+        anchor("workflow", "accept_plan", expected_generation=result["state"]["generation"],
+               request_id="cannot-use-old-task", output_format="dict")
