@@ -31,7 +31,7 @@ def resolved(action, *args, **kwargs):
 
 def test_every_static_action_has_non_empty_contract():
     assert set(CONTRACTS) == set(BUILTIN_ACTION_NAMES)
-    assert len(CONTRACTS) == 91
+    assert len(CONTRACTS) == 92
     assert all(contract.allowed_effects for contract in CONTRACTS.values())
     assert all(contract.allowed_pre_task_access for contract in CONTRACTS.values())
     assert all(contract.resolve_invocation is not None for contract in CONTRACTS.values())
@@ -49,7 +49,7 @@ def test_exact_pre_task_access_assignment_for_all_builtins():
     }
     mixed = {
         "concurrency", "config", "learning", "memory", "problem", "project", "spec",
-        "work_item",
+        "work_item", "workflow",
     }
     task = set(BUILTIN_ACTION_NAMES) - safe - context - mixed
     for name in safe:
@@ -62,6 +62,11 @@ def test_exact_pre_task_access_assignment_for_all_builtins():
 
 
 @pytest.mark.parametrize("action,selector,effect,access", [
+    *[("workflow", value, "read", "context_collection") for value in (None, "status", "prepare_delivery")],
+    *[("workflow", value, "governance_write", "task_required") for value in (
+        "create", "accept_plan", "implemented", "review", "qualify", "request_delivery_approval",
+        "verify_delivery", "block", "resume", "cancel", "replan",
+    )],
     *[("problem", value, "read", "context_collection") for value in (None, "list", "status", "show", "resume")],
     *[("problem", value, "artifact_write", "task_required") for value in ("create", "update", "link_spec", "close")],
     *[("spec", value, "read", "context_collection") for value in (None, "list", "status")],
@@ -86,6 +91,8 @@ def test_every_valid_mixed_selector_resolves_both_axes(action, selector, effect,
 
 
 @pytest.mark.parametrize("action,kwargs,effect,access", [
+    ("test", {}, "read", "task_required"),
+    ("test", {"workflow_criterion": "contract"}, "governance_write", "task_required"),
     ("config", {}, "read", "context_collection"),
     ("config", {"suppress_id": "R1"}, "artifact_write", "task_required"),
     ("project", {"action": "migrate", "dry_run": True}, "read", "task_required"),
@@ -135,7 +142,7 @@ def test_fixed_builtin_effect_sets_match_independent_contract_table():
     polymorphic = {
         "problem", "spec", "work_item", "project", "config", "contract", "apply_sql",
         "apply_transform", "dogfood", "learning", "memory", "memory_hygiene", "observe_table",
-        "concurrency", "task_adoption",
+        "concurrency", "task_adoption", "workflow", "test",
     }
     classified = polymorphic.copy()
     for effect, actions in expected.items():

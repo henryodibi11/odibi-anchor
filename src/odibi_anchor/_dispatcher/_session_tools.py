@@ -194,7 +194,7 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
     with no discoverable tests fails before spawning pytest rather than silently
     widening to the full suite.
     """
-    supported = {"target", "changed_files", "mark", "timeout", "verbose", "output_format"}
+    supported = {"target", "changed_files", "mark", "timeout", "verbose", "output_format", "workflow_criterion"}
     unsupported = sorted(set(kwargs) - supported)
     if unsupported:
         raise ValueError(

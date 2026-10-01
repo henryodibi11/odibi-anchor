@@ -193,6 +193,22 @@ def _task_adoption(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Invocati
     raise ValueError(f"unknown task_adoption command: {command!r}")
 
 
+def _workflow(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSemantics:
+    from odibi_anchor._dispatcher._workflow_runtime import READ_COMMANDS, WRITE_COMMANDS
+
+    command = args[0] if args else kwargs.get("command", "status")
+    if command in READ_COMMANDS:
+        return InvocationSemantics("read", "context_collection")
+    if command in WRITE_COMMANDS:
+        return InvocationSemantics("governance_write", "task_required")
+    raise ValueError("unknown workflow command")
+
+
+def _test(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSemantics:
+    effect = "governance_write" if kwargs.get("workflow_criterion") is not None else "read"
+    return InvocationSemantics(effect, "task_required")
+
+
 def _concurrency(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSemantics:
     positional = _selector(args, kwargs)
     keyword = kwargs.get("command")
@@ -347,7 +363,7 @@ def _boolean_invocation(
 
 BUILTIN_ACTION_NAMES = frozenset({
     "memory", "context", "prepare", "concurrency", "map", "impact", "consistency", "convention", "safe", "semantic",
-    "import_resolve", "known_bad", "task", "task_rebind", "task_adoption", "gate", "preflight", "test", "checkpoint",
+    "import_resolve", "known_bad", "task", "task_rebind", "task_adoption", "workflow", "gate", "preflight", "test", "checkpoint",
     "spec", "problem", "work_item", "reconcile", "investigate", "debug", "trace_row", "evolve",
     "incident_snapshot", "environment_diff", "spark_diagnose", "uc_context", "delta_changes",
     "run_diff", "observe_table", "table_trend",
@@ -431,7 +447,6 @@ _FIXED_INVOCATIONS: dict[str, InvocationSemantics] = {
     "table_trend": InvocationSemantics("read", "task_required"),
     "task": InvocationSemantics("artifact_write", "safe_orientation"),
     "task_rebind": InvocationSemantics("artifact_write", "context_collection"),
-    "test": InvocationSemantics("read", "task_required"),
     "tools": InvocationSemantics("read", "safe_orientation"),
     "touched": InvocationSemantics("artifact_write", "task_required"),
     "trace": InvocationSemantics("read", "task_required"),
@@ -476,6 +491,16 @@ def build_static_action_contracts(
         frozenset({"read", "artifact_write"}),
         frozenset({"safe_orientation"}),
         _task_adoption,
+    )
+    contracts["workflow"] = ActionContract(
+        frozenset({"read", "governance_write"}),
+        frozenset({"context_collection", "task_required"}),
+        _workflow,
+    )
+    contracts["test"] = ActionContract(
+        frozenset({"read", "governance_write"}),
+        frozenset({"task_required"}),
+        _test,
     )
     contracts["concurrency"] = ActionContract(
         frozenset({"read", "artifact_write"}),
