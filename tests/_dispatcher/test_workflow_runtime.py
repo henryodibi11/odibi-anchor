@@ -243,15 +243,29 @@ def test_public_measurement_uses_the_durability_checkpoint_hook(runtime, monkeyp
 
 
 @pytest.mark.parametrize("action", ["workflow", "test"])
-def test_workflow_writes_reject_markdown_before_changing_authority(runtime, action):
+def test_workflow_writes_checkpoint_before_rendering_markdown(runtime, action, monkeypatch):
+    from odibi_anchor._dispatcher import _post_dispatch
+
     anchor, _, _, _ = runtime
     if action == "test":
         implement(runtime)
     before = anchor("workflow", output_format="dict")["state"]
-    with pytest.raises(ValueError, match=r"dict.*durability"):
-        if action == "workflow":
-            anchor("workflow", "accept_plan", expected_generation=before["generation"],
-                   request_id="markdown", output_format="markdown")
-        else:
-            anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="markdown")
-    assert anchor("workflow", output_format="dict")["state"] == before
+    checkpoints = []
+    monkeypatch.setattr(_post_dispatch, "_snapshot_durable_state",
+                        lambda result, **kwargs: checkpoints.append(result.copy()))
+    if action == "workflow":
+        rendered = anchor("workflow", "accept_plan", expected_generation=before["generation"],
+                          request_id="markdown", output_format="markdown")
+    else:
+        rendered = anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="markdown")
+    assert isinstance(rendered, str)
+    assert len(checkpoints) == 1
+    after = anchor("workflow", output_format="dict")["state"]
+    assert after["generation"] == before["generation"] + 1
+    if action == "workflow":
+        assert checkpoints[0]["state"]["progress"] == after["progress"] == "planned"
+        assert '"progress": "planned"' in rendered
+    else:
+        assert checkpoints[0]["workflow_measurement"]["status"] == "satisfied"
+        assert after["measurements"]["report"]["counts"]["passed"] == 1
+        assert "PASS" in rendered
