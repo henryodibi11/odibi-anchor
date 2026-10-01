@@ -372,3 +372,54 @@ def test_replan_retry_acknowledges_receipt_without_reauthorizing_old_task(runtim
     with pytest.raises(RuntimeError, match=r"plan changed|Plan changed"):
         anchor("workflow", "accept_plan", expected_generation=result["state"]["generation"],
                request_id="cannot-use-old-task", output_format="dict")
+
+
+def test_context_exposes_exact_workflow_separately_from_task_completion(runtime):
+    anchor, _, _, draft = runtime
+    context = anchor("context", output_format="dict")
+    assert context["workflow"]["state"]["workflow_id"] == draft["workflow_id"]
+    assert context["workflow"]["state"]["phase"] == "plan"
+    assert context["workflow"]["next_operation"]["kwargs"]["expected_generation"] == 0
+    assert context["task_window_completion_is_workflow_completion"] is False
+    implement(runtime)
+    context = anchor("context", output_format="dict")
+    assert context["workflow"]["pending_criteria"] == ["report"]
+    assert context["workflow"]["review_required"] is True
+    assert "`implemented`" in anchor("context", output_format="markdown")
+    assert anchor._agent_context_snapshot()["workflow"] == context["workflow"]
+
+
+def test_canonical_workflow_handoff_retains_packet_and_rejects_drift(runtime):
+    import json
+    from pathlib import Path
+
+    from odibi_anchor._dispatcher._canonical_handoff import validate_canonical_handoff
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+
+    anchor, home, _, draft = runtime
+    packet = anchor("snapshot", mode="handoff", summary="Resume exact report", output_format="dict")
+    assert packet["schema_version"] == "3.0"
+    assert packet["workflow"]["state"]["workflow_id"] == draft["workflow_id"]
+    assert packet["workflow"]["state"]["plan"] == draft["plan"]
+    assert packet["first_action"]["action"] == "task_rebind"
+    assert "source_change" not in packet["first_action"]["copy_ready"]
+    retained = json.loads(Path(packet["artifact_path"]).read_text())
+    assert retained["workflow"] == packet["workflow"]
+    def check():
+        return validate_canonical_handoff(
+            packet, _SESSION_STATE, anchor._route_binding, memory_db=str(home / "memory.db"),
+        )
+    assert check()["status"] == "verified"
+    advance(anchor, "accept_plan")
+    stale = check()
+    assert stale["status"] == "stale" and "workflow" in stale["conflicts"]
+    assert stale["first_action"] is None
+
+
+@pytest.mark.parametrize("action", ["context", "snapshot"])
+def test_caller_cannot_redirect_context_authority_database(runtime, action):
+    anchor, _, target, _ = runtime
+    kwargs = {"mode": "handoff"} if action == "snapshot" else {}
+    with pytest.raises(TypeError, match="memory_db"):
+        anchor(action, memory_db=str(target / "forged.db"), output_format="dict", **kwargs)
+    assert not (target / "forged.db").exists()

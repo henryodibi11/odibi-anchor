@@ -139,6 +139,12 @@ def collect_runtime_capabilities(session_state: Any, route_binding: Any | None) 
             value={"version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"},
         ),
         "odibi_anchor_package": package,
+        "durable_workflow": _capability(
+            "available", "verified", "workflow_contract:v1",
+            value={"contract_version": 1, "canonical_handoff_versions": [2, 3],
+                   "enrollment": "explicit", "destination_mutation": False,
+                   "reviewer_authentication": "none", "concurrent_remote_writers": False},
+        ),
         "git": git,
         "local_git_repository": local_git,
         "repository_history": repository_history,

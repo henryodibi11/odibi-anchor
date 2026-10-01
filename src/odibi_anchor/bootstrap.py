@@ -1428,7 +1428,7 @@ def init(
             canonical_kwargs = dict(kwargs)
             canonical_kwargs.pop("mode", None)
             result = canonical_handoff(
-                _SESSION_STATE, route_binding, *args, **canonical_kwargs,
+                _SESSION_STATE, route_binding, *args, memory_db=_DEFAULT_DB_PATH, **canonical_kwargs,
             )
         else:
             result = _codebase_mod.session_snapshot_context(ROOT, *args, **kwargs)
@@ -1647,6 +1647,7 @@ def init(
                     _SESSION_STATE, action="context", session_timings=_SESSION_TIMINGS,
                 ),
                 route_binding=route_binding,
+                memory_db=_DEFAULT_DB_PATH,
                 **kwargs,
             ),
             "prepare":      lambda: __import__(
@@ -2052,6 +2053,7 @@ def init(
                     _SESSION_STATE,
                     protocol=_protocol,
                     route_binding=route_binding,
+                    memory_db=_DEFAULT_DB_PATH,
                 )
             if action == "task":
                 try:
@@ -2265,6 +2267,7 @@ def init(
             _SESSION_STATE,
             protocol=protocol,
             route_binding=route_binding,
+            memory_db=_DEFAULT_DB_PATH,
             view="compact",
         ))
 

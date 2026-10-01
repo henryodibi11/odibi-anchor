@@ -412,6 +412,7 @@ def build_agent_context(
     *,
     protocol: Mapping[str, Any],
     route_binding: Any | None = None,
+    memory_db: str | None = None,
     view: str = "compact",
     output_format: str = "dict",
 ) -> dict[str, Any] | str:
@@ -481,6 +482,22 @@ def build_agent_context(
             [next_operation["copy_ready"]] if next_operation.get("copy_ready") else []
         ),
     }
+    if getattr(session_state, "workflow_binding", None) is not None:
+        from odibi_anchor._dispatcher._workflow_admission import workflow_packet
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        if memory_db is None:
+            result["workflow"] = {"status": "unavailable", "reason": "workflow authority database not supplied"}
+            result["status"] = "unavailable"
+        else:
+            try:
+                result["workflow"] = workflow_packet(memory_db, session_state=session_state)
+            except WorkflowError as exc:
+                # Display the existing recovery boundary without replacing the
+                # successful operation that exposed it (e.g. material replan).
+                result["workflow"] = {"status": "blocked", "code": exc.code, "reason": str(exc)}
+                result["status"] = "conflicting"
+        result["task_window_completion_is_workflow_completion"] = False
     return render_agent_context(result) if output_format == "markdown" else result
 
 
@@ -490,6 +507,7 @@ def attach_agent_context(
     *,
     protocol: Mapping[str, Any],
     route_binding: Any | None = None,
+    memory_db: str | None = None,
 ) -> Any:
     """Attach one authoritative compact projection without replacing result keys."""
     if isinstance(result, dict):
@@ -497,6 +515,7 @@ def attach_agent_context(
             session_state,
             protocol=protocol,
             route_binding=route_binding,
+            memory_db=memory_db,
             view="compact",
         )
     return result
@@ -505,6 +524,19 @@ def attach_agent_context(
 def render_agent_context(context: Mapping[str, Any], *, concise: bool = False) -> str:
     """Render a bounded agent-context envelope as Markdown."""
     operation = context["next_operation"]
+    workflow = context.get("workflow")
+    workflow_lines = []
+    if workflow:
+        state = workflow.get("state", {})
+        workflow_lines = [
+            "", "## Durable workflow (separate from task-window completion)",
+            f"Phase: `{state.get('phase', 'unavailable')}`; progress: `{state.get('progress', 'unavailable')}`; "
+            f"status: `{state.get('status', workflow.get('status', 'unavailable'))}`.",
+            workflow.get("reason", "Only verified destination completion means workflow done."),
+        ]
+        next_workflow = workflow.get("next_operation", {})
+        if next_workflow.get("copy_ready"):
+            workflow_lines.append(f"Workflow next: `{next_workflow['copy_ready']}`")
     if concise:
         lines = [
             "## Agent Context v1",
@@ -518,7 +550,7 @@ def render_agent_context(context: Mapping[str, Any], *, concise: bool = False) -
         resources = context.get("resource_pointers", ())
         if resources:
             lines.append(f"**Resource:** `{resources[0]['path']}` — {resources[0]['reason']}")
-        return "\n".join(lines)
+        return "\n".join(lines + workflow_lines)
     lines = [
         "# Agent Context",
         "",
@@ -545,4 +577,4 @@ def render_agent_context(context: Mapping[str, Any], *, concise: bool = False) -
     if resources:
         lines.extend(["", "## Relevant packaged resource"])
         lines.extend(f"- `{row['path']}` — {row['reason']}" for row in resources)
-    return "\n".join(lines)
+    return "\n".join(lines + workflow_lines)

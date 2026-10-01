@@ -136,6 +136,25 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
                      "approved_for_delivery": "deliver", "delivered": "verify_delivery"}[state["progress"]]
     packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
               "binding": session_state.workflow_binding, "state": state, "next_step": next_step}
+    command = {"accept_plan": "accept_plan", "request_delivery_authority": "prepare_delivery",
+               "reconcile_delivery": "verify_delivery", "verify_delivery": "verify_delivery"}.get(next_step)
+    if command is None:
+        command = "status"
+    kwargs = {"workflow_id": state["workflow_id"], "output_format": "dict"}
+    if command not in {"status", "prepare_delivery"}:
+        kwargs.update(expected_generation=state["generation"],
+                      request_id=f"{state['workflow_id']}:{state['generation']}:{command}")
+    packet["next_operation"] = {
+        "action": "workflow", "args": [command], "kwargs": kwargs,
+        "copy_ready": f"anchor('workflow', {command!r}, **{kwargs!r})",
+        "reason": "Inspect retained obligations before acting" if command == "status" else next_step,
+        "destination_mutation_authorized": False,
+    }
+    packet["pending_criteria"] = [
+        criterion["id"] for criterion in state["plan"].get("criteria", [])
+        if state.get("measurements", {}).get(criterion["id"], {}).get("status") != "satisfied"
+    ]
+    packet["review_required"] = state["progress"] == "implemented" and not state.get("review_result")
     # Canonical round-trip both bounds the packet and detaches mutable runtime state.
     packet = json.loads(canonical(packet))
     return {**packet, "packet_sha256": digest(packet)}
