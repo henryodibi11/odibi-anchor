@@ -92,6 +92,7 @@ class SessionState:
     task_repository_baseline: Any | None = None
     task_repository_baseline_qualification: Any | None = None
     task_handoff_context: dict[str, Any] = field(default_factory=dict)
+    workflow_binding: dict[str, Any] | None = None  # Immutable accepted-task binding; None is legacy.
     task_repository_write_fingerprints: dict[str, str] = field(default_factory=dict)
     task_verification_epoch: int | None = None
     pre_task_task_required_attempts: int = 0
@@ -372,6 +373,7 @@ def reset_task_policy_state(session_state: SessionState) -> None:
     session_state.active_task_mode = None
     session_state.active_task_profile = None
     session_state.active_assurance_plan = None
+    session_state.workflow_binding = None
     session_state.task_goal = None
     session_state.task_tags = []
     session_state.memory_selections = []

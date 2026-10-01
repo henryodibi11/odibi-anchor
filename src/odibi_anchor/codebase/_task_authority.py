@@ -265,6 +265,9 @@ def build_accepted_task_record(
             "repository_write_fingerprints": dict(session_state.task_repository_write_fingerprints),
         },
     }
+    binding = getattr(session_state, "workflow_binding", None)
+    if binding is not None:
+        record["task"]["workflow_binding"] = _encode(binding)
     return record
 
 
@@ -295,6 +298,10 @@ def persist_accepted_task(
 ) -> dict[str, Any]:
     """Persist one accepted task before its acceptance is returned to the caller."""
     session_state.trust_domain = task_stage.get("trust_domain")
+    if getattr(session_state, "workflow_binding", None) is not None:
+        from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+
+        bound_workflow(path, session_state=session_state)
     record = build_accepted_task_record(
         session_state=session_state, task_stage=task_stage, task_result=task_result,
     )
@@ -599,6 +606,7 @@ def _restore_state(record: dict[str, Any], session_state: Any) -> None:
     session_state.phase_count = task.get("phase_count", 1)
     session_state.current_phase = task.get("current_phase", 1)
     session_state.task_handoff_context = dict(task.get("handoff_context") or {})
+    session_state.workflow_binding = task.get("workflow_binding")
     session_state.active_problem = session_state.linked_problem
     session_state.task_repository_baseline = baseline
     session_state.task_repository_baseline_qualification = qualification

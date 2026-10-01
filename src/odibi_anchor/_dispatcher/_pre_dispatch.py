@@ -341,6 +341,16 @@ def run_pre_dispatch_enforcement(
             raise ValueError("invocation_resolution or action_contract is required")
         resolution = resolve_invocation(action_contract, args, kwargs)
 
+    if resolution.error is None and getattr(session_state, "workflow_binding", None) is not None:
+        from odibi_anchor._dispatcher._boot import _ENV
+        from odibi_anchor._dispatcher._workflow_admission import enforce_workflow_admission
+
+        enforce_workflow_admission(
+            _ENV["memory_db"], session_state=session_state, effects=resolution.effects,
+            source_targets=(kwargs["target"],)
+            if action in {"safe", "semantic"} and "target" in kwargs else (),
+        )
+
     task_baseline = getattr(session_state, "task_repository_baseline", None)
     if (
         resolution.error is None

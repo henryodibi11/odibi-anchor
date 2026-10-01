@@ -883,3 +883,40 @@ def test_refusal_diagnostics_and_withdrawal_are_durable_immutable_events(tmp_pat
             connection.execute("DELETE FROM dirty_adoption_refusal_events")
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute("DELETE FROM dirty_adoption_withdrawal_events")
+
+
+def test_workflow_binding_survives_rebind_without_changing_baseline(tmp_path):
+    from odibi_anchor._dispatcher._workflow_admission import (
+        bind_workflow,
+        bound_workflow,
+        workflow_owner,
+    )
+    from odibi_anchor.codebase._workflow import create_workflow
+
+    original = state(tmp_path)
+    original.trust_domain = "personal"
+    db = tmp_path / "memory.db"
+    workflow = create_workflow(
+        db, owner=workflow_owner(original), request_id="start",
+        plan={"schema_version": 1, "goal": "Retain ownership", "risk": "high",
+              "execution_mode": "source_change"},
+    )
+    original.workflow_binding = bind_workflow(
+        db, session_state=original, workflow_id=workflow["workflow_id"],
+    )
+    persist_accepted_task(db, session_state=original,
+                          task_stage={"trust_domain": "personal"}, task_result=result())
+    restarted = fresh_state(original, workflow_binding=None)
+    rebind_latest_open_task(db, session_state=restarted)
+    assert restarted.workflow_binding == original.workflow_binding
+    assert bound_workflow(db, session_state=restarted)["progress"] == "draft"
+    assert restarted.task_repository_baseline == original.task_repository_baseline
+
+
+def test_legacy_rebind_clears_binding_instead_of_synthesizing_history(tmp_path):
+    original = state(tmp_path)
+    db = tmp_path / "memory.db"
+    persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    restarted = fresh_state(original, workflow_binding={"workflow_id": "unrelated"})
+    rebind_latest_open_task(db, session_state=restarted)
+    assert restarted.workflow_binding is None
