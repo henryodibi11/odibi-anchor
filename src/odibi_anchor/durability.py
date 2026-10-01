@@ -285,6 +285,24 @@ def _inspect_local_database(path: Path) -> dict[str, Any]:
             "SELECT type, name, tbl_name, sql FROM sqlite_schema "
             "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name, tbl_name"
         ).fetchall()
+        from odibi_anchor.codebase._authority_relocation import load_relocations
+        from odibi_anchor.codebase._workflow import _events, _schema
+
+        load_relocations(connection)
+        tables = {row[1] for row in objects if row[0] == "table"}
+        workflow_version = (
+            connection.execute("SELECT 1 FROM anchor_schema_versions WHERE domain='workflow'").fetchone()
+            if "anchor_schema_versions" in tables else None
+        )
+        if "workflow_events" in tables or workflow_version:
+            _schema(connection)
+            connection.row_factory = sqlite3.Row
+            for identifier, in connection.execute("SELECT DISTINCT workflow_id FROM workflow_events"):
+                first = connection.execute(
+                    "SELECT event_json FROM workflow_events WHERE workflow_id=? ORDER BY generation LIMIT 1",
+                    (identifier,),
+                ).fetchone()
+                _events(connection, identifier, json.loads(first[0])["state"]["owner"])
         schema = [[str(row[0]), str(row[1]), str(row[2]), row[3]] for row in objects]
         schema_sha256 = hashlib.sha256(_canonical_bytes({"schema": schema})).hexdigest()
         return {
@@ -1419,6 +1437,13 @@ def restore_latest(
                 continuity = _relocate_restored_continuity(
                     staged_artifacts, artifacts_destination
                 )
+                if continuity["status"] == "relocated":
+                    from odibi_anchor.codebase._authority_relocation import append_verified_relocation
+
+                    continuity["attestation_id"] = append_verified_relocation(
+                        staged, source_home=continuity["source_home"],
+                        destination_home=continuity["destination_home"], manifest=manifest,
+                    )
                 try:
                     shutil.copytree(staged_artifacts, artifacts_destination)
                 except Exception:
@@ -1446,6 +1471,8 @@ def restore_latest(
         "snapshot_id": manifest["snapshot_id"],
         "sha256": manifest["sha256"],
         "logical_digest": manifest["logical_digest"],
+        "restored_sha256": _sha256(destination),
+        "restored_logical_digest": logical_digest(destination),
         "integrity_check": "ok",
         "format": manifest["format"],
         "artifacts": artifacts_status,

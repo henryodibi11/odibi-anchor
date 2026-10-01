@@ -42,7 +42,7 @@ def bind_workflow(path: str | Path, *, session_state: Any,
         raise WorkflowError("terminal", "cannot bind a terminal workflow to new work")
     return {"schema_version": 1, "workflow_id": workflow_id,
             "task_window_id": session_state.task_window_id,
-            "owner_sha256": digest(owner), "plan_sha256": state["plan_sha256"],
+            "owner_sha256": digest(state["owner"]), "plan_sha256": state["plan_sha256"],
             "execution_mode": mode}
 
 
@@ -61,11 +61,11 @@ def bound_workflow(path: str | Path, *, session_state: Any) -> dict[str, Any] | 
         raise WorkflowError("integrity", "unsupported or incomplete workflow binding")
     owner = workflow_owner(session_state)
     profile = session_state.active_task_profile
-    if (binding["owner_sha256"] != digest(owner)
+    state = read_workflow(path, owner=owner, workflow_id=binding["workflow_id"])
+    if (binding["owner_sha256"] != digest(state["owner"])
             or binding["task_window_id"] != session_state.task_window_id
             or profile is None or binding["execution_mode"] != profile.execution_mode):
         raise WorkflowError("wrong_authority", "workflow binding does not match accepted task authority")
-    state = read_workflow(path, owner=owner, workflow_id=binding["workflow_id"])
     if is_review:
         if (profile.execution_mode != "read_only" or profile.work_type != "verify"
                 or binding["plan_sha256"] != state["plan_sha256"]

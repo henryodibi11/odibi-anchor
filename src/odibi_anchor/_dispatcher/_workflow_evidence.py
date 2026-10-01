@@ -18,6 +18,7 @@ from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, re
 
 
 def _accepted_task(path, session_state, task_window_id):
+    from odibi_anchor.codebase._authority_relocation import load_relocations
     from odibi_anchor.codebase._task_authority import (
         _connect,
         _load_verified_record,
@@ -35,7 +36,7 @@ def _accepted_task(path, session_state, task_window_id):
         if row is None:
             raise WorkflowError("unavailable", "accepted workflow task is unavailable")
         record = _load_verified_record(row)
-        if not _matches_owner(record, _owner_identity(session_state)):
+        if not _matches_owner(record, _owner_identity(session_state), load_relocations(connection)):
             raise WorkflowError("wrong_authority", "workflow task belongs to another exact authority")
         return record
     finally:
@@ -140,7 +141,7 @@ def bind_review(path: str | Path, *, session_state: Any, workflow_id: str) -> di
     if state["progress"] != "implemented" or state["status"] != "active":
         raise WorkflowError("missing_evidence", "review binding requires an active implemented candidate")
     return {"schema_version": 1, "workflow_id": workflow_id,
-            "task_window_id": session_state.task_window_id, "owner_sha256": digest(owner),
+            "task_window_id": session_state.task_window_id, "owner_sha256": digest(state["owner"]),
             "plan_sha256": state["plan_sha256"], "execution_mode": "read_only",
             "review_candidate_sha256": digest(state["candidate"])}
 

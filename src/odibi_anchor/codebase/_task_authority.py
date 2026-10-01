@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from odibi_anchor.codebase._authority_relocation import load_relocations, rebase_identity
+
 DOMAIN = "task_authority"
 VERSION = 1
 FORMAT = "odibi-anchor-accepted-task-v1"
@@ -68,8 +70,9 @@ def _owner_identity(session_state: Any, *, trust_domain: str | None = None) -> d
     }
 
 
-def _matches_owner(record: dict[str, Any], owner: dict[str, Any]) -> bool:
-    return all(record["identity"].get(key) == value for key, value in owner.items())
+def _matches_owner(record: dict[str, Any], owner: dict[str, Any], relocations=()) -> bool:
+    identity = rebase_identity(record["identity"], relocations, owner.get("anchor_home"))
+    return all(identity.get(key) == value for key, value in owner.items())
 
 
 def _terminal_records(path: str | Path) -> list[dict[str, Any]]:
@@ -647,6 +650,7 @@ def rebind_latest_open_task(
         if "accepted_task_records" not in tables:
             raise TaskAuthorityUnavailable("accepted task authority is unavailable")
         _verify_schema(connection)
+        relocations = load_relocations(connection)
         project = session_state.active_project
         target_root = _canonical_path(session_state.target_root or session_state.artifact_root)
         rows = connection.execute(
@@ -667,7 +671,7 @@ def rebind_latest_open_task(
     current_identity = _owner_identity(session_state)
     matches = [
         candidate for candidate in records
-        if _matches_owner(candidate, current_identity)
+        if _matches_owner(candidate, current_identity, relocations)
     ]
     if task_window_id is not None and not isinstance(task_window_id, str):
         raise TaskAuthorityUnavailable(
@@ -767,6 +771,7 @@ def rebind_latest_open_task(
         "record_id": record["record_id"], "rebind_event_id": event["event_id"],
         "event_created": event["created"], "obligations": record["obligations"],
         "repository_scope": record["task"]["repository_scope"],
+        "owner_relocated": identity.get("anchor_home") != current_identity["anchor_home"],
     }
     result["diagnostics"] = inspect_task_authority(path)
     return result
@@ -799,6 +804,7 @@ def task_recovery_context(
             if "accepted_task_records" not in tables:
                 return {**unavailable, "reason": "accepted task authority is unavailable"}
             _verify_schema(connection)
+            relocations = load_relocations(connection)
             rows = connection.execute(
                 "SELECT r.* FROM accepted_task_records r WHERE r.project_id IS ? "
                 "AND r.target_root=? ORDER BY r.accepted_at,r.task_window_id",
@@ -821,7 +827,7 @@ def task_recovery_context(
     owner = _owner_identity(session_state, trust_domain=trust_domain)
     source_records = [
         record for record in records
-        if _matches_owner(record, owner)
+        if _matches_owner(record, owner, relocations)
         and record["task"].get("profile", {}).get("execution_mode") == "source_change"
     ]
     open_ids = sorted(

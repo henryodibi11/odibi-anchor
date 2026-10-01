@@ -349,6 +349,9 @@ def _schema(connection: sqlite3.Connection, *, create: bool = False) -> None:
 
 
 def _events(connection: sqlite3.Connection, workflow_id: str, owner: dict[str, Any]) -> list[dict[str, Any]]:
+    from odibi_anchor.codebase._authority_relocation import load_relocations, rebase_identity
+
+    relocations = load_relocations(connection)
     rows = connection.execute("SELECT * FROM workflow_events WHERE workflow_id=? ORDER BY generation",
                               (workflow_id,)).fetchall()
     events = []
@@ -356,8 +359,8 @@ def _events(connection: sqlite3.Connection, workflow_id: str, owner: dict[str, A
     for index, row in enumerate(rows):
         event = json.loads(row["event_json"])
         state = event["state"]
-        if state["owner"] != owner:
-            raise WorkflowError("unavailable", "workflow does not belong to this exact authority")
+        if rebase_identity(state["owner"], relocations, owner["anchor_home"]) != owner:
+            raise WorkflowError("unavailable", "workflow does not match this exact authority")
         if (row["generation"] != index or state["generation"] != index
                 or state["workflow_id"] != workflow_id or state["schema_version"] != VERSION
                 or row["previous_sha256"] != previous or event["previous_sha256"] != previous

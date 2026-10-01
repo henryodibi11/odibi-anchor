@@ -257,6 +257,8 @@ def _relocate_restored_continuity(
         "status": "relocated" if updates else "unchanged",
         "owners_relocated": relocated_owners,
         "records_relocated": relocated_records,
+        "source_home": next(iter(source_homes)),
+        "destination_home": str(destination_home),
     }
 
 
