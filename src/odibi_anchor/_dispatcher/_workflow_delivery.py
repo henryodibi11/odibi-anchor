@@ -18,7 +18,7 @@ from urllib import request
 from urllib.parse import quote
 
 from odibi_anchor._dispatcher._workflow_admission import workflow_owner
-from odibi_anchor._dispatcher._workflow_evidence import collect_candidate, runtime_environment
+from odibi_anchor._dispatcher._workflow_evidence import collect_candidate, producer_completion, runtime_environment
 from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow, transition_workflow
 
 _OPERATIONS = {"managed_artifacts": "deliver_artifacts", "github_ref": "push",
@@ -107,6 +107,9 @@ def _fresh(path, session_state, workflow_id, *, allow_unknown=False):
         raise WorkflowError("review_required", "high-risk delivery requires explicit task-separated review provenance")
     if collect_candidate(path, session_state=session_state, workflow_id=workflow_id) != state["candidate"]:
         raise WorkflowError("stale_evidence", "candidate changed after qualification")
+    completion = producer_completion(path, session_state=session_state, producer=state["candidate"]["producer"])
+    if state["qualification"].get("producer_terminal_record_sha256") != completion:
+        raise WorkflowError("stale_evidence", "qualification lacks this exact producer terminal proof; requalify")
     environment = digest(runtime_environment())
     if any(check.get("environment_sha256") != environment for check in state["qualification"]["checks"]):
         raise WorkflowError("stale_evidence", "qualification environment changed before delivery")

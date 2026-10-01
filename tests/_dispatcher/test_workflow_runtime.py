@@ -70,6 +70,14 @@ def implement(runtime):
     return advance(anchor, "implemented")
 
 
+def finish_producer(anchor):
+    anchor("review", output_format="dict")
+    anchor("gate", output_format="dict")
+    return anchor("learning", "assess", outcome="nothing_reusable_learned",
+                  notes="Negative paths in this isolated regression fixture are deliberate.",
+                  output_format="dict")["terminal_task_record"]
+
+
 def test_public_lifecycle_requires_measurements_review_and_human_authority(runtime, monkeypatch):
     anchor, _, _, draft = runtime
     implemented = implement(runtime)
@@ -82,8 +90,10 @@ def test_public_lifecycle_requires_measurements_review_and_human_authority(runti
     reviewed = advance(anchor, "review", findings=[])
     assert reviewed["review_result"]["kind"] == "self"
     assert reviewed["review_result"]["reviewer_authentication"] == "none"
+    terminal = finish_producer(anchor)
     qualified = advance(anchor, "qualify")
     assert qualified["progress"] == "qualified" and qualified["completed"] is False
+    assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
     prepared = anchor("workflow", "prepare_delivery", output_format="dict")
     assert prepared["authority_granted"] is False
     with pytest.raises(RuntimeError, match="retained approval"):
@@ -192,7 +202,7 @@ def test_failed_real_measurement_prevents_qualification(runtime):
     assert result["metrics"]["failed"] == 1
     assert result["workflow_measurement"]["status"] == "failed"
     advance(anchor, "review", findings=[])
-    with pytest.raises(RuntimeError, match="not satisfied"):
+    with pytest.raises(RuntimeError, match="completed gate-and-learning"):
         advance(anchor, "qualify")
     assert anchor("workflow", output_format="dict")["state"]["progress"] == "implemented"
 
@@ -232,6 +242,7 @@ def test_public_separate_review_task_binds_exact_candidate_without_principal_cla
     assert review["separate_read_only_accepted_task"] is True
     assert review["reviewer_authentication"] == "none"
     assert review["evidence_kind"] == "agent_judgment"
+    assert advance(anchor, "qualify")["qualification"]["producer_terminal_record_sha256"]
 
 
 def test_public_measurement_uses_the_durability_checkpoint_hook(runtime, monkeypatch):
@@ -303,6 +314,7 @@ def approved_runtime(runtime, monkeypatch):
     implement(runtime)
     anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
     advance(anchor, "review", findings=[])
+    finish_producer(anchor)
     advance(anchor, "qualify")
     prepared = anchor("workflow", "prepare_delivery", output_format="dict")
     provider = SimpleNamespace(expected_owner_id="fixture-owner", assurance="fixture",
@@ -446,6 +458,7 @@ def test_artifact_byte_check_qualifies_only_planned_content_without_pytest(runti
     assert measurement["result"]["expected_sha256"]["notebooks/report.md"] == hashlib.sha256(b"Result: 5\n").hexdigest()
     assert "environment" not in measurement
     advance(anchor, "review", findings=[])
+    finish_producer(anchor)
     monkeypatch.setattr(_workflow_evidence, "runtime_environment", lambda: {"python": "different-host"})
     if content == b"Result: 5\n":
         assert advance(anchor, "qualify")["progress"] == "qualified"
@@ -478,3 +491,58 @@ def test_artifact_check_retry_is_historical_and_criterion_is_part_of_request(run
     assert repeated["observation_semantics"] == "historical acknowledgement"
     with pytest.raises(RuntimeError, match="request_id reused"):
         anchor("workflow", "check_artifact", **{**kwargs, "criterion_id": "different"})
+
+
+def test_qualification_cannot_bypass_producer_gate_and_learning(runtime):
+    anchor, _, _, _ = runtime
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    before = advance(anchor, "review", findings=[])
+    with pytest.raises(RuntimeError, match="completed gate-and-learning"):
+        advance(anchor, "qualify")
+    assert anchor("workflow", output_format="dict")["state"] == before
+
+
+def test_checkpoint_closure_is_usable_without_inventing_another_gate(runtime):
+    anchor, _, _, _ = runtime
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    advance(anchor, "review", findings=[])
+    anchor("review", output_format="dict")
+    checkpoint = anchor("checkpoint", label="report_candidate", test_target="test_report.py",
+                        generate_pr_draft=False,
+                        learning_assessment={"outcome": "nothing_reusable_learned"},
+                        output_format="dict")
+    assert checkpoint["metrics"]["failed_at"] is None
+    assert checkpoint["metrics"]["overall_pass"] is True
+    qualified = advance(anchor, "qualify")
+    assert qualified["progress"] == "qualified" and qualified["completed"] is False
+    assert len(qualified["qualification"]["producer_terminal_record_sha256"]) == 64
+
+
+@pytest.mark.parametrize("assess", [False, True])
+def test_candidate_cannot_be_created_after_gate_or_closure_but_receipt_replays(runtime, assess):
+    anchor, _, _, _ = runtime
+    implemented = implement(runtime)
+    anchor("review", output_format="dict")
+    anchor("gate", output_format="dict")
+    if assess:
+        anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
+    with pytest.raises(RuntimeError, match="gated or closed"):
+        advance(anchor, "implemented")
+    generation = implemented["generation"] - 1
+    replay = anchor("workflow", "implemented", expected_generation=generation,
+                    request_id=f"implemented:{generation}", output_format="dict")
+    assert replay["replayed"] and replay["state"] == implemented
+
+
+def test_out_of_band_source_drift_blocks_artifact_gate_and_workflow_qualification(runtime):
+    anchor, _, target, _ = runtime
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    advance(anchor, "review", findings=[])
+    (target / "unapproved.py").write_text("VALUE = 99\n")
+    with pytest.raises(RuntimeError, match="Non-artifact files"):
+        anchor("gate", output_format="dict")
+    with pytest.raises(RuntimeError, match="completed gate-and-learning"):
+        advance(anchor, "qualify")

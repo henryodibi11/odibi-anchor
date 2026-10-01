@@ -173,7 +173,22 @@ def test_measurements_require_complete_counts_and_stable_candidate(work):
                                  criterion_id="constant", result={})
 
 
-def retain_evidence(work, *, skipped=0):
+def complete_producer(work):
+    """Model trusted closure in collector unit tests; public tests run the real gate."""
+    from odibi_anchor.codebase._task_authority import close_accepted_task
+    from odibi_anchor.codebase._task_execution import persist_terminal_record
+    from tests.codebase.test_task_execution import record
+
+    db, producer, _ = work
+    terminal = record(producer.task_window_id)
+    terminal["identities"].update(project_id=producer.active_project, session_id=producer.session_id)
+    terminal["learning_assessment"] = {"value": {"outcome": "nothing_reusable_learned"}}
+    retained = persist_terminal_record(db, terminal)
+    close_accepted_task(db, task_window_id=producer.task_window_id, terminal_status="completed")
+    return retained
+
+
+def retain_evidence(work, *, skipped=0, close=True):
     db, producer, workflow = work
     candidate = workflow["candidate"]
     measurement = collect_test_measurement(
@@ -185,8 +200,11 @@ def retain_evidence(work, *, skipped=0):
     transition_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
                         expected_generation=2, request_id="measurement", operation="record_check", payload=measurement)
     review = collect_review(db, session_state=reviewer(work), workflow_id=workflow["workflow_id"], findings=[])
-    return transition_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
-                               expected_generation=3, request_id="review", operation="record_review", payload=review)
+    retained = transition_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
+                                   expected_generation=3, request_id="review", operation="record_review", payload=review)
+    if close:
+        complete_producer(work)
+    return retained
 
 
 def test_only_retained_fresh_evidence_qualifies_and_retry_is_idempotent(work):
@@ -250,7 +268,7 @@ def test_qualification_rejects_environment_change(work, monkeypatch):
 
 def test_new_implementation_clears_previous_measurements_and_review(work):
     db, producer, workflow = work
-    retain_evidence(work)
+    retain_evidence(work, close=False)
     (Path(producer.target_root) / "source.py").write_text("VALUE = 9\n")
     candidate = collect_candidate(db, session_state=producer, workflow_id=workflow["workflow_id"])
     changed = transition_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
@@ -334,3 +352,39 @@ def test_artifact_policy_cannot_omit_a_planned_file_or_accept_caller_pass(work):
     plan["criteria"][0]["method"] = "caller_says_pass"
     with pytest.raises(WorkflowError, match="no supported trusted collector"):
         validate_producer_policy(plan, profile)
+
+
+@pytest.mark.parametrize("closure", [None, "superseded", "failed", "blocked"])
+def test_measurements_and_review_cannot_replace_completed_producer(work, closure):
+    from odibi_anchor.codebase._task_authority import close_accepted_task
+
+    db, producer, workflow = work
+    before = retain_evidence(work, close=False)
+    if closure:
+        close_accepted_task(db, task_window_id=producer.task_window_id, terminal_status=closure)
+    with pytest.raises(WorkflowError, match="completed gate-and-learning"):
+        qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
+                          expected_generation=4, request_id="no-closure")
+    from odibi_anchor.codebase._workflow import read_workflow
+
+    assert read_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"]) == before
+
+
+@pytest.mark.parametrize("table,column", [("terminal_task_records", "record_sha256"),
+                                         ("accepted_task_events", "event_sha256")])
+def test_corrupted_producer_closure_cannot_qualify(work, table, column):
+    import sqlite3
+
+    db, producer, workflow = work
+    retain_evidence(work)
+    with sqlite3.connect(db) as connection:
+        name, sql = connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND name LIKE '%no_update'",
+            (table,),
+        ).fetchone()
+        connection.execute(f"DROP TRIGGER {name}")
+        connection.execute(f"UPDATE {table} SET {column}=? WHERE task_window_id=?", ("0" * 64, producer.task_window_id))
+        connection.execute(sql)
+    with pytest.raises(RuntimeError, match=r"checksum|integrity"):
+        qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
+                          expected_generation=4, request_id="corrupt-closure")

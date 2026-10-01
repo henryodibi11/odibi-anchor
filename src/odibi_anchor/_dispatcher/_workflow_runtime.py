@@ -125,7 +125,11 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         path, session_state=session_state, workflow_id=workflow_id, criterion_id=criterion_id,
                     )
                 elif command == "implemented":
-                    payload = {"candidate": collect_candidate(path, session_state=session_state, workflow_id=workflow_id)}
+                    _accepted_task(path, session_state, session_state.task_window_id, require_open=True)
+                    candidate = collect_candidate(path, session_state=session_state, workflow_id=workflow_id)
+                    if candidate["producer"] != session_state.task_window_id:
+                        raise WorkflowError("wrong_authority", "only the producing task can establish its candidate")
+                    payload = {"candidate": candidate}
                 elif command == "review":
                     operation = "record_review"
                     payload = collect_review(path, session_state=session_state, workflow_id=workflow_id, findings=findings)

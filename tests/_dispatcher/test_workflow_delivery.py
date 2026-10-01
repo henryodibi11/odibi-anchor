@@ -78,6 +78,14 @@ def test_prepare_is_not_authority_and_exposes_exact_review_limit(delivery):
         delivery.d.observe_destination(delivery.db, **delivery.args)
 
 
+def test_historical_qualification_without_producer_closure_cannot_authorize(delivery, monkeypatch):
+    historical = copy.deepcopy(delivery.workflow)
+    del historical["qualification"]["producer_terminal_record_sha256"]
+    monkeypatch.setattr(delivery.d, "read_workflow", lambda *a, **k: historical)
+    with pytest.raises(delivery.d.WorkflowError, match="exact producer terminal proof"):
+        delivery.d.prepare_delivery(delivery.db, **delivery.args)
+
+
 @pytest.mark.parametrize("overrides", [{"response": "approved"}, {"response_user_id": "other"},
                                       {"transport": "forged"}, {"response_message_id": None}])
 def test_wrong_human_response_cannot_authorize(delivery, monkeypatch, overrides):

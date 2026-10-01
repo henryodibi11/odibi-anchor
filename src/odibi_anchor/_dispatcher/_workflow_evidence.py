@@ -17,7 +17,7 @@ from odibi_anchor._dispatcher._workflow_admission import workflow_owner
 from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow
 
 
-def _accepted_task(path, session_state, task_window_id):
+def _accepted_task(path, session_state, task_window_id, *, require_open=False):
     from odibi_anchor.codebase._authority_relocation import load_relocations
     from odibi_anchor.codebase._task_authority import (
         _connect,
@@ -38,9 +38,60 @@ def _accepted_task(path, session_state, task_window_id):
         record = _load_verified_record(row)
         if not _matches_owner(record, _owner_identity(session_state), load_relocations(connection)):
             raise WorkflowError("wrong_authority", "workflow task belongs to another exact authority")
+        if require_open:
+            tables = {item[0] for item in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            frozen = connection.execute(
+                "SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'",
+                (task_window_id,),
+            ).fetchone()
+            for table in ("terminal_task_records", "learning_obligations"):
+                if table in tables:
+                    frozen = frozen or connection.execute(
+                        f"SELECT 1 FROM {table} WHERE task_window_id=?", (task_window_id,),
+                    ).fetchone()
+            if frozen:
+                raise WorkflowError("wrong_authority", "gated or closed tasks cannot produce candidates; replan at a safe boundary")
         return record
     finally:
         connection.close()
+
+
+def producer_completion(path, *, session_state, producer):
+    """Verify existing task closure; never synthesize a gate or learning receipt."""
+    from odibi_anchor.codebase._task_authority import _canonical, _connect, _verify_schema
+    from odibi_anchor.codebase._task_execution import inspect_terminal_records
+
+    accepted = _accepted_task(path, session_state, producer)
+    identity = accepted["identity"]
+    result = inspect_terminal_records(path, task_window_id=producer, project_id=identity["project_id"])
+    records = result["records"]
+    if result["schema_status"] != "ready" or len(records) != 1:
+        raise WorkflowError("missing_evidence", "qualification requires the producer's completed gate-and-learning closure")
+    terminal = records[0]
+    record = terminal["record"]
+    if (record["terminal"]["status"] != "completed"
+            or record["identities"]["session_id"] != identity["session_id"]
+            or not record.get("learning_assessment")):
+        raise WorkflowError("missing_evidence", "producer terminal record lacks completed gate-and-learning proof")
+    connection = _connect(path, read_only=True)
+    try:
+        _verify_schema(connection)
+        closure = connection.execute(
+            "SELECT event_id,event_json,event_sha256,created_at FROM accepted_task_events "
+            "WHERE task_window_id=? AND event_type='closed'", (producer,),
+        ).fetchone()
+        if closure is None:
+            raise WorkflowError("missing_evidence", "producer terminal record has no committed task closure")
+        event = json.loads(closure["event_json"])
+        if (_canonical(event) != closure["event_json"]
+                or hashlib.sha256(closure["event_json"].encode()).hexdigest() != closure["event_sha256"]
+                or event != {"event_id": closure["event_id"], "task_window_id": producer,
+                             "event_type": "closed", "details": {"terminal_status": "completed"},
+                             "created_at": closure["created_at"]}):
+            raise WorkflowError("integrity", "producer completed closure integrity check failed")
+    finally:
+        connection.close()
+    return terminal["record_sha256"]
 
 
 def _paths(plan, key):
@@ -305,10 +356,12 @@ def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
     if any(check.get("environment_sha256") != environment_sha256
            for check in state.get("measurements", {}).values() if check["method"] == "pytest"):
         raise WorkflowError("stale_evidence", "qualification environment differs from retained measurement")
+    completion = producer_completion(path, session_state=session_state, producer=candidate["producer"])
     return transition_workflow(
         path, owner=owner, workflow_id=workflow_id, expected_generation=expected_generation,
         request_id=request_id, operation="qualify", payload={
             "plan_sha256": state["plan_sha256"], "candidate_sha256": digest(candidate),
             "checks": list(state.get("measurements", {}).values()), "review": review,
+            "producer_terminal_record_sha256": completion,
         }, public_request=public_request,
     )
