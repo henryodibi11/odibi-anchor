@@ -35,9 +35,12 @@ Substantial problem: `anchor("problem", "create", title="...")`; capture stable 
 1. bootstrap         → use installed `launch()` or run `.assistant/agent_bootstrap.py` in-process; retain anchor and structured orientation
 2. structured orientation → inspect returned status and prior gate evidence; task memory is deferred
 3. anchor("new_session", name="feature_name", inline=True) → initialize this logical session
-4. anchor("task", "describe intended work", goal="state intended outcome", mode="implementation",
+4. anchor("task", "describe intended work", goal="state intended outcome", mode="analysis",
            acceptance_criteria=["state how completion will be verified"])
-                     → plan plus bounded task-aware memory_context selections
+                     → read-only inquiry plus bounded task-aware memory_context selections
+   Before implementation: anchor("help", "workflow") → create a bounded draft, close the inquiry,
+   accept a fresh producer task with workflow_id + explicit project/trust, then accept_plan.
+   A draft or a successful task-window gate grants no source or delivery authority.
 5. review task memory → before source edits, acknowledge bounded selections or none
 6. read requirements → read each SKILL.md in task output's required_skills
 7. anchor("skill_loaded")→ register each: anchor("skill_loaded", "skill-name")
@@ -55,10 +58,16 @@ Steps 7-10 are runtime-enforced when applicable to the accepted task; steps 5-6 
 guidance review before source edits.
 ```
 
-With an active Databricks Git Folder provider, step 4 must also pass
+With an active Databricks Git Folder provider, the producer portion of step 4 must also pass
 `work_type="change", execution_mode="source_change", repository_scope=["src"],
 accept_unknown_git_state=True`. Scope paths are relative (`["."]` or `["src"]`), never
 absolute. A stale agent must refresh and rerun bootstrap, not use documentation mode.
+
+The workflow progresses through implemented → qualified → approved_for_delivery →
+delivered → delivery_verified. Only matching destination readback completes it.
+Use exact workflow criterion measurements, workflow review, and producer gate/learning
+closure before qualification. Human approval binds the exact candidate and destination;
+no workflow command performs a push, merge, publish, upload or deployment.
 
 Read-only work gathers bounded evidence and synthesizes an answer without manufactured
 edit, test, gate, or learning steps.

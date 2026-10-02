@@ -153,9 +153,30 @@ def test_stale_candidate_cannot_qualify(runtime):
 def test_status_markdown_is_rendered_and_help_discovers_action(runtime):
     anchor, _, _, _ = runtime
     assert "workflow" in str(anchor("help", output_format="dict"))
+    help_text = str(anchor("help", "workflow", output_format="dict"))
+    for contract in ("accept_plan", "expected_generation", "request_id", "test_targets",
+                     "artifact_sha256", "source_paths", "human", "Common Workflows"):
+        assert contract in help_text
     rendered = anchor("workflow", output_format="markdown")
     assert isinstance(rendered, str) and "workflow_packet" in rendered
     assert "draft" in rendered
+
+
+def test_startup_guidance_does_not_offer_unbound_source_authority(runtime):
+    from odibi_anchor._dispatcher._protocol import protocol_invocation
+    from odibi_anchor._dispatcher._runtime_capabilities import collect_runtime_capabilities
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+
+    anchor, _, _, _ = runtime
+    invocation = protocol_invocation("task")
+    assert 'mode="analysis"' in invocation
+    assert 'mode="implementation"' not in invocation
+    capability = collect_runtime_capabilities(_SESSION_STATE, None)["durable_workflow"]["value"]
+    assert capability["enrollment"] == "explicit"
+    assert capability["required_for_fresh_tasks"] == ["source_capable", "substantive_artifact"]
+    assert capability["destination_mutation"] is False
+    task_help = str(anchor("help", "task", output_format="dict"))
+    assert "workflow_id" in task_help and "trust_domain" in task_help
 
 
 def test_fresh_runtime_binds_explicit_trust_without_inheriting_old_task(runtime):
@@ -671,6 +692,61 @@ def source_runtime(tmp_path, monkeypatch, request):
            constraints=["Only source.py may change"], acceptance_criteria=["VALUE equals 2"],
            workflow_id=draft["workflow_id"], output_format="dict", **kwargs)
     return anchor, target, git
+
+
+def test_public_git_candidate_requires_qualification_approval_and_exact_remote_readback(source_runtime, monkeypatch):
+    from odibi_anchor import human_input, human_input_owner
+    from odibi_anchor._dispatcher import _workflow_delivery
+
+    anchor, target, git = source_runtime
+    git("remote", "add", "origin", "https://github.com/acme/app.git")
+    advance(anchor, "accept_plan")
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    git("add", "source.py")
+    git("commit", "-m", "qualified fixture candidate")
+    head = git("rev-parse", "HEAD")
+    implemented = advance(anchor, "implemented")
+    assert implemented["progress"] == "implemented" and not implemented["completed"]
+    result = anchor("test", target=["test_source.py"], workflow_criterion="constant", output_format="dict")
+    assert result["metrics"]["passed"] == 1 and result["workflow_measurement"]["status"] == "satisfied"
+    advance(anchor, "review", findings=[])
+    anchor("preflight", output_format="dict")
+    terminal = finish_producer(anchor)
+    qualified = advance(anchor, "qualify")
+    assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
+    assert qualified["progress"] == "qualified" and not qualified["completed"]
+    prepared = anchor("workflow", "prepare_delivery", output_format="dict")
+    assert prepared["authority_granted"] is False
+    with pytest.raises(RuntimeError, match="retained approval"):
+        advance(anchor, "verify_delivery")
+    provider = SimpleNamespace(expected_owner_id="fixture-owner", assurance="fixture",
+                               transport=SimpleNamespace(name="fixture"))
+    monkeypatch.setattr(human_input_owner, "select_owner_approval_provider", lambda: provider)
+    monkeypatch.setattr(human_input, "request_human_input_record", lambda *a, **k: SimpleNamespace(
+        response=prepared["approval_response"], response_user_id="fixture-owner", transport="fixture",
+        request_id="fixture-approval", response_message_id="fixture-response"))
+    approved = advance(anchor, "request_delivery_approval")
+    assert approved["progress"] == "approved_for_delivery" and not approved["completed"]
+    reads = []
+    observed_head = "0" * 40
+
+    def read_json(service, path):
+        reads.append((service, path))
+        return {"sha": observed_head}
+
+    monkeypatch.setattr(_workflow_delivery, "_get_json", read_json)
+    with pytest.raises(RuntimeError, match="differs from qualified head"):
+        advance(anchor, "verify_delivery")
+    assert anchor("workflow", output_format="dict")["state"] == approved
+    observed_head = head
+    verified = advance(anchor, "verify_delivery")
+    assert verified["progress"] == "delivery_verified" and verified["completed"] is True
+    assert verified["verification"]["observed"] == {
+        "repository": "acme/app", "ref": "refs/heads/main", "sha": head}
+    assert reads == [("github", "/repos/acme/app/commits/refs%2Fheads%2Fmain")] * 2
+    assert git("status", "--porcelain") == ""
 
 
 @pytest.mark.parametrize("change", ["unstaged", "staged", "untracked", "committed", "empty_commit"])

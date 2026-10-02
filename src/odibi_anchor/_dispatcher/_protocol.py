@@ -30,8 +30,9 @@ def protocol_invocation(step: str) -> str:
     if step == "task":
         return (
             'anchor("task", "describe intended work", '
-            'goal="state intended outcome", mode="implementation", '
+            'goal="state intended outcome", mode="analysis", '
             'acceptance_criteria=["state how completion will be verified"])'
+            '  # read-only; anchor("help", "workflow") explains create/bind/accept_plan before edits'
         )
     if step == "preflight (for Python changes)":
         return 'anchor("preflight")  # required for Python changes'

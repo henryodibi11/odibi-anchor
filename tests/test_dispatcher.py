@@ -161,6 +161,7 @@ class TestActionRouting:
                 "task", "Exercise public memory creation boundaries",
                 goal="Prove caller content cannot assign lifecycle authority",
                 mode="implementation", execution_mode="artifact_only",
+                risk="low", rigor="direct",
                 acceptance_criteria=["All new rows are candidates"],
                 output_format="dict",
             )
@@ -727,6 +728,7 @@ class TestSessionState:
             result = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
                 mode="implementation", execution_mode="artifact_only", output_format="dict",
+                risk="low", rigor="direct",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -767,6 +769,7 @@ class TestSessionState:
             markdown = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
                 mode="implementation", execution_mode="artifact_only", output_format="markdown",
+                risk="low", rigor="direct",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -829,6 +832,7 @@ class TestSessionState:
                 "task", "Persist selected task memory before checkpoint",
                 goal="Keep durable task state complete", mode="implementation",
                 execution_mode="artifact_only",
+                risk="low", rigor="direct",
                 acceptance_criteria=["The checkpoint includes task memory selections"],
                 output_format="dict",
             )
@@ -853,6 +857,7 @@ class TestSessionState:
                 "task", "Build an Altair interaction with a Pydantic v2 contract",
                 goal="Emit a validated Vega-Lite specification",
                 mode="implementation", execution_mode="artifact_only", output_format="dict",
+                risk="low", rigor="direct",
                 acceptance_criteria=["Altair and Pydantic guidance is discoverable"],
             )
         ids = {item["id"] for item in result["reference_guidance"]}
