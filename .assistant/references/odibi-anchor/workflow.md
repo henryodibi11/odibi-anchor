@@ -188,6 +188,35 @@ reinitialization is required, as shown in the managed-project lifecycle below.
 Project artifacts always remain beneath Odibi Anchor. Use a managed project when
 source can live there, or retain an external source tree without scattering artifacts:
 
+**Register the intended absolute managed path.** Relative `touched` paths always mean
+`target_root/path`, even in `artifact_only` mode and even if the managed artifact exists
+elsewhere with the same name. They never resolve against notebook cwd or switch roots by mode.
+Orientation/task artifact contracts and `project status` expose read-only discovery:
+
+```python
+project_state = anchor("project", "status", output_format="dict")
+project_entry = next(
+    entry for entry in project_state["artifact_contract"]["artifacts"]
+    if entry["path"] == "PROJECT.md"
+)
+assert project_entry["path_status"] == "available", project_entry
+project_path = project_entry["absolute_path"]
+# Establish the required task/accepted plan BEFORE the actual edit.
+# After the authorized edit (and route refresh/exact open-task rebind if required):
+registration = anchor("touched", project_path, output_format="dict")
+```
+
+`absolute_path` is null when discovery cannot safely suggest a path, including symlinks.
+Refresh after rebootstrap or path replacement; this observation is not a filesystem lock,
+write permission, evidence of implementation, or permission to write arbitrary descendants.
+`path_resolution` on a touched result explains the registration; it does not prove a byte
+change. A gate can reject a mistaken target-relative registration even when that target file
+does not exist. Do not clear the ledger or redirect the path silently to make it pass.
+The v0.3.22 live audit that registered bare `PROJECT.md` remains historically blocked.
+A terminal `safe_stop` producer cannot be rebound as an open task or qualified retroactively;
+preserve its candidate and history, then use supported fresh continuation/replanning and new
+qualification. This guidance does not itself recover, approve or deliver the old edit.
+
 For installed PortfolioV1 operation, add an approved missing project to the portfolio before
 bootstrap, then follow the returned `portfolio.prepare` operation. Its target must be an existing
 directory but need not be Git unless source-change evidence is required. Do not bootstrap a

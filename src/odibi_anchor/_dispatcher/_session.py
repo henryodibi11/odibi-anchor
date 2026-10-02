@@ -778,13 +778,32 @@ def _touched_action(path: str, root: str, *, created: bool = False, **_kwargs) -
     """
     result = _session_touched(path, created=created, root=root)
 
+    from odibi_anchor._utils._session_state import canonical_session_path
+
+    normalized = canonical_session_path(path, root)
+    _abs_path = _os.path.abspath(_os.path.join(str(root), normalized))
+    result["path_resolution"] = {
+        "supplied_path": path,
+        "absolute_path": _abs_path,
+        "basis": "absolute" if _os.path.isabs(path) else "target_root",
+        "target_root": str(root),
+        "classification": "managed_artifact" if "managed_artifact" in result else "source_ledger",
+        "observation": "Registration is not proof that filesystem bytes changed.",
+    }
+    if "managed_artifact" not in result:
+        result["path_guidance"] = (
+            "Relative paths always resolve against target_root, regardless of execution mode. "
+            "For managed artifacts, inspect anchor('project', 'status', output_format='dict') "
+            "artifact_contract.artifacts and explicitly register the intended available absolute_path. "
+            "Do not clear history or reinterpret this registration to bypass a gate."
+        )
+
     # Cross-project warning: detect files outside current ROOT
-    _abs_path = path if _os.path.isabs(path) else _os.path.join(str(root), path)
-    if not _abs_path.startswith(str(root)):
+    if "managed_artifact" not in result and not _Path(_abs_path).is_relative_to(_Path(root).absolute()):
         from odibi_anchor._dispatcher._boot import _discover_project_roots
         _detected_root = None
         for _candidate in _discover_project_roots():
-            if _abs_path.startswith(_candidate):
+            if _Path(_abs_path).is_relative_to(_Path(_candidate).absolute()):
                 _detected_root = _candidate
                 break
         _warning = (

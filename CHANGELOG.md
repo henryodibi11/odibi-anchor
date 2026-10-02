@@ -2,6 +2,31 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.23] - 2026-10-02
+
+### Added
+
+- Runtime artifact contract v1.2 exposes absolute managed artifact discovery paths in
+  orientation, task context and project status. Symlinked or unavailable paths are not
+  suggested as writable destinations; discovery grants no authority.
+- Public help and distributed guidance explain absolute managed registration and the
+  unchanged target-root-relative meaning of `touched`, including restart and blocked-task limits.
+
+### Fixed
+
+- Gate diagnostics distinguish registered/detected non-artifact paths from proven byte
+  changes and point to canonical managed-path discovery. Correctly registered managed
+  artifacts no longer receive misleading cross-project warnings.
+- Cross-project warning containment uses path components instead of string prefixes.
+
+### Unchanged boundaries
+
+- Issue #26 was a relative-path registration mistake, not a classifier defect. Relative
+  paths never change roots with execution mode. The historical Databricks task remains
+  blocked; this release does not rewrite or retroactively qualify it.
+- Single-writer/exclusive restore access remains mandatory; the pre-existing collision
+  cleanup race tracked in #24 is not fixed by this release.
+
 ## [0.3.22] - 2026-10-02
 
 ### Added

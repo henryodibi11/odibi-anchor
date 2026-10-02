@@ -19,7 +19,7 @@ _ACTIVE_PROJECT_FILE = ".active_project"
 _PROJECT_DESCRIPTOR = "PROJECT.md"
 ROUTE_BINDING_SCHEMA_VERSION = "1.0"
 _BINDING_SOURCES = frozenset({"explicit", "target_match", "legacy_selector"})
-ARTIFACT_CONTRACT_VERSION = "1.1"
+ARTIFACT_CONTRACT_VERSION = "1.2"
 _ARTIFACT_CONTRACT = (
     {
         "path": "PROJECT.md",
@@ -138,13 +138,42 @@ def managed_artifact_root_names() -> frozenset[str]:
     return frozenset({*public, ".odibi-anchor", "pull_requests"})
 
 
-def artifact_contract() -> dict[str, Any]:
-    """Return the runtime-owned artifact taxonomy shared by every managed project."""
+def artifact_contract(*, artifact_root: str | None = None) -> dict[str, Any]:
+    """Describe artifacts and optionally observe safe absolute discovery paths.
+
+    Paths are point-in-time guidance, not write authority or a filesystem lock.
+    Never follow a link while suggesting where an agent should write.
+    """
+    artifacts = [dict(item) for item in _ARTIFACT_CONTRACT]
+    if artifact_root is not None:
+        root = Path(artifact_root).absolute()
+        for item in artifacts:
+            candidate = root / item["root_name"]
+            reason = None
+            try:
+                if any(part.is_symlink() for part in (candidate, *candidate.parents)):
+                    reason = "symlink in artifact path; inspect routing before use"
+                elif not root.is_dir():
+                    reason = "artifact root is unavailable"
+                elif candidate.exists() and (
+                    candidate.is_dir() if item["path"] == "PROJECT.md" else not candidate.is_dir()
+                ):
+                    reason = "artifact path has an unexpected filesystem type"
+            except OSError:
+                reason = "artifact path observation unavailable"
+            item.update(absolute_path=None if reason else str(candidate),
+                        path_status="unavailable" if reason else "available", path_reason=reason)
     return {
         "version": ARTIFACT_CONTRACT_VERSION,
         "scope": "all_managed_projects",
         "source_of_truth": "odibi_anchor_runtime",
         "existing_record_rewrites_required": False,
+        "path_semantics": {
+            "relative_touched_base": "target_root",
+            "managed_registration": "Use the artifact's available absolute_path with anchor('touched', absolute_path).",
+            "authority_granted": False,
+            "observation": "Refresh after rebootstrap or path replacement; discovery does not authorize edits or qualify bytes.",
+        },
         "root_rule": (
             "Managed records and retained evidence belong in artifact_root; canonical product "
             "source, tests, and product documentation belong in the authorized target_root."
@@ -153,7 +182,7 @@ def artifact_contract() -> dict[str, Any]:
             "A running process must rebootstrap and orient after a Odibi Anchor upgrade "
             "to receive a newer artifact contract."
         ),
-        "artifacts": [dict(item) for item in _ARTIFACT_CONTRACT],
+        "artifacts": artifacts,
     }
 
 
@@ -743,6 +772,11 @@ def _render_project_context(result: dict[str, Any]) -> str:
     contract = result.get("artifact_contract") or {}
     if contract.get("version"):
         lines.append(f"**Artifact contract:** runtime v{contract['version']} (all managed projects)")
+        lines.append("Relative `touched` paths always resolve against `target_root`. Use an available absolute artifact path:")
+        for item in contract.get("artifacts", []):
+            if "absolute_path" in item:
+                location = item["absolute_path"] or item["path_reason"]
+                lines.append(f"- `{item['path']}`: `{location}` ({item['path_status']})")
     capture = result.get("capture_standards") or {}
     if capture.get("version"):
         from odibi_anchor._dispatcher._capture_standards import (
@@ -904,6 +938,11 @@ def project_action(
         ["Re-run init() to activate the selected project's routing."]
         if result.get("reinitialize_required")
         else ["Create or resume project work with anchor('task') after orientation."]
+    )
+    # Discovery follows the immutable runtime binding, never a changed legacy selector.
+    discovery_root = route_binding.artifact_root if route_binding is not None else result.get("artifact_root")
+    result["artifact_contract"] = artifact_contract(
+        artifact_root=None if routing_stale else discovery_root,
     )
     if output_format == "dict":
         return result

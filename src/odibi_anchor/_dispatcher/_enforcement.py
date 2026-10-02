@@ -581,8 +581,13 @@ def should_block_mode_mismatch(
         )
         if invalid:
             return True, (
-                f"Mode mismatch — planned as '{planned_mode}' but target-root files were modified.\n"
+                f"Mode mismatch — planned as '{planned_mode}' but non-artifact paths were registered or detected.\n"
                 f"Non-artifact files: {invalid[:5]}\n"
+                f"Relative paths resolve against target_root={target_root!r}, not artifact_root={artifact_root!r}, "
+                "in every execution mode. Registration alone does not prove a byte change.\n"
+                "For managed artifacts, inspect anchor('project', 'status', output_format='dict') "
+                "artifact_contract.artifacts and explicitly register the intended available absolute_path. "
+                "Preserve the rejected registration/history; do not clear it to bypass qualification.\n"
                 "Artifact-only tasks may write only managed artifact paths. Use an authorized "
                 "source-change task for repository files."
             )

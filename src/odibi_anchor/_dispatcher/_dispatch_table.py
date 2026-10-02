@@ -731,6 +731,25 @@ _WORKFLOWS: dict[str, dict[str, str | list[str]]] = {
 }
 
 _ACTION_DETAILS: dict[str, list[str]] = {
+    "project": [
+        '`status` returns `artifact_contract.artifacts`: select an entry by `path` (for example '
+        '`PROJECT.md`) and use its `absolute_path` only when `path_status="available"`. '
+        'Bound-runtime discovery follows the active immutable project, not the legacy selector.',
+        'These are read-only, point-in-time paths, not edit authority. Symlinked paths are unavailable; '
+        'refresh discovery after rebootstrap or path replacement. Directory entries do not authorize arbitrary descendants.',
+    ],
+    "touched": [
+        'Relative paths always resolve against `target_root`, never `artifact_root` or the notebook cwd, '
+        'regardless of execution mode. `path_resolution` reports the supplied and absolute registration path. '
+        'Registration is not proof that bytes changed.',
+        'For a managed artifact, read `anchor("project", "status", output_format="dict")` '
+        '`artifact_contract.artifacts`, find its logical `path`, check `path_status="available"`, '
+        'and call `anchor("touched", entry["absolute_path"], output_format="dict")`. '
+        'Do not guess a user/host directory or silently redirect relative paths.',
+        'Discovery and registration do not grant write authority, admit draft edits, or satisfy a gate. '
+        'Preserve rejected registration and terminal history; a blocked closed task requires supported '
+        'fresh continuation/replanning, not ledger clearing or retroactive qualification.',
+    ],
     "workflow": [
         '`create`: requires an accepted task in an explicit managed project/trust domain, `plan` '
         'and `request_id`. Start in read-only analysis. The draft grants no edit permission. '

@@ -509,7 +509,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
-    assert project["version"] == "0.3.22"
+    assert project["version"] == "0.3.23"
     assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
     assert project["license"] == "Apache-2.0"
