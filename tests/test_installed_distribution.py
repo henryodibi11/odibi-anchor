@@ -2877,11 +2877,34 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
 
 
             def frame(anchor, label):
-                return anchor(
+                from odibi_anchor._dispatcher._boot import _ENV
+                from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+                from odibi_anchor._utils._session_state import _SESSION_STATE
+                from odibi_anchor.codebase._workflow import create_workflow
+
+                # Seed an exact draft for this disposable installed acceptance
+                # fixture; public draft creation is separately exercised.
+                plan = {
+                    "schema_version": 1, "goal": "Qualify installed source lifecycle",
+                    "risk": "low", "execution_mode": "source_change",
+                    "scope": ["app.py", "tests/test_app.py"],
+                    "source_paths": ["app.py", "tests/test_app.py"],
+                    "exclusions": [], "constraints": [], "risks": [],
+                    "stop_conditions": [], "unresolved_decisions": [],
+                    "criteria": [{"id": "app", "expected": "Exact app behavior", "method": "pytest",
+                                  "test_targets": ["tests/test_app.py"]}],
+                    "destination": {"kind": "github_ref", "repository": "fixture/never-published",
+                                    "ref": "refs/heads/main"},
+                }
+                workflow = create_workflow(_ENV["memory_db"], owner=workflow_owner(_SESSION_STATE),
+                                           request_id=label, plan=plan)
+                result = anchor(
                     "task",
                     f"Qualify installed unborn source-task lifecycle: {label}.",
                     goal=f"Prove {label} preserves exact task scope and replacement semantics.",
                     mode="implementation",
+                    trust_domain="personal",
+                    workflow_id=workflow["workflow_id"],
                     work_type="change",
                     execution_mode="source_change",
                     risk="low",
@@ -2899,9 +2922,18 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                     deliverables=["installed lifecycle evidence"],
                     output_format="dict",
                 )
+                anchor("workflow", "accept_plan", expected_generation=0,
+                       request_id="accept:" + label, output_format="dict")
+                return result
 
+            from odibi_anchor._dispatcher._project import project_action
+
+            os.environ["ANCHOR_TRUST_DOMAIN"] = "personal"
+            project_name = "unborn-source-" + os.environ["PHASE"]
+            project_action(os.environ["ANCHOR_HOME"], "create", name=project_name,
+                           target=root, output_format="dict")
             with contextlib.redirect_stdout(io.StringIO()):
-                anchor, _, _ = init(root=os.environ["TARGET"], output_format="dict")
+                anchor, _, _ = init(root=os.environ["TARGET"], project=project_name, output_format="dict")
             from odibi_anchor._repository_snapshot import (
                 TaskRepositoryBaseline,
                 UnbornTaskRepositoryBaseline,
@@ -3116,6 +3148,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                     "Qualify installed project and artifact isolation.",
                     goal="Prove installed state remains isolated across project routing.",
                     mode=mode,
+                    execution_mode="artifact_only" if mode == "implementation" else "read_only",
                     current_state="Disposable installed-wheel fixture.",
                     desired_outcome="Only the selected managed artifact root contains records.",
                     constraints=["Do not modify target source."],
@@ -3298,6 +3331,51 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert Path(notebook_result["module"]).is_relative_to(venv.resolve())
         assert _git_snapshot(committed) == committed_before
 
+        source_draft_script = _write_script(
+            audit_root,
+            "source_draft_fixture.py",
+            """
+            import contextlib
+            import io
+            import json
+            import os
+            from odibi_anchor._dispatcher._project import project_action
+            from odibi_anchor.bootstrap import init
+
+            if os.environ.get("CREATE_SOURCE_PROJECT") == "1":
+                project_action(os.environ["ANCHOR_HOME"], "create",
+                               name=os.environ["ANCHOR_PROJECT_ID"],
+                               target=os.environ["ANCHOR_PROJECT_ROOT"], output_format="dict")
+            with contextlib.redirect_stdout(io.StringIO()):
+                anchor, _, _ = init(project=os.environ["ANCHOR_PROJECT_ID"], output_format="dict")
+            from odibi_anchor._dispatcher._boot import _ENV
+            from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+            from odibi_anchor._utils._session_state import _SESSION_STATE
+            from odibi_anchor.codebase._workflow import create_workflow
+
+            plan = {
+                "schema_version": 1, "goal": "Qualify installed transport acceptance",
+                "risk": "low", "execution_mode": "source_change", "scope": ["app.py"],
+                "source_paths": ["app.py"], "exclusions": [], "constraints": [], "risks": [],
+                "stop_conditions": [], "unresolved_decisions": [],
+                "criteria": [{"id": "app", "expected": "App contract holds", "method": "pytest",
+                              "test_targets": ["tests/test_app.py"]}],
+                "destination": {"kind": "github_ref", "repository": "fixture/never-published",
+                                "ref": "refs/heads/main"},
+            }
+            draft = create_workflow(_ENV["memory_db"], owner=workflow_owner(_SESSION_STATE),
+                                    request_id="transport-draft", plan=plan)
+            print(json.dumps({"workflow_id": draft["workflow_id"]}))
+            """,
+        )
+        cli_source_environment = {
+            **direct_environment, "ANCHOR_PROJECT_ID": "cli-source",
+            "ANCHOR_PROJECT_ROOT": str(cli_unborn), "ANCHOR_TRUST_DOMAIN": "personal",
+        }
+        cli_draft = json.loads(_run(
+            [str(venv_python), str(source_draft_script)], cwd=cli_unborn,
+            environment={**cli_source_environment, "CREATE_SOURCE_PROJECT": "1"},
+        ).stdout)
         unborn_source_task = {
             "action": "task",
             "arg0": "Frame an installed source change from a pristine unborn target branch.",
@@ -3326,12 +3404,12 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             {"action": "audit_history"},
             {"action": "orient"},
             {"action": "new_session", "name": "cli_unborn", "inline": True},
-            unborn_source_task,
+            {**unborn_source_task, "workflow_id": cli_draft["workflow_id"], "trust_domain": "personal"},
         ]
         cli_unborn_batch = _run(
             [str(venv_cw), "--root", str(cli_unborn), "batch", "-"],
             cwd=cli_unborn,
-            environment=direct_environment,
+            environment=cli_source_environment,
             input_text=json.dumps(cli_unborn_requests),
         )
         cli_unborn_results = _json_lines(cli_unborn_batch.stdout)
@@ -3569,6 +3647,8 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                         return {
                             "arg0": f"Frame installed MCP unborn source task: {label}.",
                             "goal": "Prove v1 and v2 delegate exact acceptance to the shared core.",
+                            "workflow_id": os.environ.get("WORKFLOW_ID"),
+                            "trust_domain": "personal",
                             "mode": "implementation",
                             "work_type": "change",
                             "execution_mode": "source_change",
@@ -3595,6 +3675,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                             "arg0": "Switch installed MCP routing between managed projects.",
                             "goal": "Prove MCP refreshes routing before returning success.",
                             "mode": "implementation",
+                            "execution_mode": "artifact_only",
                             "current_state": "Alpha is active on a clean committed target.",
                             "desired_outcome": "Beta is active without alpha artifact leakage.",
                             "constraints": ["Do not modify target source."],
@@ -3892,10 +3973,16 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             **mcp_direct_environment,
             "ANCHOR_PROJECT_ID": "unborn",
             "ANCHOR_PROJECT_ROOT": str(mcp_unborn),
+            "ANCHOR_TRUST_DOMAIN": "personal",
             "SERVER_CWD": str(mcp_unborn),
             "MCP_LOG": str(audit_root / "mcp-unborn-stderr.log"),
             "MODE": "unborn",
         }
+        mcp_draft = json.loads(_run(
+            [str(venv_python), str(source_draft_script)], cwd=mcp_unborn,
+            environment=mcp_unborn_environment,
+        ).stdout)
+        mcp_unborn_environment["WORKFLOW_ID"] = mcp_draft["workflow_id"]
         mcp_unborn_result = json.loads(
             _run(
                 [str(venv_python), str(mcp_script)],

@@ -10,8 +10,10 @@ import pytest
 
 from tests.workflow_fixtures import (
     accept_fixture_plan,
-    init_source_runtime as init,
     source_workflow_kwargs,
+)
+from tests.workflow_fixtures import (
+    init_source_runtime as init,
 )
 
 

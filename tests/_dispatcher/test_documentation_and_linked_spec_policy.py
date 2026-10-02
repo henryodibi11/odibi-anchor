@@ -228,7 +228,7 @@ def test_accepted_task_consumes_pending_identity_and_clears_review(monkeypatch, 
         },
     )
     injected = inject_session_context(
-        {"mode": "implementation", "goal": "Implement active spec"},
+        {"mode": "implementation", "execution_mode": "artifact_only", "goal": "Implement active spec"},
         None, set(), False, specs_dir=tmp_path, session_state=state,
     )
     stage = injected["_task_policy_stage"]
@@ -278,7 +278,7 @@ def test_explicit_resolved_spec_stages_persistence_without_prior_review(monkeypa
         },
     )
     injected = inject_session_context(
-        {"mode": "implementation", "goal": "Implement explicit spec", "spec": "explicit"},
+        {"mode": "implementation", "execution_mode": "artifact_only", "goal": "Implement explicit spec", "spec": "explicit"},
         None, set(), False, specs_dir=tmp_path, session_state=state,
     )
     stage = injected["_task_policy_stage"]
@@ -325,7 +325,7 @@ def test_real_execute_binds_exactly_one_accepted_followup_task(monkeypatch, tmp_
     assert state.pending_task_spec_name == "ACTIVE"
 
     injected = inject_session_context(
-        {"mode": "implementation", "goal": "Implement active spec"},
+        {"mode": "implementation", "execution_mode": "artifact_only", "goal": "Implement active spec"},
         None, set(), False, specs_dir=specs_dir, session_state=state,
     )
     stage = injected["_task_policy_stage"]

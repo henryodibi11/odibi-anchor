@@ -287,7 +287,8 @@ def test_mcp_visible_approval_adopts_exact_dirty_continuation(tmp_path, monkeypa
     monkeypatch.setenv("ANCHOR_MEMORY_DB", str(anchor_home / ".agent_memory.db"))
     monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "private")
     monkeypatch.setenv("ANCHOR_SLACK_USER_ID", "owner-1")
-    from tests.workflow_fixtures import init_source_runtime as init, source_workflow_kwargs
+    from tests.workflow_fixtures import init_source_runtime as init
+    from tests.workflow_fixtures import source_workflow_kwargs
 
     anchor, _, _ = init(root=tmp_path, output_format="dict")
     anchor("orient", output_format="dict")
