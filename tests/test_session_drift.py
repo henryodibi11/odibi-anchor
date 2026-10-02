@@ -348,3 +348,54 @@ class TestWriteGuard:
         (project / ".anchor_session_state.json").write_text("{}", encoding="utf-8")
 
         assert ".anchor_session_state.json" not in _SESSION_FILES_CHANGED
+
+
+@pytest.mark.parametrize("boundary", ["completed", "failed", "blocked", "unavailable", "wrong_task", "wrong_root", "reset"])
+def test_retire_drift_requires_exact_completed_gate_scope(project, boundary):
+    state = _ss.SessionState()
+    build_boot_manifest(str(project))
+    _ensure_boot_manifest_built()
+    (project / "src/main.py").write_text("QUALIFIED = True\n")
+    (project / "src/utils.py").write_text("OUT_OF_SCOPE = True\n")
+    (project / "README.md").unlink()
+    (project / "added.py").write_text("ADDED = True\n")
+    state.task_gate_drift_snapshot = _ss.capture_gate_drift_snapshot(
+        str(project), ["src/main.py", "README.md", "added.py"], session_state=state,
+    )
+    closure = {"status": "closed", "task_window_id": state.task_window_id}
+    terminal = "completed"
+    if boundary in {"failed", "blocked"}:
+        terminal = boundary
+    elif boundary == "unavailable":
+        closure["status"] = "unavailable"
+    elif boundary == "wrong_task":
+        state.task_window_id = "another_task"
+    elif boundary == "wrong_root":
+        _ss._BOOT_MANIFEST_ROOT = str(project / "src")
+    elif boundary == "reset":
+        _ss.reset_task_policy_state(state)
+    _ss.retire_completed_task_drift(session_state=state, closure=closure, terminal_status=terminal)
+    drift = check_filesystem_drift(str(project))
+    assert "src/utils.py" in drift["modified"]
+    assert ("src/main.py" in drift["modified"]) is (boundary != "completed")
+    assert ("README.md" in drift["deleted"]) is (boundary != "completed")
+    assert ("added.py" in drift["created"]) is (boundary != "completed")
+
+
+def test_post_gate_same_size_restored_mtime_is_not_retired(project):
+    state = _ss.SessionState()
+    build_boot_manifest(str(project))
+    _ensure_boot_manifest_built()
+    path = project / "src/main.py"
+    path.write_text("VALUE = 1\n")
+    state.task_gate_drift_snapshot = _ss.capture_gate_drift_snapshot(
+        str(project), ["src/main.py"], session_state=state,
+    )
+    stat = path.stat()
+    path.write_text("VALUE = 2\n")
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    _ss.retire_completed_task_drift(
+        session_state=state, closure={"status": "closed", "task_window_id": state.task_window_id},
+        terminal_status="completed",
+    )
+    assert "src/main.py" in check_filesystem_drift(str(project))["modified"]

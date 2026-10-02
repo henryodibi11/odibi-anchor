@@ -594,7 +594,12 @@ def init(
             "synthetic": "durable_rebind",
         })
         _SESSION_STATE.task_verification_epoch = len(_SESSION_TIMINGS)
-        return {"kind": "task_authority_rebind", **rebound}
+        result = {"kind": "task_authority_rebind", **rebound}
+        from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+        if (_SESSION_STATE.workflow_binding is not None
+                or data_only_legacy_exception(_SESSION_STATE.active_task_profile)):
+            result["workflow"] = workflow_packet(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+        return result
 
     def _task_rebind_dispatch(action_args, action_kwargs):
         unknown = set(action_kwargs) - {"output_format", "task_window_id"}

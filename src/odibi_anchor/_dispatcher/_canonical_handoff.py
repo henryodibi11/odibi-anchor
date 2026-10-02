@@ -343,13 +343,14 @@ def canonical_handoff(
         session_state.task_repository_baseline, repository,
     )
     workflow = None
-    if getattr(session_state, "workflow_binding", None) is not None:
-        from odibi_anchor._dispatcher._workflow_admission import workflow_packet
+    from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+    if (getattr(session_state, "workflow_binding", None) is not None
+            or data_only_legacy_exception(getattr(session_state, "active_task_profile", None))):
 
         if memory_db is None:
             raise RuntimeError("workflow handoff requires the bound authority database")
         workflow = workflow_packet(memory_db, session_state=session_state)
-        authority["workflow_packet_sha256"] = workflow["packet_sha256"]
+        authority["workflow_packet_sha256"] = workflow.get("packet_sha256") or _digest(workflow)
         # Resume immutable accepted authority before offering any phase operation.
         # Closed task windows require explicit fresh enrollment, never old rebinding.
         if getattr(session_state, "terminal_status", None) is None:
@@ -358,7 +359,7 @@ def canonical_handoff(
                 "kwargs": {"task_window_id": session_state.task_window_id},
                 "copy_ready": f"anchor('task_rebind', task_window_id={session_state.task_window_id!r})",
             }
-        else:
+        elif getattr(session_state, "workflow_binding", None) is not None:
             profile = session_state.active_task_profile
             inputs = {"task": session_state.task_goal, "goal": session_state.task_goal,
                       "workflow_id": workflow["state"]["workflow_id"],

@@ -128,6 +128,11 @@ def _persist_terminal_task_if_ready(
             _ENV["memory_db"], task_window_id=session_state.task_window_id,
             terminal_status=status,
         )
+        from odibi_anchor._utils._session_state import retire_completed_task_drift
+        retire_completed_task_drift(
+            session_state=session_state, closure=result["accepted_task_closure"],
+            terminal_status=retained["record"]["terminal"]["status"],
+        )
         _snapshot_durable_state(
             result, memory_db=_ENV["memory_db"], enforce_retention=True,
         )
@@ -143,6 +148,10 @@ def _persist_terminal_task_if_ready(
     result["accepted_task_closure"] = close_accepted_task(
         _ENV["memory_db"], task_window_id=session_state.task_window_id,
         terminal_status=status,
+    )
+    from odibi_anchor._utils._session_state import retire_completed_task_drift
+    retire_completed_task_drift(
+        session_state=session_state, closure=result["accepted_task_closure"], terminal_status=status,
     )
     _snapshot_durable_state(
         result, memory_db=_ENV["memory_db"], enforce_retention=True,

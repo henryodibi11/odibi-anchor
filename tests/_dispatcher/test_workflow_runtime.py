@@ -1014,3 +1014,99 @@ def test_draft_replan_cannot_adopt_unadmitted_output(runtime):
     output.write_bytes(b"Result: 5\n")
     with pytest.raises(RuntimeError, match="pre-plan artifact"):
         advance(anchor, "replan", plan={**draft["plan"], "goal": "Launder changed bytes"}, reason="Retry")
+
+
+@pytest.mark.parametrize("later_change", [None, "after_gate", "after_close", "current_task"])
+def test_warm_artifact_task_does_not_inherit_closed_source_drift(source_runtime, later_change):
+    from pathlib import Path
+
+    from odibi_anchor._utils._session_state import _SESSION_STATE, check_filesystem_drift
+
+    anchor, target, git = source_runtime
+    check_filesystem_drift(str(target))
+    advance(anchor, "accept_plan")
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    git("add", "source.py")
+    git("commit", "-m", "Completed fixture source task")
+    anchor("test", target=["test_source.py"], output_format="dict")
+    anchor("preflight", output_format="dict")
+    anchor("review", output_format="dict")
+    anchor("gate", output_format="dict")
+    if later_change == "after_gate":
+        (target / "source.py").write_text("VALUE = 3\n")
+        git("add", "source.py")
+        git("commit", "-m", "Out-of-band mutation after gate")
+    terminal = anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
+    assert terminal["terminal_task_record"]["record"]["terminal"]["status"] == "completed"
+    if later_change == "after_close":
+        (target / "source.py").write_text("VALUE = 4\n")
+        git("add", "source.py")
+        git("commit", "-m", "Out-of-band mutation between tasks")
+    artifact_root = Path(_SESSION_STATE.artifact_root)
+    anchor("new_session", name="markdown_only", inline=True, output_format="dict")
+    anchor("task", "Retain Markdown handoff", goal="Archive observed candidate", mode="documentation",
+           risk="low", rigor="direct", trust_domain="personal",
+           acceptance_criteria=["No source edits are included"], output_format="dict")
+    anchor("skill_loaded", "documentation", output_format="dict")
+    artifact = artifact_root / "notebooks/handoff.md"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_text("Retained fixture candidate.\n")
+    anchor("touched", str(artifact), output_format="dict")
+    if later_change == "current_task":
+        (target / "source.py").write_text("VALUE = 5\n")
+    anchor("review", output_format="dict")
+    if later_change:
+        with pytest.raises(RuntimeError, match=r"Non-artifact|Documentation mode"):
+            anchor("gate", output_format="dict")
+    else:
+        result = anchor("gate", output_format="dict")
+        assert result["metrics"]["must_unpaid"] == 0
+        assert result["metrics"].get("auto_touched_count", 0) == 0
+        assert check_filesystem_drift(str(target))["modified"] == []
+
+
+def test_data_only_exception_survives_context_canonical_handoff_and_exact_rebind(runtime, monkeypatch):
+    import json
+    from pathlib import Path
+
+    from odibi_anchor.bootstrap import init
+    from odibi_anchor.planning import task_execution_context
+
+    anchor, _, target, _ = runtime
+    spec_input = task_execution_context(
+        "Retain data-only compatibility status", goal="Preserve unsupported data authority", mode="implementation",
+        execution_mode="data_change", risk="low", rigor="direct",
+        acceptance_criteria=["No completion or source authority is inferred"], output_format="dict",
+    )
+    spec = anchor("spec", "persist", spec_input, output_format="dict")
+    spec_path = Path(spec["path"])
+    spec_path.write_text(spec_path.read_text().replace("status: draft", "status: ready"))
+    finish_producer(anchor)
+    anchor("new_session", name="data_only_projection", inline=True, output_format="dict")
+    task = anchor("task", "Retain data-only compatibility", goal="Preserve unsupported data authority",
+                  mode="implementation", execution_mode="data_change", risk="low", rigor="direct",
+                  spec=spec["name"], trust_domain="personal",
+                  acceptance_criteria=["No completion or source authority is inferred"], output_format="dict")
+    for skill in ("data-operations", "writing-specs"):
+        anchor("skill_loaded", skill, output_format="dict")
+    reviewed = anchor("spec", "review", spec["name"], output_format="dict")
+    assert reviewed["rating"] in {"good", "excellent"}
+    packet = task["workflow"]
+    context = anchor("context", output_format="dict")
+    assert context.get("workflow") == packet
+    handoff = anchor("snapshot", mode="handoff", output_format="dict")
+    assert handoff.get("workflow") == packet
+    assert json.loads(Path(handoff["artifact_path"]).read_text())["workflow"] == packet
+    assert handoff["first_action"]["kwargs"] == {"task_window_id": task["task_window_id"]}
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    restarted, _, _ = init(root=str(target), project="alpha", output_format="dict")
+    restarted("orient", output_format="dict")
+    rebound = restarted("task_rebind", task_window_id=task["task_window_id"], output_format="dict")
+    assert rebound.get("workflow") == packet
+    assert restarted("context", output_format="dict").get("workflow") == packet
+    assert "unphased_unsupported_collector" in restarted("context", output_format="markdown")
+    assert packet["status"] == "unphased_unsupported_collector"
+    assert packet["completed"] is False and packet["delivery_verified"] is False
+    assert packet["compatibility_exception"]["source_effects_permitted"] is False

@@ -482,8 +482,9 @@ def build_agent_context(
             [next_operation["copy_ready"]] if next_operation.get("copy_ready") else []
         ),
     }
-    if getattr(session_state, "workflow_binding", None) is not None:
-        from odibi_anchor._dispatcher._workflow_admission import workflow_packet
+    from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+    if (getattr(session_state, "workflow_binding", None) is not None
+            or data_only_legacy_exception(getattr(session_state, "active_task_profile", None))):
         from odibi_anchor.codebase._workflow import WorkflowError
 
         if memory_db is None:

@@ -125,6 +125,7 @@ class SessionState:
     terminal_status: str | None = None
     terminal_basis: str | None = None
     terminal_reason: str | None = None
+    task_gate_drift_snapshot: dict | None = None  # Ephemeral, exact successful gate observation.
     session_name: str | None = None
     task_goal: str | None = None
     task_tags: list[str] = field(default_factory=list)
@@ -414,6 +415,7 @@ def reset_task_policy_state(session_state: SessionState) -> None:
     session_state.terminal_status = None
     session_state.terminal_basis = None
     session_state.terminal_reason = None
+    session_state.task_gate_drift_snapshot = None
 
 
 def record_timing(action: str, elapsed_ms: float, error: str | None = None) -> None:
@@ -779,6 +781,64 @@ def check_filesystem_drift(root: str) -> dict[str, Any]:
         "unregistered": unregistered,
         "has_drift": len(unregistered) > 0,
     }
+
+
+def capture_gate_drift_snapshot(root: str, paths, *, session_state: SessionState) -> dict | None:
+    """Observe only gate-evaluated paths, never rebaseline unrelated drift."""
+    import hashlib
+    from pathlib import Path
+
+    if not getattr(session_state, "task_window_id", None):
+        return None  # Legacy gate callers without task authority cannot retire history.
+    base = Path(root).resolve()
+    observed = {}
+    for path in paths:
+        candidate = (base / path).resolve()
+        if not candidate.is_relative_to(base):
+            continue  # Managed artifacts outside target have their own authority.
+        relative = candidate.relative_to(base).as_posix()
+        if (candidate.suffix.lower() not in _GOVERNED_EXTENSIONS
+                or candidate.name in _CW_GENERATED_FILES
+                or any(part in _SKIP_DIRS for part in Path(relative).parts[:-1])):
+            continue
+        try:
+            stat = candidate.stat()
+            observed[relative] = {
+                "mtime": stat.st_mtime, "size": stat.st_size,
+                "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+            }
+        except FileNotFoundError:
+            observed[relative] = None
+        except OSError:
+            continue  # Unavailable bytes cannot retire any historical drift.
+    return {"root": str(base), "task_window_id": session_state.task_window_id, "paths": observed}
+
+
+def retire_completed_task_drift(*, session_state: SessionState, closure: dict, terminal_status: str) -> None:
+    """Retire verified task history only after durable completed closure.
+
+    Post-gate changes and paths not evaluated by the gate retain the old baseline.
+    This is runtime bookkeeping, not synthesized authority for cold task rebind.
+    """
+    from pathlib import Path
+
+    snapshot = session_state.task_gate_drift_snapshot
+    if (terminal_status != "completed" or not snapshot
+            or closure.get("status") not in {"closed", "already_closed"}
+            or closure.get("task_window_id") != session_state.task_window_id
+            or snapshot["task_window_id"] != session_state.task_window_id
+            or not _BOOT_MANIFEST_ROOT
+            or str(Path(_BOOT_MANIFEST_ROOT).resolve()) != snapshot["root"]):
+        return
+    current = capture_gate_drift_snapshot(snapshot["root"], snapshot["paths"], session_state=session_state)
+    for path, observation in snapshot["paths"].items():
+        if path not in current["paths"] or current["paths"][path] != observation:
+            continue
+        if observation is None:
+            _SESSION_BOOT_MANIFEST.pop(path, None)
+        else:
+            _SESSION_BOOT_MANIFEST[path] = {key: observation[key] for key in ("mtime", "size")}
+    session_state.task_gate_drift_snapshot = None
 
 
 def _build_current_manifest(root: str) -> dict[str, dict]:
