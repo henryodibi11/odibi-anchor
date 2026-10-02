@@ -377,9 +377,15 @@ def _new_session(
         cells.append(_code_cell([
             f'task_result = anchor("task", "[describe what you are doing]",\n',
             f'    goal="[intended outcome]",\n',
-            f'    mode="implementation",  # or: debugging, analysis, migration\n',
+            f'    mode="analysis",  # read-only inquiry; no source edit authority\n',
             f'    acceptance_criteria=["[state how completion will be verified]"]\n',
             f')',
+        ]))
+        cells.append(_md_cell([
+            "Before edits, use `anchor(\"help\", \"workflow\")` to create a bounded draft. "
+            "Close this inquiry, bind its `workflow_id` on a fresh producer task with the "
+            "explicit managed project and trust domain, then `accept_plan`. "
+            "Do not run implementation cells under this read-only task.\n",
         ]))
         cells.append(_md_cell([
             "### Bounded Task Memory\n",

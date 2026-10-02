@@ -46,6 +46,9 @@ def inject_session_context(
     continuation = injected.pop("continuation", False)
     if type(continuation) is not bool:
         raise TypeError("continuation must be a bool")
+    workflow_id = injected.pop("workflow_id", None)
+    if workflow_id is not None and (not isinstance(workflow_id, str) or not workflow_id.strip()):
+        raise TypeError("workflow_id must be a non-empty string or None")
 
     from odibi_anchor.planning._task_profile import normalize_task_profile
     profile = normalize_task_profile(
@@ -324,6 +327,7 @@ def inject_session_context(
         "adoption_approval_id": adoption_approval_id.strip() if adoption_approval_id else None,
         "trust_domain": trust_domain.strip() if trust_domain else None,
         "continuation": continuation,
+        "workflow_id": workflow_id,
         "assurance_plan": assurance_plan,
         "assurance_diagnostics": assurance_diagnostics,
         "phase_count": phase_count,

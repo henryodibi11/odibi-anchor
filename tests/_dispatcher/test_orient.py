@@ -93,14 +93,14 @@ def test_task_exposes_same_runtime_artifact_contract(tmp_path, monkeypatch):
 
     task = anchor(
         "task",
-        "Document a bounded project decision.",
-        goal="Retain a consequential choice across sessions.",
-        mode="planning",
-        in_scope=["Record the accepted choice."],
+        "Inspect a bounded project decision.",
+        goal="Understand how a consequential choice is retained across sessions.",
+        mode="planning", execution_mode="read_only",
+        in_scope=["Inspect the accepted choice and its artifact contract."],
         out_of_scope=["Change product source."],
         constraints=["Preserve existing records."],
         risks=["The decision could be stored in the wrong artifact."],
-        deliverables=["One durable decision record."],
+        deliverables=["Decision artifact contract inspection."],
         acceptance_criteria=["The record has rationale and reversal conditions."],
         output_format="dict",
     )

@@ -206,10 +206,15 @@ def test_v2_restore_relocates_verified_continuity_without_changing_snapshot(
     )
     continuity = _load_continuity_state(relocated_binding, restored_session)
 
+    attestation = restored["artifacts"]["continuity"]["attestation_id"]
+    assert attestation.startswith("ar_") and len(attestation) == 67
     assert restored["artifacts"]["continuity"] == {
         "status": "relocated",
         "owners_relocated": 1,
         "records_relocated": 1,
+        "source_home": str(source_home),
+        "destination_home": str(destination_home),
+        "attestation_id": attestation,
     }
     assert continuity["state"] == {"open_task": "task-a"}
     assert restored_session.continuity_generation == 1

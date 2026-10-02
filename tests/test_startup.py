@@ -630,10 +630,27 @@ def test_prepare_portfolio_runtime_relocates_continuity_to_new_local_state_root(
         monkeypatch.setenv(name, value)
     anchor = launch(anchor_home=new_state, project_id="alpha", project_root=target)
 
+    from odibi_anchor.codebase._authority_relocation import load_relocations
+
+    with sqlite3.connect(f"file:{new_state / '.agent_memory.db'}?mode=ro", uri=True) as connection:
+        attestations = load_relocations(connection)
+        assert len(attestations) == 1
+        raw_event, event_sha256 = connection.execute(
+            "SELECT event_json,event_sha256 FROM anchor_home_relocations"
+        ).fetchone()
+    assert json.loads(raw_event) == attestations[0]
+    assert hashlib.sha256(raw_event.encode()).hexdigest() == event_sha256
+    assert attestations[0]["source_home"] == str(old_state.resolve())
+    assert attestations[0]["destination_home"] == str(new_state.resolve())
+    assert attestations[0]["snapshot_id"] == result["restore"]["snapshot_id"]
+    assert attestations[0]["authority_id"] == "work"
     assert result["restore"]["artifacts"]["continuity"] == {
         "status": "relocated",
         "owners_relocated": 1,
         "records_relocated": 1,
+        "source_home": str(old_state.resolve()),
+        "destination_home": str(new_state.resolve()),
+        "attestation_id": "ar_" + event_sha256,
     }
     assert callable(anchor)
     status = anchor("status", output_format="dict")
@@ -1132,12 +1149,12 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.20"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.22"',
         "restart_required_after_install": True,
     }
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.20"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.22"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

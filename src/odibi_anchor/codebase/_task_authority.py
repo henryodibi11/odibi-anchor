@@ -17,9 +17,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from odibi_anchor.codebase._authority_relocation import load_relocations, rebase_identity
+
 DOMAIN = "task_authority"
 VERSION = 1
 FORMAT = "odibi-anchor-accepted-task-v1"
+WORKFLOW_FORMAT = "odibi-anchor-accepted-task-v2"
 _DDL = (
     "CREATE TABLE accepted_task_records (task_window_id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, project_id TEXT, target_root TEXT NOT NULL, execution_mode TEXT NOT NULL, accepted_at TEXT NOT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL CHECK(length(record_sha256)=64), created_at TEXT NOT NULL)",
     "CREATE INDEX idx_accepted_task_identity ON accepted_task_records(project_id,target_root,accepted_at,task_window_id)",
@@ -32,6 +35,16 @@ _DDL = (
 )
 SCHEMA_TEXT = ";\n".join(_DDL) + ";\n"
 SCHEMA_SHA256 = hashlib.sha256(SCHEMA_TEXT.encode()).hexdigest()
+
+# Optional additive domain: the v1 rebound event is unique per task and cannot
+# truthfully represent each fresh runtime. Never rewrite that historical event.
+_SESSION_DOMAIN = "task_rebind_sessions"
+_SESSION_DDL = (
+    "CREATE TABLE task_rebind_sessions (task_window_id TEXT NOT NULL REFERENCES accepted_task_records(task_window_id), session_id TEXT NOT NULL, receipt_json TEXT NOT NULL, receipt_sha256 TEXT NOT NULL, PRIMARY KEY(task_window_id,session_id))",
+    "CREATE TRIGGER task_rebind_sessions_no_update BEFORE UPDATE ON task_rebind_sessions BEGIN SELECT RAISE(ABORT,'rebind session receipts are immutable'); END",
+    "CREATE TRIGGER task_rebind_sessions_no_delete BEFORE DELETE ON task_rebind_sessions BEGIN SELECT RAISE(ABORT,'rebind session receipts are immutable'); END",
+)
+_SESSION_SCHEMA = hashlib.sha256((";\n".join(_SESSION_DDL) + ";\n").encode()).hexdigest()
 
 
 class TaskAuthorityUnavailable(RuntimeError):
@@ -68,8 +81,9 @@ def _owner_identity(session_state: Any, *, trust_domain: str | None = None) -> d
     }
 
 
-def _matches_owner(record: dict[str, Any], owner: dict[str, Any]) -> bool:
-    return all(record["identity"].get(key) == value for key, value in owner.items())
+def _matches_owner(record: dict[str, Any], owner: dict[str, Any], relocations=()) -> bool:
+    identity = rebase_identity(record["identity"], relocations, owner.get("anchor_home"))
+    return all(identity.get(key) == value for key, value in owner.items())
 
 
 def _terminal_records(path: str | Path) -> list[dict[str, Any]]:
@@ -153,6 +167,111 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
     ).fetchall()
     if [tuple(row) for row in actual_rows] != expected_rows:
         raise RuntimeError("task authority schema checksum mismatch")
+    _load_rebind_sessions(connection)
+
+
+def _load_rebind_sessions(connection):
+    """Validate optional immutable runtime lineage without inventing legacy proof."""
+    version = connection.execute(
+        "SELECT version,schema_sha256 FROM anchor_schema_versions WHERE domain=?", (_SESSION_DOMAIN,),
+    ).fetchone()
+    query = "SELECT type,name,sql FROM sqlite_master WHERE tbl_name='task_rebind_sessions' AND sql IS NOT NULL ORDER BY type,name"
+    actual = [tuple(row) for row in connection.execute(query)]
+    if version is None and not actual:
+        return []
+    if tuple(version or ()) != (1, _SESSION_SCHEMA):
+        raise TaskAuthorityUnavailable("rebind session schema version/checksum mismatch")
+    with sqlite3.connect(":memory:") as expected:
+        for statement in _SESSION_DDL:
+            expected.execute(statement)
+        if actual != expected.execute(query).fetchall():
+            raise TaskAuthorityUnavailable("rebind session schema modified")
+    receipts = []
+    for task, session, raw, checksum in connection.execute(
+        "SELECT task_window_id,session_id,receipt_json,receipt_sha256 FROM task_rebind_sessions"
+    ):
+        receipt = json.loads(raw)
+        if (_canonical(receipt) != raw or hashlib.sha256(raw.encode()).hexdigest() != checksum
+                or set(receipt) != {"task_window_id", "session_id", "accepted_record_sha256",
+                                    "owner", "rebind_event_sha256", "created_at"}
+                or receipt["task_window_id"] != task or receipt["session_id"] != session
+                or not isinstance(session, str) or not session
+                or set(receipt["owner"]) != {"project_id", "anchor_home", "project_root", "artifact_root",
+                                             "target_root", "repository_provider_id", "trust_domain"}):
+            raise TaskAuthorityUnavailable("rebind session receipt integrity mismatch")
+        receipts.append(receipt)
+    return receipts
+
+
+def _record_rebind_session(path, *, record, session_state, event):
+    """Append only after exact open-task restoration; preserve actual runtime IDs."""
+    connection = _connect(path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_schema(connection)
+        task = record["identity"]["task_window_id"]
+        session = session_state.session_id
+        if not isinstance(session, str) or not session:
+            raise TaskAuthorityUnavailable("rebind requires an exact runtime session")
+        if connection.execute("SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'", (task,)).fetchone():
+            raise TaskAuthorityUnavailable("closed task cannot acquire runtime lineage")
+        if (connection.execute("SELECT 1 FROM sqlite_master WHERE name='terminal_task_records'").fetchone()
+                and connection.execute("SELECT 1 FROM terminal_task_records WHERE task_window_id=?", (task,)).fetchone()):
+            raise TaskAuthorityUnavailable("terminal task cannot acquire runtime lineage")
+        owner = _owner_identity(session_state)
+        if not _matches_owner(record, owner, load_relocations(connection)):
+            raise TaskAuthorityUnavailable("rebind session requires exact task owner")
+        receipt = {"task_window_id": task, "session_id": session, "owner": owner,
+                   "accepted_record_sha256": hashlib.sha256(_canonical(record).encode()).hexdigest(),
+                   "rebind_event_sha256": event["event_sha256"], "created_at": _now()}
+        existing = next((r for r in _load_rebind_sessions(connection)
+                         if r["task_window_id"] == task and r["session_id"] == session), None)
+        if existing is not None:
+            receipt["created_at"] = existing["created_at"]
+            if receipt != existing:
+                raise TaskAuthorityUnavailable("rebind session idempotency conflict")
+        else:
+            if not connection.execute("SELECT 1 FROM anchor_schema_versions WHERE domain=?", (_SESSION_DOMAIN,)).fetchone():
+                for statement in _SESSION_DDL:
+                    connection.execute(statement)
+                connection.execute("INSERT INTO anchor_schema_versions VALUES(?,?,?,?)",
+                                   (_SESSION_DOMAIN, 1, _SESSION_SCHEMA, _now()))
+            raw = _canonical(receipt)
+            connection.execute("INSERT INTO task_rebind_sessions VALUES(?,?,?,?)",
+                               (task, session, raw, hashlib.sha256(raw.encode()).hexdigest()))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def verified_task_session(connection, *, accepted, session_id, ended_at):
+    """A terminal runtime is the accepted session or an exact pre-terminal rebind."""
+    if session_id == accepted["identity"]["session_id"]:
+        return True
+    task = accepted["identity"]["task_window_id"]
+    checksum = hashlib.sha256(_canonical(accepted).encode()).hexdigest()
+    relocations = load_relocations(connection)
+    for receipt in _load_rebind_sessions(connection):
+        if (receipt["task_window_id"] != task or receipt["session_id"] != session_id
+                or receipt["accepted_record_sha256"] != checksum
+                or not _matches_owner(accepted, receipt["owner"], relocations)
+                or datetime.fromisoformat(receipt["created_at"].replace("Z", "+00:00"))
+                > datetime.fromisoformat(ended_at.replace("Z", "+00:00"))):
+            continue
+        row = connection.execute(
+            "SELECT event_id,event_json,event_sha256,created_at FROM accepted_task_events WHERE task_window_id=? AND event_type='rebound'",
+            (task,),
+        ).fetchone()
+        if row is not None:
+            event = {"event_id": row["event_id"], "task_window_id": task, "event_type": "rebound",
+                     "details": {"accepted_record_sha256": checksum}, "created_at": row["created_at"]}
+            if (_canonical(event) == row["event_json"] and hashlib.sha256(row["event_json"].encode()).hexdigest()
+                    == row["event_sha256"] == receipt["rebind_event_sha256"]):
+                return True
+    return False
 
 
 def _encode(value: Any) -> Any:
@@ -265,17 +384,28 @@ def build_accepted_task_record(
             "repository_write_fingerprints": dict(session_state.task_repository_write_fingerprints),
         },
     }
+    binding = getattr(session_state, "workflow_binding", None)
+    if binding is not None:
+        # Older readers reject this format instead of restoring write authority
+        # while silently discarding the workflow's phase/scope restrictions.
+        record["format"] = WORKFLOW_FORMAT
+        record["task"]["workflow_binding"] = _encode(binding)
     return record
 
 
 def _validate_record(record: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    if not isinstance(record, dict) or record.get("format") != FORMAT:
+    if not isinstance(record, dict) or record.get("format") not in {FORMAT, WORKFLOW_FORMAT}:
         raise ValueError("unsupported accepted task record format")
     identity, task, obligations = (
         record.get("identity"), record.get("task"), record.get("obligations"),
     )
     if not all(isinstance(value, dict) for value in (identity, task, obligations)):
         raise ValueError("accepted task record sections are incomplete")
+    if record["format"] == FORMAT:
+        if "workflow_binding" in task:
+            raise ValueError("legacy accepted task format cannot carry a workflow binding")
+    elif not isinstance(task.get("workflow_binding"), dict) or not task["workflow_binding"]:
+        raise ValueError("workflow accepted task format requires a workflow binding")
     required_identity = {"task_window_id", "session_id", "artifact_root", "target_root"}
     if any(not identity.get(key) for key in required_identity):
         raise ValueError("accepted task identity is incomplete")
@@ -295,6 +425,10 @@ def persist_accepted_task(
 ) -> dict[str, Any]:
     """Persist one accepted task before its acceptance is returned to the caller."""
     session_state.trust_domain = task_stage.get("trust_domain")
+    if getattr(session_state, "workflow_binding", None) is not None:
+        from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+
+        bound_workflow(path, session_state=session_state)
     record = build_accepted_task_record(
         session_state=session_state, task_stage=task_stage, task_result=task_result,
     )
@@ -599,6 +733,7 @@ def _restore_state(record: dict[str, Any], session_state: Any) -> None:
     session_state.phase_count = task.get("phase_count", 1)
     session_state.current_phase = task.get("current_phase", 1)
     session_state.task_handoff_context = dict(task.get("handoff_context") or {})
+    session_state.workflow_binding = task.get("workflow_binding")
     session_state.active_problem = session_state.linked_problem
     session_state.task_repository_baseline = baseline
     session_state.task_repository_baseline_qualification = qualification
@@ -639,6 +774,7 @@ def rebind_latest_open_task(
         if "accepted_task_records" not in tables:
             raise TaskAuthorityUnavailable("accepted task authority is unavailable")
         _verify_schema(connection)
+        relocations = load_relocations(connection)
         project = session_state.active_project
         target_root = _canonical_path(session_state.target_root or session_state.artifact_root)
         rows = connection.execute(
@@ -659,7 +795,7 @@ def rebind_latest_open_task(
     current_identity = _owner_identity(session_state)
     matches = [
         candidate for candidate in records
-        if _matches_owner(candidate, current_identity)
+        if _matches_owner(candidate, current_identity, relocations)
     ]
     if task_window_id is not None and not isinstance(task_window_id, str):
         raise TaskAuthorityUnavailable(
@@ -746,6 +882,7 @@ def rebind_latest_open_task(
             path, identity["task_window_id"], "rebound",
             {"accepted_record_sha256": hashlib.sha256(_canonical(record).encode()).hexdigest()},
         )
+        _record_rebind_session(path, record=record, session_state=session_state, event=event)
     except TaskAuthorityUnavailable:
         vars(session_state).clear()
         vars(session_state).update(prior_state)
@@ -759,6 +896,7 @@ def rebind_latest_open_task(
         "record_id": record["record_id"], "rebind_event_id": event["event_id"],
         "event_created": event["created"], "obligations": record["obligations"],
         "repository_scope": record["task"]["repository_scope"],
+        "owner_relocated": identity.get("anchor_home") != current_identity["anchor_home"],
     }
     result["diagnostics"] = inspect_task_authority(path)
     return result
@@ -791,6 +929,7 @@ def task_recovery_context(
             if "accepted_task_records" not in tables:
                 return {**unavailable, "reason": "accepted task authority is unavailable"}
             _verify_schema(connection)
+            relocations = load_relocations(connection)
             rows = connection.execute(
                 "SELECT r.* FROM accepted_task_records r WHERE r.project_id IS ? "
                 "AND r.target_root=? ORDER BY r.accepted_at,r.task_window_id",
@@ -813,7 +952,7 @@ def task_recovery_context(
     owner = _owner_identity(session_state, trust_domain=trust_domain)
     source_records = [
         record for record in records
-        if _matches_owner(record, owner)
+        if _matches_owner(record, owner, relocations)
         and record["task"].get("profile", {}).get("execution_mode") == "source_change"
     ]
     open_ids = sorted(

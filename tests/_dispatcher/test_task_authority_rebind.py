@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.workflow_fixtures import seed_legacy_source_task
+
 
 def test_init_explicitly_rebinds_open_task_without_task_dispatch(tmp_path, monkeypatch):
     anchor_home = tmp_path.parent / f"{tmp_path.name}-anchor-home"
@@ -97,8 +99,8 @@ def test_source_task_rebind_preserves_baseline_after_worktree_becomes_dirty(tmp_
 
     anchor, _, _ = init(root=tmp_path, output_format="dict")
     anchor("orient", output_format="dict")
-    accepted = anchor(
-        "task", "Change one source file under durable authority.",
+    accepted = seed_legacy_source_task(
+        anchor, "Change one source file under durable authority.",
         goal="Preserve the clean task-start baseline through process restart.",
         mode="implementation", work_type="change", execution_mode="source_change",
         risk="low", rigor="direct", continuation=True,
@@ -179,8 +181,8 @@ def test_dirty_task_failure_identifies_exact_interrupted_source_task(tmp_path, m
 
     anchor, _, _ = init(root=tmp_path, output_format="dict")
     anchor("orient", output_format="dict")
-    accepted = anchor(
-        "task", "Own one source change across restart.",
+    accepted = seed_legacy_source_task(
+        anchor, "Own one source change across restart.",
         goal="Make dirty recovery identify this exact interrupted task.",
         mode="implementation", risk="low", rigor="direct", continuation=True,
         acceptance_criteria=["The exact task window is offered for rebind."],
@@ -285,12 +287,13 @@ def test_mcp_visible_approval_adopts_exact_dirty_continuation(tmp_path, monkeypa
     monkeypatch.setenv("ANCHOR_MEMORY_DB", str(anchor_home / ".agent_memory.db"))
     monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "private")
     monkeypatch.setenv("ANCHOR_SLACK_USER_ID", "owner-1")
-    from odibi_anchor.bootstrap import init
+    from tests.workflow_fixtures import init_source_runtime as init
+    from tests.workflow_fixtures import source_workflow_kwargs
 
     anchor, _, _ = init(root=tmp_path, output_format="dict")
     anchor("orient", output_format="dict")
-    prior = anchor(
-        "task", "Change a source file under durable authority.",
+    prior = seed_legacy_source_task(
+        anchor, "Change a source file under durable authority.",
         goal="Retain the original diff across adopted continuation.",
         mode="implementation", work_type="change", execution_mode="source_change",
         risk="low", rigor="direct", continuation=True,
@@ -326,6 +329,7 @@ def test_mcp_visible_approval_adopts_exact_dirty_continuation(tmp_path, monkeypa
         adoption_approval_id=approval["approval_id"],
         acceptance_criteria=["The complete source.py diff remains governed."],
         output_format="dict",
+        **source_workflow_kwargs(["source.py"]),
     )
     from odibi_anchor._repository_snapshot import capture_task_change_scope
     from odibi_anchor._utils._session_state import _SESSION_STATE

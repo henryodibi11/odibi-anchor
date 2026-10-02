@@ -399,7 +399,9 @@ def test_non_git_source_baseline_reports_capability_specific_blocker(tmp_path: P
     assert message.startswith("BLOCKED: source-change task requires a canonical local Git worktree")
     assert "branch, HEAD, working-tree status, changed paths, merge-base, and history" in message
     assert "Read-only orientation/analysis and approved managed-artifact operations remain allowed" in message
-    assert "clean" not in message.lower()
+    assert "requires a clean initial Git worktree" not in message
+    assert 'execution_mode="artifact_only"' in message
+    assert "Local Git cleanliness, history, merge-base, and PR readiness remain unavailable" in message
 
 
 def test_unborn_scope_tracks_untracked_staged_modified_and_binary_files(

@@ -39,6 +39,7 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "task":         'anchor("task", "description", goal="...", mode="...", problem="PRB-...", spec="...", work_item="WI-YYYY-NNNN")',
     "task_rebind":  'anchor("task_rebind", task_window_id="ltw_...")  # exact ID resolves interrupted-task ambiguity',
     "task_adoption": 'anchor("task_adoption", "inspect|request|withdraw", ...)  # authenticated takeover of dirty work only',
+    "workflow":     'anchor("workflow", "status|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
     "gate":         'anchor("gate")  # no args — gate derives ALL evidence from session state',
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',
@@ -134,7 +135,7 @@ _ACTION_GROUP_MEMBERS: dict[str, list[str]] = {
         "safe", "semantic", "import_resolve", "known_bad",
     ],
     "Planning & Workflow": [
-        "task", "task_rebind", "task_adoption", "prepare", "gate", "preflight",
+        "task", "task_rebind", "task_adoption", "workflow", "prepare", "gate", "preflight",
         "test", "checkpoint", "spec", "problem", "work_item",
     ],
     "Data & Profiling": [
@@ -480,6 +481,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     # Codebase & Memory
     "memory":       [
         'anchor("memory", query="how do we handle nulls")  # accepted task context was insufficient',
+        'anchor("memory", memory_id="...")  # resolve an id handed to you by a blocking message',
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...")',
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...", provider="databricks_in_session")',
         'anchor("memory", "promotion", command="request_owner_confirmation", memory_id="...")',
@@ -496,7 +498,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "import_resolve": 'anchor("import_resolve", symbol="DeltaTable")',
     "known_bad":    'anchor("known_bad", changed_files=["src/etl.py", "src/utils.py"])',
     # Planning & Workflow
-    "task":         'anchor("task", "fix null handling in bronze orders", goal="prevent null keys", mode="implementation")',
+    "task":         'anchor("task", "investigate null handling in bronze orders", goal="plan a bounded correction", mode="analysis")',
     "snapshot":     [
         'anchor("snapshot", mode="handoff", summary="bronze fix complete, silver layer next", state="in_progress", decisions=["used coalesce for nulls"])',
         'anchor("snapshot", decisions=["used SCD2 for dim_customer"], next_steps=["build fact_orders"])',
@@ -729,7 +731,52 @@ _WORKFLOWS: dict[str, dict[str, str | list[str]]] = {
 }
 
 _ACTION_DETAILS: dict[str, list[str]] = {
+    "workflow": [
+        '`create`: requires an accepted task in an explicit managed project/trust domain, `plan` '
+        'and `request_id`. Start in read-only analysis. The draft grants no edit permission. '
+        'Close the inquiry, then bind its `workflow_id` on a fresh producer task.',
+        '`plan`: schema_version=1, goal, risk (low/medium/high), execution_mode. Before '
+        '`accept_plan`, supply nonempty scope, explicit exclusions/constraints/risks/stop_conditions '
+        'arrays, unresolved_decisions=[], destination and criteria. Declare exact source_paths '
+        'or artifact_paths for candidate collection. Optional required_children pin workflow_id '
+        'and plan_sha256; required children must finish before parent qualification.',
+        'Artifact drafts retain a pre-plan byte/metadata baseline. Changed planned outputs '
+        'cannot be admitted or laundered by registering them later. Ancillary planning notes '
+        'remain writable; historical missing baselines require recovery, not backfilling.',
+        '`criteria`: unique id, expected and method. For method="pytest", test_targets is an '
+        'exact list; measure with anchor("test", target=[...], workflow_criterion="id", '
+        'output_format="dict"). For method="artifact_sha256", expected_sha256 maps every '
+        'artifact path to its expected hash; use check_artifact with criterion_id. Caller-authored '
+        'results, grants and receipts are not accepted.',
+        'Writes require output_format="dict"; transitions require the observed expected_generation '
+        'and a unique request_id. Exact retries return historical acknowledgements, not new '
+        'observations. Read status to refresh generation. Candidate changes require replan and '
+        'a fresh task binding, not evidence reuse.',
+        '`implemented` freezes the observed candidate; qualify requires exact measured criteria, '
+        'workflow review and producer gate/learning closure. High risk requires a separate '
+        'accepted read-only review task; reviewer_authentication=none, not authenticated independence.',
+        '`prepare_delivery` grants no authority. request_delivery_approval obtains explicit human '
+        'candidate-and-destination approval; verify_delivery independently reads that destination. '
+        'Only delivery_verified is complete. No command pushes, merges, publishes or deploys.',
+        '`reconciliation`: declare requirements with unique id and method: qualification_criterion '
+        'plus criterion_id, or producer_learning. Empty requirements need an explicit reason. '
+        'Missing/unsupported contracts stay unavailable; missing evidence stays unsatisfied. '
+        'Destination bytes alone never discharge these obligations; delivered is not completed.',
+        '`destination`: managed_artifacts; github_ref with repository/ref; github_release with '
+        'repository/tag; pypi_release with name/version; databricks_workspace_files with host. '
+        'Only supported exact candidate/readback combinations qualify; workspace FILE bytes only, '
+        'not arbitrary notebooks, jobs or tables. GitHub origin must match.',
+        'Recovery: block(reason=..., blocker_kind=...) preserves evidence. outcome_unknown requires '
+        'positive destination reconciliation, never blind retry. Revoke unused approval through '
+        'human authority before replan/cancel; stale bindings remain inspectable. Rebind an '
+        'interrupted task exactly with task_rebind. A handoff does not grant authority.',
+    ],
     "task": [
+        '`workflow_id`: required with explicit managed project and trust_domain for fresh '
+        'source-capable or substantive artifact tasks. Create a workflow draft during read-only '
+        'analysis, close that task, bind a fresh producer, then accept_plan before edits. '
+        'Low-risk direct artifacts without material assurance escalation stay lightweight_unphased; '
+        'data-only unsupported collectors stay visibly unphased. Neither is delivery_verified.',
         '`memory_limit`: optional integer from 1 through 20 controlling how many ranked memories '
         'are selected at task acceptance (default 5). Every selection requires disposition.',
         '`mode`: one of `analysis`, `data`, `debugging`, `decision`, `documentation`, `etl`, '
@@ -786,6 +833,16 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`query`: use existing filters with `limit` and `offset` to page the final relevance-ranked '
         'matches. The response metrics include `total_matches`, `returned_count`, `offset`, '
         '`next_offset`, and `has_more`.',
+        '`memory_id`: retrieve one exact record with `anchor("memory", memory_id="...")`. Use it '
+        'when a blocking message or an assess projection decision hands you an id: a free-text '
+        '`query` for that id finds nothing, because the id is not part of the entry content. '
+        'This is a lookup, not a search: it is not relevance-ranked. It resolves only within '
+        'your authorized scope — the active project plus shared (`all`) memories, and only '
+        'retrievable statuses (`candidate`, `active`, `confirmed`). An id belonging to another '
+        'project, or to a retired or archived entry, reports as not found rather than crossing '
+        'that boundary. The result is '
+        '`{"kind": "memory_entry", "found": bool, "entries": [...], "count": int}`; an unknown id '
+        'returns `found=False` with empty `entries` and a `reason`, never an unrelated match.',
         '`apply`: identify one task selection with `selection_id` or `memory_id`; '
         'provide non-empty `action` and optional JSON-object `context`.',
         '`disposition`: identify one pending selection with `selection_id` or `memory_id`; '
@@ -844,7 +901,7 @@ def build_help_text(
     if not target:
         return _build_overview()
     if target == "workflow":
-        return _build_workflows()
+        return _build_action_detail(target, action_funcs) + "\n\n" + _build_workflows()
     # An exact action/tool name always gets its own detail page — check both the
     # documented signatures AND the introspectable callables (registered tools
     # like suggest_rules live only in action_funcs). This must precede intent

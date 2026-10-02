@@ -128,6 +128,11 @@ def _persist_terminal_task_if_ready(
             _ENV["memory_db"], task_window_id=session_state.task_window_id,
             terminal_status=status,
         )
+        from odibi_anchor._utils._session_state import retire_completed_task_drift
+        retire_completed_task_drift(
+            session_state=session_state, closure=result["accepted_task_closure"],
+            terminal_status=retained["record"]["terminal"]["status"],
+        )
         _snapshot_durable_state(
             result, memory_db=_ENV["memory_db"], enforce_retention=True,
         )
@@ -143,6 +148,10 @@ def _persist_terminal_task_if_ready(
     result["accepted_task_closure"] = close_accepted_task(
         _ENV["memory_db"], task_window_id=session_state.task_window_id,
         terminal_status=status,
+    )
+    from odibi_anchor._utils._session_state import retire_completed_task_drift
+    retire_completed_task_drift(
+        session_state=session_state, closure=result["accepted_task_closure"], terminal_status=status,
     )
     _snapshot_durable_state(
         result, memory_db=_ENV["memory_db"], enforce_retention=True,
@@ -569,6 +578,12 @@ def run_post_dispatch(
                         session_state.target_root, config["default_target_ref"],
                         task_authority_context=recovery_context,
                     )
+        if isinstance(result, dict) and staged_profile is not None:
+            from odibi_anchor._repository_snapshot import task_source_authority
+
+            result["source_authority"] = task_source_authority(
+                staged_profile.execution_mode, task_baseline
+            )
         # Validate baseline qualification before any managed-record write. A
         # rejected task must leave no durable artifact or task-visible state.
         task_window_id = getattr(session_state, "task_window_id", None)
@@ -584,6 +599,15 @@ def run_post_dispatch(
                 ),
                 target_root=session_state.target_root,
                 request=(task_stage.get("baseline_qualification") if task_stage else None),
+            )
+        if task_stage is not None and "workflow_id" in task_stage:
+            # Canonical fresh-task staging always includes workflow_id, even
+            # when absent. Historical records/rebind do not pass through here.
+            from odibi_anchor._dispatcher._workflow_admission import require_task_workflow
+
+            require_task_workflow(
+                session_state=session_state, profile=staged_profile,
+                trust_domain=task_stage.get("trust_domain"), workflow_id=task_stage["workflow_id"],
             )
         # Materialize any required managed record before replacing old state.
         # Failure here leaves the complete previous task untouched.

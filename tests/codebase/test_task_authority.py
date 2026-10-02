@@ -883,3 +883,73 @@ def test_refusal_diagnostics_and_withdrawal_are_durable_immutable_events(tmp_pat
             connection.execute("DELETE FROM dirty_adoption_refusal_events")
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute("DELETE FROM dirty_adoption_withdrawal_events")
+
+
+def test_workflow_binding_survives_rebind_without_changing_baseline(tmp_path):
+    from odibi_anchor._dispatcher._workflow_admission import (
+        bind_workflow,
+        bound_workflow,
+        workflow_owner,
+    )
+    from odibi_anchor.codebase._workflow import create_workflow
+
+    original = state(tmp_path)
+    original.trust_domain = "personal"
+    db = tmp_path / "memory.db"
+    workflow = create_workflow(
+        db, owner=workflow_owner(original), request_id="start",
+        plan={"schema_version": 1, "goal": "Retain ownership", "risk": "high",
+              "execution_mode": "source_change"},
+    )
+    original.workflow_binding = bind_workflow(
+        db, session_state=original, workflow_id=workflow["workflow_id"],
+    )
+    persist_accepted_task(db, session_state=original,
+                          task_stage={"trust_domain": "personal"}, task_result=result())
+    with sqlite3.connect(db) as connection:
+        record = json.loads(connection.execute(
+            "SELECT record_json FROM accepted_task_records",
+        ).fetchone()[0])
+    assert record["format"] == "odibi-anchor-accepted-task-v2"
+    assert record["task"]["workflow_binding"] == original.workflow_binding
+    restarted = fresh_state(original, workflow_binding=None)
+    rebind_latest_open_task(db, session_state=restarted)
+    assert restarted.workflow_binding == original.workflow_binding
+    assert bound_workflow(db, session_state=restarted)["progress"] == "draft"
+    assert restarted.task_repository_baseline == original.task_repository_baseline
+
+
+def test_legacy_rebind_clears_binding_instead_of_synthesizing_history(tmp_path):
+    original = state(tmp_path)
+    db = tmp_path / "memory.db"
+    persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    with sqlite3.connect(db) as connection:
+        record = json.loads(connection.execute(
+            "SELECT record_json FROM accepted_task_records",
+        ).fetchone()[0])
+    assert record["format"] == "odibi-anchor-accepted-task-v1"
+    assert "workflow_binding" not in record["task"]
+    restarted = fresh_state(original, workflow_binding={"workflow_id": "unrelated"})
+    rebind_latest_open_task(db, session_state=restarted)
+    assert restarted.workflow_binding is None
+
+
+@pytest.mark.parametrize("version,binding", [
+    ("v1", None), ("v1", {"workflow_id": "wf_bound"}),
+    ("v2", "absent"), ("v2", None), ("v2", {}), ("v2", []),
+    ("v3", {"workflow_id": "wf_bound"}),
+])
+def test_accepted_record_rejects_version_binding_mismatch(tmp_path, version, binding):
+    from odibi_anchor.codebase._task_authority import (
+        _validate_record,
+        build_accepted_task_record,
+    )
+
+    record = build_accepted_task_record(
+        session_state=state(tmp_path), task_stage={}, task_result=result(),
+    )
+    record["format"] = "odibi-anchor-accepted-task-" + version
+    if binding != "absent":
+        record["task"]["workflow_binding"] = binding
+    with pytest.raises(ValueError, match=r"format|workflow binding"):
+        _validate_record(record)

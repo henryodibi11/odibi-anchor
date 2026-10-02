@@ -100,7 +100,7 @@ def test_context_is_bounded_and_carries_no_path_contents(dirty_error):
 
 def test_offers_only_executable_recovery_routes(dirty_error):
     actions = [operation["action"] for operation in dirty_error.next_operations]
-    assert actions == ["task"]
+    assert actions == ["prepare"]
 
 
 def test_interrupted_task_recovery_offers_exact_rebind_before_artifact_route(dirty_repo):
@@ -153,7 +153,7 @@ def test_completed_task_recovery_does_not_offer_invalid_rebind(dirty_repo):
         "The matching source task is terminal. Resolve or complete delivery under that "
         "task's retained authority; do not create a new task that absorbs its changes."
     )
-    assert [item["action"] for item in error.next_operations] == ["task"]
+    assert [item["action"] for item in error.next_operations] == ["prepare"]
 
 
 def test_historical_terminal_task_without_exact_diff_match_is_not_claimed(dirty_repo):
@@ -184,15 +184,37 @@ def test_historical_terminal_task_without_exact_diff_match_is_not_claimed(dirty_
     assert error.context["ownership_state"] == "unowned_or_ambiguous"
     assert error.context["matching_terminal_source_task_count"] == 0
     assert "_terminal_source_candidates" not in error.context
-    assert [item["action"] for item in error.next_operations] == ["task"]
+    assert [item["action"] for item in error.next_operations] == ["prepare"]
 
 
 def test_artifact_only_route_does_not_claim_source_change_authority(dirty_error):
     task_route = next(
         operation for operation in dirty_error.next_operations
-        if operation["action"] == "task"
+        if operation["action"] == "prepare"
     )
-    assert task_route["kwargs"]["mode"] == "planning"
+    assert task_route["kwargs"] == {
+        "operation": "task.create", "inputs": {"mode": "planning"},
+    }
+
+
+def test_returned_recovery_executes_without_inventing_intent(dirty_repo, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("ANCHOR_HOME", str(home))
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / ".agent_memory.db"))
+    from odibi_anchor.bootstrap import init
+
+    anchor, _, _ = init(root=dirty_repo, output_format="dict")
+    orientation = anchor("orient", output_format="dict")
+    assert orientation["kind"] == "orientation"
+    with pytest.raises(RuntimeError, match="clean initial Git worktree") as caught:
+        anchor("task", "Continue bounded source work", goal="Test dirty recovery",
+               mode="implementation", continuation=True,
+               acceptance_criteria=["No unknown changes absorbed"], output_format="dict")
+    operation = caught.value.next_operation
+    result = anchor(operation["action"], *operation["args"], **operation["kwargs"])
+    assert result["status"] == "blocked"
+    assert {item["field"] for item in result["required_missing"]} >= {"task", "goal"}
+    assert result["next_operation"]["action"] == "supply_inputs"
 
 
 def test_every_route_is_copy_ready(dirty_error):

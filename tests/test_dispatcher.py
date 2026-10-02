@@ -160,7 +160,9 @@ class TestActionRouting:
             anchor(
                 "task", "Exercise public memory creation boundaries",
                 goal="Prove caller content cannot assign lifecycle authority",
-                mode="implementation", acceptance_criteria=["All new rows are candidates"],
+                mode="implementation", execution_mode="artifact_only",
+                risk="low", rigor="direct",
+                acceptance_criteria=["All new rows are candidates"],
                 output_format="dict",
             )
 
@@ -725,7 +727,8 @@ class TestSessionState:
         ):
             result = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
-                mode="implementation", output_format="dict",
+                mode="implementation", execution_mode="artifact_only", output_format="dict",
+                risk="low", rigor="direct",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -765,7 +768,8 @@ class TestSessionState:
         ):
             markdown = anchor(
                 "task", "Implement profile contracts", goal="Preserve compatibility",
-                mode="implementation", output_format="markdown",
+                mode="implementation", execution_mode="artifact_only", output_format="markdown",
+                risk="low", rigor="direct",
                 known_facts=["Legacy mode remains supported"],
                 constraints=["Keep output additive"],
                 acceptance_criteria=["Profile is persisted"],
@@ -827,6 +831,8 @@ class TestSessionState:
             bootstrap_cw["anchor"](
                 "task", "Persist selected task memory before checkpoint",
                 goal="Keep durable task state complete", mode="implementation",
+                execution_mode="artifact_only",
+                risk="low", rigor="direct",
                 acceptance_criteria=["The checkpoint includes task memory selections"],
                 output_format="dict",
             )
@@ -850,7 +856,8 @@ class TestSessionState:
             result = anchor(
                 "task", "Build an Altair interaction with a Pydantic v2 contract",
                 goal="Emit a validated Vega-Lite specification",
-                mode="implementation", output_format="dict",
+                mode="implementation", execution_mode="artifact_only", output_format="dict",
+                risk="low", rigor="direct",
                 acceptance_criteria=["Altair and Pydantic guidance is discoverable"],
             )
         ids = {item["id"] for item in result["reference_guidance"]}
@@ -1120,7 +1127,8 @@ class TestPreTaskInvocationAccessPolicy:
             "status", "audit_history", "orient",
         ] * 3
         inventory = anchor_func("tools", output_format="dict")["samples"]
-        assert len(inventory["hardcoded_tools"]) == 91
+        assert len(inventory["hardcoded_tools"]) == 92
+        assert "workflow" in {row["name"] for row in inventory["hardcoded_tools"]}
         assert len(inventory["registered_tools"]) == 11
         assert all("allowed_pre_task_access" in row for row in inventory["hardcoded_tools"])
         assert all(row["pre_task_access_declared"] for row in inventory["registered_tools"])

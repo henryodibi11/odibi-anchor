@@ -2,6 +2,55 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.22] - 2026-10-02
+
+### Added
+
+- Durable Plan → Implement & Qualify → Deliver workflows for substantive work, with
+  exact plan/candidate evidence, separate high-risk review tasks, explicit human delivery
+  authority, and supported GitHub, PyPI, managed-artifact and workspace-file readback.
+- Distinct implemented, qualified, approved-for-delivery, delivered and delivery-verified
+  states. Only verified destination completion completes a workflow; local gates do not.
+
+### Fixed
+
+- Pre-plan artifact admission prevents draft-output laundering and preserves verified
+  snapshot/restore provenance through implementation and exact task rebind qualification.
+- Reconciliation remains a separate evidenced obligation from destination byte readback.
+- Task-local drift baselines and the unsupported/unphased data-only compatibility status
+  survive the relevant runtime and recovery boundaries.
+
+### Operational restrictions
+
+- Snapshot/restore remains single-writer: one active writer per durable authority, with
+  exclusive access to restoration destinations for the entire operation. A pre-existing
+  collision-cleanup race can delete a competing writer's directory and requires a separate
+  repair; this release neither fixes it nor qualifies concurrent/shared-destination restore.
+- Ordinary source edits in plain non-Git folders remain blocked. Historical evidence is
+  never synthesized, and old runtimes cannot resume workflow-bound v2 task authority.
+- High-risk review records a separate accepted read-only task with
+  `reviewer_authentication=none`; it does not claim distinct authenticated principals.
+
+## [0.3.21] - 2026-10-01
+
+### Fixed
+
+- Gate-time managed-artifact boundaries now use the accepted execution mode, including
+  explicit artifact-only implementation tasks and documentation tasks.
+- Pytest isolation preserves mandatory installed-distribution qualification and offline
+  wheelhouse controls while removing Anchor routing variables.
+- Dirty-worktree recovery requests missing semantic inputs through `prepare` rather than
+  suggesting an incomplete task invocation.
+- Memory-ID Markdown rendering uses the entry renderer, and help describes project-scoped lookup.
+- Problem Record validation preserves reader defaults and exposes malformed records in Markdown.
+
+### Changed
+
+- Every accepted task projects explicit source-authority status, capabilities, and actionable
+  guidance. Non-source modes do not probe Git or repository providers.
+- Non-Git and rejected Git Folder diagnostics show the managed-artifact route and source-change
+  prerequisites. Plain non-Git source editing remains blocked; no permissions are broadened.
+
 ## [0.3.20] - 2026-09-21
 
 ### Changed

@@ -505,6 +505,7 @@ def gate_with_auto_confirm(
         scope_files,
         artifact_root=getattr(session_state, "artifact_root", None),
         target_root=getattr(session_state, "target_root", None) or str(root),
+        execution_mode=getattr(getattr(session_state, "active_task_profile", None), "execution_mode", None),
     )
     if _blocked:
         raise RuntimeError(f"BLOCKED: {_message}")
@@ -553,6 +554,9 @@ def gate_with_auto_confirm(
     kwargs["files_created"] = sorted(scope_created)
     kwargs["obligations_paid"] = _paid
 
+    from odibi_anchor._utils._session_state import capture_gate_drift_snapshot
+    session_state.task_gate_drift_snapshot = None
+    drift_snapshot = capture_gate_drift_snapshot(str(root), scope_files, session_state=session_state)
     result = workflow_gate_fn(root, *args, **kwargs)
     if isinstance(result, dict) and task_scope is not None:
         if _databricks_task:
@@ -667,7 +671,7 @@ def gate_with_auto_confirm(
             from odibi_anchor._utils._session_state import record_degraded
             record_degraded("gate_spec_criteria", _sc_exc)
 
-    return _attach_assurance_shadow(
+    result = _attach_assurance_shadow(
         result,
         session_state=session_state,
         session_timings=session_timings,
@@ -675,3 +679,7 @@ def gate_with_auto_confirm(
         task_scope=task_scope,
         unattested_paths=_unattested_outside_scope,
     )
+    from odibi_anchor._dispatcher._effects import dispatch_succeeded
+    if dispatch_succeeded("gate", result):
+        session_state.task_gate_drift_snapshot = drift_snapshot
+    return result

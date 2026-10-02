@@ -91,6 +91,17 @@ def init(
             mode="implementation", work_type="change", and
             execution_mode="source_change"; stale agents must refresh and rerun the
             current bootstrap rather than fall back to documentation mode.
+            Choose by deliverable: inspection uses execution_mode="read_only";
+            only Anchor-managed artifacts use execution_mode="artifact_only";
+            target source edits use execution_mode="source_change". With no Git
+            and no provider, read-only and artifact-only tasks need no repository
+            evidence; source changes remain blocked. For managed artifacts use:
+            anchor("task", "<description>", goal="<goal>", mode="implementation",
+                   work_type="change", execution_mode="artifact_only",
+                   acceptance_criteria=["<completion check>"]).
+            artifact_only cannot write target source. Source changes require a
+            canonical local Git worktree or an attested Databricks Git Folder;
+            conversion is not needed for managed-artifact deliverables.
         rebind_task: Explicitly restore the newest open accepted task for the resolved
             project and target without recapturing or requiring a clean worktree.
         frame_enabled: Whether to enable the context frame for session tracking.
@@ -583,7 +594,12 @@ def init(
             "synthetic": "durable_rebind",
         })
         _SESSION_STATE.task_verification_epoch = len(_SESSION_TIMINGS)
-        return {"kind": "task_authority_rebind", **rebound}
+        result = {"kind": "task_authority_rebind", **rebound}
+        from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+        if (_SESSION_STATE.workflow_binding is not None
+                or data_only_legacy_exception(_SESSION_STATE.active_task_profile)):
+            result["workflow"] = workflow_packet(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+        return result
 
     def _task_rebind_dispatch(action_args, action_kwargs):
         unknown = set(action_kwargs) - {"output_format", "task_window_id"}
@@ -662,6 +678,15 @@ def init(
             raise TypeError("task_adoption accepts at most one positional command")
         options = {key: value for key, value in action_kwargs.items() if key != "output_format"}
         return _task_adoption_action(command, **options)
+
+    def _workflow_dispatch(*action_args, **action_kwargs):
+        from odibi_anchor._dispatcher._workflow_runtime import workflow_action
+
+        if len(action_args) > 1 or (action_args and "command" in action_kwargs):
+            raise TypeError("workflow accepts one command, positional or keyword")
+        command = action_args[0] if action_args else action_kwargs.pop("command", "status")
+        return workflow_action(_DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                               command=command, **action_kwargs)
 
     def _learning_dispatch(learning_args, learning_kwargs):
         command = str(learning_args[0]).lower().strip() if learning_args else "list"
@@ -845,6 +870,15 @@ def init(
         return result
 
     def _test_run(*args, **kwargs):
+        criterion_id = kwargs.pop("workflow_criterion", None)
+        if criterion_id is not None:
+            from odibi_anchor._dispatcher._workflow_runtime import measured_test
+
+            return measured_test(
+                _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                runner=lambda **options: _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, **options),
+                criterion_id=criterion_id, args=args, kwargs=kwargs,
+            )
         return _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, *args, **kwargs)
 
     def _auto_scope_tests(kwargs):
@@ -1094,6 +1128,9 @@ def init(
             "task": lambda: _planning.task_execution_context,
             "task_adoption": lambda: _task_adoption_action,
             "task_rebind": lambda: _task_rebind_action,
+            "workflow": lambda: __import__(
+                "odibi_anchor._dispatcher._workflow_runtime", fromlist=["workflow_action"]
+            ).workflow_action,
             "work_item": lambda: __import__(
                 "odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]
             ).work_item_action,
@@ -1396,7 +1433,7 @@ def init(
             canonical_kwargs = dict(kwargs)
             canonical_kwargs.pop("mode", None)
             result = canonical_handoff(
-                _SESSION_STATE, route_binding, *args, **canonical_kwargs,
+                _SESSION_STATE, route_binding, *args, memory_db=_DEFAULT_DB_PATH, **canonical_kwargs,
             )
         else:
             result = _codebase_mod.session_snapshot_context(ROOT, *args, **kwargs)
@@ -1526,6 +1563,7 @@ def init(
             elif kwargs.get("output_format") == "markdown" and (
                 action in {
                     "orient", "task", "problem", "spec", "work_item", "project", "preflight", "test", "gate", "checkpoint", "learning",
+                    "workflow",
                     "incident_snapshot", "environment_diff", "spark_diagnose", "uc_context",
                     "delta_changes", "run_diff", "observe_table", "table_trend",
                 }
@@ -1614,6 +1652,7 @@ def init(
                     _SESSION_STATE, action="context", session_timings=_SESSION_TIMINGS,
                 ),
                 route_binding=route_binding,
+                memory_db=_DEFAULT_DB_PATH,
                 **kwargs,
             ),
             "prepare":      lambda: __import__(
@@ -1635,6 +1674,7 @@ def init(
             "task":         lambda: _task_dispatch(*args, **kwargs),
             "task_adoption": lambda: _task_adoption_dispatch(args, kwargs),
             "task_rebind":  lambda: _task_rebind_dispatch(args, kwargs),
+            "workflow":     lambda: _workflow_dispatch(*args, **kwargs),
             "gate":         lambda: _gate_ac(ROOT, args, kwargs, session_timings=_SESSION_TIMINGS, session_files_changed=_SESSION_FILES_CHANGED, session_files_created=_SESSION_FILES_CREATED, session_frame=frame, frame_enabled=ANCHOR_FRAME_ENABLED, session_state=_SESSION_STATE, workflow_gate_fn=_codebase_mod.workflow_gate_context, check_drift_fn=_check_filesystem_drift, check_test_coverage_fn=_check_tc, reconcile_ledger_fn=_reconcile_session_file_ledger, memory_db=_DEFAULT_DB_PATH),
             "preflight":    lambda: _preflight_wb(ROOT, kwargs, session_frame=frame, frame_enabled=ANCHOR_FRAME_ENABLED, session_files_changed=_SESSION_FILES_CHANGED, preflight_fn=_codebase_mod.preflight_context, session_state=_SESSION_STATE),
             "test":         lambda: _test_run(*args, **kwargs),
@@ -1799,6 +1839,7 @@ def init(
             _pre_dispatch_test_mark = kwargs.get("mark")
 
         _prior_task_state = None
+        staged_workflow_binding = None
         _prior_timing_count = len(_SESSION_TIMINGS) if action == "task" else None
         try:
             if action == "task":
@@ -1848,6 +1889,15 @@ def init(
                 _SESSION_STATE.latest_closed_obligation_id = None
             from odibi_anchor._dispatcher._post_dispatch import run_post_dispatch as _run_pd
             try:
+                if action == "task" and _err is None and staged.get("workflow_id") is not None:
+                    from odibi_anchor._dispatcher._workflow_runtime import bind_task_workflow
+
+                    candidate_state = copy.copy(_SESSION_STATE)
+                    candidate_state.active_task_profile = staged["profile"]
+                    candidate_state.trust_domain = staged.get("trust_domain")
+                    staged_workflow_binding = bind_task_workflow(
+                        _DEFAULT_DB_PATH, session_state=candidate_state, workflow_id=staged["workflow_id"],
+                    )
                 _final = _run_pd(
                     action, _result, _err, args, kwargs,
                     session_timings=_SESSION_TIMINGS,
@@ -1866,6 +1916,11 @@ def init(
                     prepared_adoption = (_TASK_STAGE_holder[0] or {}).get("prepared_adoption")
                     if prepared_adoption is not None:
                         prior_window = prepared_adoption["prior_task_window_id"]
+                    _SESSION_STATE.workflow_binding = staged_workflow_binding
+                    _SESSION_STATE.trust_domain = (_TASK_STAGE_holder[0] or {}).get("trust_domain")
+                    from odibi_anchor._dispatcher._workflow_admission import workflow_packet
+
+                    task_workflow_packet = workflow_packet(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
                     authority = persist_accepted_task(
                         _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
                         task_stage=_TASK_STAGE_holder[0] or {}, task_result=_final,
@@ -1874,6 +1929,7 @@ def init(
                     )
                     _final["accepted_task_authority"] = authority
                     _final["task_window_id"] = authority["task_window_id"]
+                    _final["workflow"] = task_workflow_packet
                     _save_session_state({
                         "stage": "planned",
                         "files_changed": sorted(_SESSION_FILES_CHANGED),
@@ -2002,6 +2058,7 @@ def init(
                     _SESSION_STATE,
                     protocol=_protocol,
                     route_binding=route_binding,
+                    memory_db=_DEFAULT_DB_PATH,
                 )
             if action == "task":
                 try:
@@ -2153,6 +2210,9 @@ def init(
             if action == "test":
                 from odibi_anchor._dispatcher._session_tools import _format_test_result
                 return _format_test_result(_final, "markdown")
+            if action == "workflow":
+                import json as _json
+                return "```json\n" + _json.dumps(_final, indent=2) + "\n```"
             if action == "gate":
                 from odibi_anchor.codebase.workflow_gate_context import render_workflow_gate_report
                 return _with_protocol(render_workflow_gate_report(_final))
@@ -2212,6 +2272,7 @@ def init(
             _SESSION_STATE,
             protocol=protocol,
             route_binding=route_binding,
+            memory_db=_DEFAULT_DB_PATH,
             view="compact",
         ))
 

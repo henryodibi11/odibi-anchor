@@ -281,10 +281,11 @@ def test_public_task_before_change_lifecycle_pays_planning(tmp_path, monkeypatch
     _git(project, "add", ".")
     _git(project, "commit", "-m", "baseline")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ANCHOR_HOME", str(tmp_path / "state"))
 
-    from odibi_anchor.bootstrap import init
+    from tests.workflow_fixtures import accept_fixture_plan, init_source_runtime, source_workflow_kwargs
 
-    anchor, _root, _manifest = init(root=str(project), output_format="dict")
+    anchor, _root, _manifest = init_source_runtime(root=str(project), output_format="dict")
     from odibi_anchor._utils._session_state import _SESSION_STATE
 
     # The package checkout may have delivery debt from the outer test runner.
@@ -311,7 +312,9 @@ def test_public_task_before_change_lifecycle_pays_planning(tmp_path, monkeypatch
         background="The accepted task timing precedes the source verification epoch.",
         deliverables=["One verified source edit."],
         output_format="dict",
+        **source_workflow_kwargs(["src/example.py"]),
     )
+    accept_fixture_plan(anchor)
     for required in task["required_skills"]:
         if required["path"] != "n/a":
             anchor("skill_loaded", required["skill"])

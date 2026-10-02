@@ -304,6 +304,7 @@ def canonical_handoff(
     next_steps: Sequence[str] | None = None,
     output_format: str = "dict",
     persist: bool = True,
+    memory_db: str | None = None,
     **unknown: Any,
 ) -> dict[str, Any] | str:
     """Build and optionally persist one self-contained implementation handoff."""
@@ -341,6 +342,35 @@ def canonical_handoff(
         session_state, route_binding, task_context, work_item,
         session_state.task_repository_baseline, repository,
     )
+    workflow = None
+    from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+    if (getattr(session_state, "workflow_binding", None) is not None
+            or data_only_legacy_exception(getattr(session_state, "active_task_profile", None))):
+
+        if memory_db is None:
+            raise RuntimeError("workflow handoff requires the bound authority database")
+        workflow = workflow_packet(memory_db, session_state=session_state)
+        authority["workflow_packet_sha256"] = workflow.get("packet_sha256") or _digest(workflow)
+        # Resume immutable accepted authority before offering any phase operation.
+        # Closed task windows require explicit fresh enrollment, never old rebinding.
+        if getattr(session_state, "terminal_status", None) is None:
+            first_action = {
+                "action": "task_rebind", "kind": "resume_workflow_task", "args": [],
+                "kwargs": {"task_window_id": session_state.task_window_id},
+                "copy_ready": f"anchor('task_rebind', task_window_id={session_state.task_window_id!r})",
+            }
+        elif getattr(session_state, "workflow_binding", None) is not None:
+            profile = session_state.active_task_profile
+            inputs = {"task": session_state.task_goal, "goal": session_state.task_goal,
+                      "workflow_id": workflow["state"]["workflow_id"],
+                      "mode": session_state.active_task_mode, "execution_mode": profile.execution_mode,
+                      "work_type": profile.work_type, "risk": profile.risk, "rigor": profile.rigor,
+                      "trust_domain": session_state.trust_domain}
+            first_action = {
+                "action": "prepare", "kind": "prepare_workflow_task", "args": [],
+                "kwargs": {"operation": "task.create", "inputs": inputs},
+                "copy_ready": f"anchor('prepare', operation='task.create', inputs={inputs!r})",
+            }
     background = task_context.get("background") or {}
     business_reason = background.get("summary")
     missing_semantics = [] if business_reason else [
@@ -414,6 +444,11 @@ def canonical_handoff(
         "first_action": first_action,
         "write_performed": persist,
     })
+    if workflow is not None:
+        packet["schema_version"] = "3.0"
+        packet["workflow"] = workflow
+        packet["required_capabilities"] = {"workflow_contract": 1, "canonical_handoff": 3}
+        packet["task_window_completion_is_workflow_completion"] = False
     if next_steps:
         packet["continuation"]["remaining_steps"] = list(next_steps)
     if persist:
@@ -434,6 +469,7 @@ def canonical_handoff(
 
 def validate_canonical_handoff(
     packet: Mapping[str, Any], session_state: Any, route_binding: Any,
+    *, memory_db: str | None = None,
 ) -> dict[str, Any]:
     """Re-derive authority and report whether a persisted handoff remains executable."""
     expected = packet.get("authority")
@@ -444,7 +480,7 @@ def validate_canonical_handoff(
             "conflicts": ["authority"],
         }
     current = cast(
-        dict[str, Any], canonical_handoff(session_state, route_binding, persist=False)
+        dict[str, Any], canonical_handoff(session_state, route_binding, persist=False, memory_db=memory_db)
     )
     actual = current["authority"]
     conflicts = sorted(
@@ -453,7 +489,11 @@ def validate_canonical_handoff(
     )
     if packet.get("first_action") != current.get("first_action"):
         conflicts.append("first_action")
-        conflicts.sort()
+    if packet.get("schema_version") != current.get("schema_version"):
+        conflicts.append("schema_version")
+    if packet.get("workflow") != current.get("workflow"):
+        conflicts.append("workflow")
+    conflicts.sort()
     return {
         "status": "stale" if conflicts else "verified",
         "reason": (

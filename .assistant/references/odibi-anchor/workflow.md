@@ -1004,3 +1004,112 @@ No gate-wide or exposure-based bulk confirmation occurs.
   Capture, gate, or closure assessment creates the task's local SQLite obligation as needed,
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
   `nothing_reusable_learned`. State is local—no cloud replication.
+
+## Fresh workflow authority and legacy recovery
+
+Fresh source-capable tasks require an explicitly bound managed project, an explicit
+`trust_domain`, and a `workflow_id`. This includes profiles permitting both source
+and data writes. Substantive `artifact_only` tasks require the same authority.
+The lightweight artifact path requires `risk="low"`, `rigor="direct"`, and no
+material/critical assurance escalation (T2/T3). It is for genuinely bounded trivial
+work, not a way to relabel substantive work. Standalone `init(root=...)` remains available for investigation,
+but is not sufficient authority for new source work. Neither project nor trust
+identity is inferred from a directory name, login, previous selection, or mode.
+
+Bind the existing authorized project with `init(project=...)`, declare its trust
+domain on the task (or through the configured `ANCHOR_TRUST_DOMAIN`), and create a
+bounded workflow plan in a read-only investigation task using `anchor("workflow", "create", ...)`.
+The governance event does not grant artifact or source edit permission. Close the
+inquiry's applicable task obligations before accepting the producer task.
+Use `anchor("help", "workflow")` for the plan schema. Bind the returned workflow ID
+on a fresh source or substantive artifact task, then accept the plan before editing. Creating a missing
+project still requires separate owner approval. This migration does not authorize
+plain non-Git source edits or any external delivery action.
+
+Artifact workflow creation records the exact planned `artifact_paths` as absent
+or existing regular files (digest, size and modification metadata). Acceptance
+compares that retained pre-plan observation before admitting implementation.
+Draft output registration, changed/deleted/restored output bytes, links and stale
+baselines block; unrelated planning notes remain governed ancillary artifacts.
+Replaying creation never refreshes a baseline. Historical drafts/candidates that
+lack admission evidence cannot be qualified by observing their current bytes.
+Preserve them and recover at a safe boundary; do not rewrite immutable history.
+These are bounded filesystem observations, not locks or an OS sandbox.
+
+Destination byte readback and reconciliation are separate proofs. A plan must
+declare `reconciliation={"requirements": [...]}` before verified completion.
+Supported obligations are `{"id": "docs", "method": "qualification_criterion",
+"criterion_id": "docs-check"}` (the exact retained, satisfied criterion for the
+same candidate) and `{"id": "learning", "method": "producer_learning"}` (the
+verified producer gate/learning closure). Use a criterion that actually proves
+the named obligation; a passing unrelated test does not prove documentation or
+ticket state. No ticket/decision service observer is implied. Unsupported methods
+remain `unavailable`; missing criterion proof remains `unsatisfied`.
+
+When no reconciliation is owed, declare `{"requirements": [], "reason": "<why
+this bounded plan has no linked obligations>"}` explicitly. Missing historical
+contracts are unavailable, never silently interpreted as an empty set. Matching
+destination bytes may advance to `delivered` while reconciliation remains owed;
+`completed` stays false and `delivery_verified` is blocked. The retained proof
+binds workflow, plan, candidate, obligation contract and each exact evidence ref.
+Resolve the obligation or recover/replan with explicit authority, never drop it
+merely to obtain a green completion status.
+
+Interrupted legacy source tasks retain exact `anchor("task_rebind")` recovery;
+their original baseline and unphased history are not rewritten. A historical
+handoff is not permission to create new unphased source authority. Read-only tasks
+use a lightweight `read_only_unphased` projection with `completed=false` and
+`delivery_verified=false`; reporting a checked answer creates no fictional
+destination receipt. Task-window closure and verified workflow delivery differ.
+Lightweight artifacts similarly report `lightweight_unphased`, `completed=false`
+and `delivery_verified=false`. They retain normal review, gate and learning duties
+where applicable. Use an explicit workflow even for small artifacts when verified
+destination completion is required.
+
+Workflow-bound accepted tasks use record format `odibi-anchor-accepted-task-v2`.
+Unbound legacy tasks remain v1. The new reader preserves both valid contracts and
+rejects mismatched format/binding pairs without rewriting immutable records.
+v0.3.21 and older readers reject v2 rather than silently restoring write authority
+without the workflow binding. Do not downgrade a runtime that owns open v2 tasks;
+resume with a workflow-aware version. This is a reader compatibility boundary,
+not filesystem sandboxing against arbitrary old binaries or direct tools.
+
+Replanning invalidates the old accepted binding. Context and canonical handoff
+remain readable with `binding_status="stale_plan"` and
+`next_step="close_task_then_reenroll"`; they never upgrade the immutable task.
+Close its existing obligations and bind a fresh task to the revised workflow at a
+safe boundary. Dirty source still requires exact ownership recovery. An unknown
+delivery outcome stays blocked when readback is missing, different or unavailable:
+these observations do not prove the remote operation has terminated.
+
+Plans may declare `required_children=[{"workflow_id": "wf_...", "plan_sha256": "sha256:..."}]`.
+Dependencies must have the exact same project, roots and trust authority. Parent
+qualification requires every child to be `delivery_verified` against the pinned
+plan and retains observed candidate/verification hashes. The parent still needs
+its own checks, review, approval and destination verification. Cycles, stale plans,
+missing/foreign children and graphs beyond 100 children or 20 levels block progress.
+Optional follow-up is not a satisfied required child. Revise the parent plan to
+change requirements; never count closed task windows as delivered children.
+
+## Temporary data-only workflow compatibility
+
+Until a bounded data candidate collector is qualified, unbound tasks that permit
+`data_write` but **do not permit `source_write`** retain existing data execution
+checks. This is an owner-approved compatibility exception, not workflow completion.
+The workflow projection reports `status="unphased_unsupported_collector"`,
+`completed=false`, `delivery_verified=false` and
+`compatibility_exception.id="temporary_data_only_legacy"`.
+
+Eligibility follows effective profile permissions, not legacy mode names. Dual
+source/data tasks are excluded. An invocation containing any source-write effect
+cannot use the exception, even alongside a data-write effect. Existing skill,
+Spec, scope, human authority and data safety requirements still apply. Explicitly
+workflow-bound data writes remain blocked while their collector is unsupported.
+Task gate/learning closure does not promote this exception to qualified, delivered
+or delivery-verified status. Do not claim destination verification from it.
+
+Remove the exception only after a bounded data collector supplies exact resource
+identities and independent destination readback, scope/authority/staleness/negative
+tests and supported-host qualification pass, and fresh tasks can enroll at safe
+boundaries. Keep prior records visibly unphased; never backfill plan, qualification
+or delivery evidence. This exception does not authorize plain non-Git source edits.

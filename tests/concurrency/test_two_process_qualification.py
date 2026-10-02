@@ -74,6 +74,8 @@ _WORKER = textwrap.dedent(
 _TASK = {
     "mode": "implementation",
     "execution_mode": "artifact_only",
+    "risk": "low",
+    "rigor": "direct",
     "current_state": "An isolated concurrency qualification target exists.",
     "desired_outcome": "The bound MCP lifecycle remains owner-isolated.",
     "constraints": ["Do not modify target source."],

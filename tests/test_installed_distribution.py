@@ -211,7 +211,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = [
 ]
 EXPECTED_DISTRIBUTION_METADATA = {
     "Name": ["odibi-anchor"],
-    "Version": ["0.3.20"],
+    "Version": ["0.3.22"],
     "Summary": ["Provider-neutral reliability, context, and evidence tooling for engineering agents."],
     "Requires-Python": [">=3.11"],
     "License-Expression": ["Apache-2.0"],
@@ -509,7 +509,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     pyproject = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
     assert project["name"] == "odibi-anchor"
-    assert project["version"] == "0.3.20"
+    assert project["version"] == "0.3.22"
     assert project["description"] == "Provider-neutral reliability, context, and evidence tooling for engineering agents."
     assert project["requires-python"] == ">=3.11"
     assert project["license"] == "Apache-2.0"
@@ -549,7 +549,7 @@ def test_package_metadata_has_one_source_authority() -> None:
     }
 
     init_source = (REPOSITORY_ROOT / "src" / "odibi_anchor" / "__init__.py").read_text(encoding="utf-8")
-    assert '"0.3.20"' not in init_source
+    assert '"0.3.22"' not in init_source
     assert '"0.7.1"' not in init_source
     assert not (REPOSITORY_ROOT / "src" / "odibi_anchor" / "_version.py").exists()
 
@@ -676,7 +676,7 @@ def _repository_factory_probe(
 
 def _assert_runtime_metadata(probe: dict[str, object]) -> None:
     """Assert installed metadata and runtime expose the authoritative contract."""
-    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.20"
+    assert probe["runtime_version"] == probe["distribution_version"] == "0.3.22"
     assert probe["summary"] == EXPECTED_DISTRIBUTION_METADATA["Summary"][0]
     assert probe["author"] == "Henry Odibi"
     assert probe["license"] == "Apache-2.0"
@@ -700,8 +700,8 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    wheel = next(artifacts.glob("odibi_anchor-0.3.20-*.whl"))
-    sdist = artifacts / "odibi_anchor-0.3.20.tar.gz"
+    wheel = next(artifacts.glob("odibi_anchor-0.3.22-*.whl"))
+    sdist = artifacts / "odibi_anchor-0.3.22.tar.gz"
     assert sdist.is_file()
 
     with zipfile.ZipFile(wheel) as wheel_archive:
@@ -720,7 +720,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             "anchor-governance-sidecar = odibi_anchor._governance_sidecar.__main__:main\n"
         )
         packaged_init = wheel_archive.read("odibi_anchor/__init__.py").decode("utf-8")
-        assert '"0.3.20"' not in packaged_init
+        assert '"0.3.22"' not in packaged_init
         assert wheel_archive.read(".assistant_instructions.md") == (
             candidate / ".assistant_instructions.md"
         ).read_bytes()
@@ -812,7 +812,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert raw["version"] == "0.3.20"
+    assert raw["version"] == "0.3.22"
     assert Path(raw["module"]).is_relative_to(candidate)
 
     collision = audit_root / "collision"
@@ -841,7 +841,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment=raw_environment,
         ).stdout
     )
-    assert collision_result["version"] == "0.3.20"
+    assert collision_result["version"] == "0.3.22"
     assert raw_hashes_before == {
         "pyproject.toml": _sha256(candidate / "pyproject.toml"),
         "__init__.py": _sha256(candidate / "src" / "odibi_anchor" / "__init__.py"),
@@ -1039,7 +1039,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_wheel_probe["runtime_version"] == "0.3.20"
+    assert masked_wheel_probe["runtime_version"] == "0.3.22"
     assert Path(masked_wheel_probe["module"]).is_relative_to(audit_root / "wheel-venv")
     (fake_metadata / "RECORD").write_bytes(b"\xff")
     assert _runtime_version_probe(
@@ -1047,13 +1047,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment,
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
-    ) == "0.3.20"
+    ) == "0.3.22"
     (fake_metadata / "RECORD").unlink()
     wheel_site_packages = Path(wheel_probe["module"]).parent.parent
     colocated_fake_metadata = wheel_site_packages / "odibi_anchor-9.9.9.dist-info"
     shutil.copytree(fake_metadata, colocated_fake_metadata)
     try:
-        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.20"
+        assert _runtime_probe(wheel_python, environment, cwd=audit_root)["runtime_version"] == "0.3.22"
         (colocated_fake_metadata / "RECORD").write_text(
             "odibi_anchor/__init__.py,,\n",
             encoding="utf-8",
@@ -1062,7 +1062,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         assert ambiguous_wheel_probe["runtime_version"] == "0+unknown"
     finally:
         shutil.rmtree(colocated_fake_metadata)
-    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.20.dist-info")) / "METADATA"
+    wheel_metadata_path = next(wheel_site_packages.glob("odibi_anchor-0.3.22.dist-info")) / "METADATA"
     wheel_metadata_bytes = wheel_metadata_path.read_bytes()
     try:
         wheel_metadata_path.write_bytes(b"\xff")
@@ -1186,7 +1186,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         cwd=audit_root,
         metadata_prepend=fake_metadata_root,
     )
-    assert masked_editable_probe["runtime_version"] == "0.3.20"
+    assert masked_editable_probe["runtime_version"] == "0.3.22"
     assert Path(masked_editable_probe["module"]).is_relative_to(candidate)
     assert Path(editable_probe["module"]).is_relative_to(candidate)
     editable_direct_url = json.loads(editable_probe["direct_url"])
@@ -1197,7 +1197,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
     candidate_pyproject = candidate / "pyproject.toml"
     authoritative_pyproject = candidate_pyproject.read_text(encoding="utf-8")
     try:
-        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.20"', 'version = "9.9.9"', 1)
+        conflicting_pyproject = authoritative_pyproject.replace('version = "0.3.22"', 'version = "9.9.9"', 1)
         assert conflicting_pyproject != authoritative_pyproject
         candidate_pyproject.write_text(conflicting_pyproject, encoding="utf-8")
         editable_metadata_probe = _runtime_probe(editable_python, environment, cwd=audit_root)
@@ -1232,7 +1232,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert nonlocal_authority_probe["runtime_version"] == "0.3.20"
+        assert nonlocal_authority_probe["runtime_version"] == "0.3.22"
 
         fake_direct_url["url"] = "file://[malformed"
         fake_direct_url_path.write_text(json.dumps(fake_direct_url), encoding="utf-8")
@@ -1242,7 +1242,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             cwd=audit_root,
             metadata_prepend=fake_editable_root,
         )
-        assert malformed_url_probe["runtime_version"] == "0.3.20"
+        assert malformed_url_probe["runtime_version"] == "0.3.22"
 
         for relative_url in ("file:.", "file://localhost"):
             fake_direct_url["url"] = relative_url
@@ -1252,7 +1252,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
                 environment,
                 cwd=candidate,
                 metadata_prepend=fake_editable_root,
-            ) == "0.3.20"
+            ) == "0.3.22"
 
         fake_direct_url_path.write_bytes(b"\xff")
         assert _runtime_version_probe(
@@ -1260,13 +1260,13 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
             environment,
             cwd=candidate,
             metadata_prepend=fake_editable_root,
-        ) == "0.3.20"
+        ) == "0.3.22"
     finally:
         candidate_pyproject.write_text(authoritative_pyproject, encoding="utf-8")
 
     extracted = audit_root / "sdist-source"
     shutil.unpack_archive(str(sdist), extracted)
-    sdist_root = extracted / "odibi_anchor-0.3.20"
+    sdist_root = extracted / "odibi_anchor-0.3.22"
     _validate_native_skill_layout(sdist_root / ".assistant")
     sdist_wheelhouse = audit_root / "sdist-wheelhouse"
     _run(
@@ -1274,7 +1274,7 @@ def _qualify_package_metadata_matrix(audit_root: Path) -> None:
         environment=environment,
         timeout=300,
     )
-    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.20-*.whl"))
+    sdist_wheel = next(sdist_wheelhouse.glob("odibi_anchor-0.3.22-*.whl"))
     with zipfile.ZipFile(sdist_wheel) as sdist_wheel_archive:
         sdist_wheel_names = sdist_wheel_archive.namelist()
         sdist_metadata_name = next(name for name in sdist_wheel_names if name.endswith(".dist-info/METADATA"))
@@ -1322,6 +1322,44 @@ def test_package_metadata_provenance_matrix(tmp_path: Path) -> None:
     finally:
         _remove_tree(audit_root)
     assert not audit_root.exists()
+
+
+def test_base_wheel_preserves_verified_draft_artifact_restore(tmp_path: Path) -> None:
+    """Run the public recovery/anti-laundering matrix outside source, without extras."""
+    audit_root = tmp_path / "installed-draft-restore"
+    wheels = audit_root / "wheels"
+    target = audit_root / "target"
+    wheels.mkdir(parents=True)
+    target.mkdir()
+    environment = _clean_environment(audit_root)
+    _run([sys.executable, "-m", "pip", "wheel", "--no-deps", *build_pip_arguments(),
+          "--wheel-dir", str(wheels), "."], cwd=REPOSITORY_ROOT, environment=environment, timeout=300)
+    python = _create_venv(audit_root / "venv", environment)
+    _run([str(python), "-m", "pip", "install", *install_pip_arguments(),
+          str(next(wheels.glob("odibi_anchor-*.whl"))), "pytest>=7.0"],
+         environment=environment, timeout=300)
+    for name in ("tests/__init__.py", "tests/conftest.py", "tests/_dispatcher/__init__.py",
+                 "tests/_dispatcher/test_workflow_runtime.py", "tests/_dispatcher/test_workflow_restore.py"):
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPOSITORY_ROOT / name, destination)
+    script = _write_script(target, "qualify.py", """
+        import importlib.util
+        from pathlib import Path
+        import odibi_anchor
+        from odibi_anchor.pytest_runner import run_pytest
+
+        assert "site-packages" in Path(odibi_anchor.__file__).parts
+        assert importlib.util.find_spec("numpy") is None
+        assert importlib.util.find_spec("pandas") is None
+        summary, proc = run_pytest(["tests/_dispatcher/test_workflow_restore.py", "-q"],
+                                   cwd=Path(__file__).parent, timeout=180, capture_output=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert summary["passed"] > 0 and summary["skipped"] == 0
+        print("verified-base-wheel-restore")
+    """)
+    result = _run([str(python), str(script)], cwd=target, environment=environment, timeout=240)
+    assert result.stdout.strip() == "verified-base-wheel-restore"
 
 
 def test_installed_wheel_runner_honors_ambient_canonical_plugin_requests(tmp_path: Path) -> None:
@@ -1556,7 +1594,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
 
         TASK = dict(
             arg0="Qualify revision-8 structured learning.", goal="Exercise the complete learning lifecycle.",
-            mode="implementation", execution_mode="artifact_only",
+            mode="implementation", execution_mode="artifact_only", risk="low", rigor="direct",
             current_state="An isolated installed-wheel target exists.",
             desired_outcome="Learning is assessed without transport drift.", constraints=["Read only target."],
             known_facts=["The candidate is an installed wheel."],
@@ -2103,7 +2141,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
         home = tmp_path / f"home-cli-{transport}"
         cli_task = {
             "arg0":"CLI learning lifecycle.", "goal":"Qualify CLI learning.", "mode":"implementation",
-            "execution_mode":"artifact_only", "current_state":"fresh",
+            "execution_mode":"artifact_only", "risk":"low", "rigor":"direct", "current_state":"fresh",
             "desired_outcome":"assessed", "constraints":["read only"], "known_facts":["wheel"],
             "evidence":[{"source":"test","observation":"wheel"}], "in_scope":["learning"], "out_of_scope":["source"],
             "risks":["drift"], "acceptance_criteria":["gate"], "stop_conditions":["failure"], "deliverables":["result"]}
@@ -2877,11 +2915,34 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
 
 
             def frame(anchor, label):
-                return anchor(
+                from odibi_anchor._dispatcher._boot import _ENV
+                from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+                from odibi_anchor._utils._session_state import _SESSION_STATE
+                from odibi_anchor.codebase._workflow import create_workflow
+
+                # Seed an exact draft for this disposable installed acceptance
+                # fixture; public draft creation is separately exercised.
+                plan = {
+                    "schema_version": 1, "goal": "Qualify installed source lifecycle",
+                    "risk": "low", "execution_mode": "source_change",
+                    "scope": ["app.py", "tests/test_app.py"],
+                    "source_paths": ["app.py", "tests/test_app.py"],
+                    "exclusions": [], "constraints": [], "risks": [],
+                    "stop_conditions": [], "unresolved_decisions": [],
+                    "criteria": [{"id": "app", "expected": "Exact app behavior", "method": "pytest",
+                                  "test_targets": ["tests/test_app.py"]}],
+                    "destination": {"kind": "github_ref", "repository": "fixture/never-published",
+                                    "ref": "refs/heads/main"},
+                }
+                workflow = create_workflow(_ENV["memory_db"], owner=workflow_owner(_SESSION_STATE),
+                                           request_id=label, plan=plan)
+                result = anchor(
                     "task",
                     f"Qualify installed unborn source-task lifecycle: {label}.",
                     goal=f"Prove {label} preserves exact task scope and replacement semantics.",
                     mode="implementation",
+                    trust_domain="personal",
+                    workflow_id=workflow["workflow_id"],
                     work_type="change",
                     execution_mode="source_change",
                     risk="low",
@@ -2899,9 +2960,18 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                     deliverables=["installed lifecycle evidence"],
                     output_format="dict",
                 )
+                anchor("workflow", "accept_plan", expected_generation=0,
+                       request_id="accept:" + label, output_format="dict")
+                return result
 
+            from odibi_anchor._dispatcher._project import project_action
+
+            os.environ["ANCHOR_TRUST_DOMAIN"] = "personal"
+            project_name = "unborn-source-" + os.environ["PHASE"]
+            project_action(os.environ["ANCHOR_HOME"], "create", name=project_name,
+                           target=root, output_format="dict")
             with contextlib.redirect_stdout(io.StringIO()):
-                anchor, _, _ = init(root=os.environ["TARGET"], output_format="dict")
+                anchor, _, _ = init(root=os.environ["TARGET"], project=project_name, output_format="dict")
             from odibi_anchor._repository_snapshot import (
                 TaskRepositoryBaseline,
                 UnbornTaskRepositoryBaseline,
@@ -3116,6 +3186,8 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                     "Qualify installed project and artifact isolation.",
                     goal="Prove installed state remains isolated across project routing.",
                     mode=mode,
+                    execution_mode="artifact_only" if mode == "implementation" else "read_only",
+                    risk="low", rigor="direct",
                     current_state="Disposable installed-wheel fixture.",
                     desired_outcome="Only the selected managed artifact root contains records.",
                     constraints=["Do not modify target source."],
@@ -3298,6 +3370,51 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert Path(notebook_result["module"]).is_relative_to(venv.resolve())
         assert _git_snapshot(committed) == committed_before
 
+        source_draft_script = _write_script(
+            audit_root,
+            "source_draft_fixture.py",
+            """
+            import contextlib
+            import io
+            import json
+            import os
+            from odibi_anchor._dispatcher._project import project_action
+            from odibi_anchor.bootstrap import init
+
+            if os.environ.get("CREATE_SOURCE_PROJECT") == "1":
+                project_action(os.environ["ANCHOR_HOME"], "create",
+                               name=os.environ["ANCHOR_PROJECT_ID"],
+                               target=os.environ["ANCHOR_PROJECT_ROOT"], output_format="dict")
+            with contextlib.redirect_stdout(io.StringIO()):
+                anchor, _, _ = init(project=os.environ["ANCHOR_PROJECT_ID"], output_format="dict")
+            from odibi_anchor._dispatcher._boot import _ENV
+            from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+            from odibi_anchor._utils._session_state import _SESSION_STATE
+            from odibi_anchor.codebase._workflow import create_workflow
+
+            plan = {
+                "schema_version": 1, "goal": "Qualify installed transport acceptance",
+                "risk": "low", "execution_mode": "source_change", "scope": ["app.py"],
+                "source_paths": ["app.py"], "exclusions": [], "constraints": [], "risks": [],
+                "stop_conditions": [], "unresolved_decisions": [],
+                "criteria": [{"id": "app", "expected": "App contract holds", "method": "pytest",
+                              "test_targets": ["tests/test_app.py"]}],
+                "destination": {"kind": "github_ref", "repository": "fixture/never-published",
+                                "ref": "refs/heads/main"},
+            }
+            draft = create_workflow(_ENV["memory_db"], owner=workflow_owner(_SESSION_STATE),
+                                    request_id="transport-draft", plan=plan)
+            print(json.dumps({"workflow_id": draft["workflow_id"]}))
+            """,
+        )
+        cli_source_environment = {
+            **direct_environment, "ANCHOR_PROJECT_ID": "cli-source",
+            "ANCHOR_PROJECT_ROOT": str(cli_unborn), "ANCHOR_TRUST_DOMAIN": "personal",
+        }
+        cli_draft = json.loads(_run(
+            [str(venv_python), str(source_draft_script)], cwd=cli_unborn,
+            environment={**cli_source_environment, "CREATE_SOURCE_PROJECT": "1"},
+        ).stdout)
         unborn_source_task = {
             "action": "task",
             "arg0": "Frame an installed source change from a pristine unborn target branch.",
@@ -3326,12 +3443,12 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             {"action": "audit_history"},
             {"action": "orient"},
             {"action": "new_session", "name": "cli_unborn", "inline": True},
-            unborn_source_task,
+            {**unborn_source_task, "workflow_id": cli_draft["workflow_id"], "trust_domain": "personal"},
         ]
         cli_unborn_batch = _run(
             [str(venv_cw), "--root", str(cli_unborn), "batch", "-"],
             cwd=cli_unborn,
-            environment=direct_environment,
+            environment=cli_source_environment,
             input_text=json.dumps(cli_unborn_requests),
         )
         cli_unborn_results = _json_lines(cli_unborn_batch.stdout)
@@ -3504,7 +3621,10 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert dirty_error["context"]["ownership_state"] == "unowned_or_ambiguous"
         assert [
             operation["action"] for operation in dirty_error["next_operations"]
-        ] == ["task"]
+        ] == ["prepare"]
+        assert dirty_error["next_operations"][0]["kwargs"] == {
+            "operation": "task.create", "inputs": {"mode": "planning"},
+        }
         assert _git_snapshot(dirty) == dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3566,6 +3686,8 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                         return {
                             "arg0": f"Frame installed MCP unborn source task: {label}.",
                             "goal": "Prove v1 and v2 delegate exact acceptance to the shared core.",
+                            "workflow_id": os.environ.get("WORKFLOW_ID"),
+                            "trust_domain": "personal",
                             "mode": "implementation",
                             "work_type": "change",
                             "execution_mode": "source_change",
@@ -3592,6 +3714,8 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                             "arg0": "Switch installed MCP routing between managed projects.",
                             "goal": "Prove MCP refreshes routing before returning success.",
                             "mode": "implementation",
+                            "execution_mode": "artifact_only",
+                            "risk": "low", "rigor": "direct",
                             "current_state": "Alpha is active on a clean committed target.",
                             "desired_outcome": "Beta is active without alpha artifact leakage.",
                             "constraints": ["Do not modify target source."],
@@ -3877,7 +4001,10 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert [
             operation["action"]
             for operation in mcp_dirty_envelope_error["next_operations"]
-        ] == ["task"]
+        ] == ["prepare"]
+        assert mcp_dirty_envelope_error["next_operations"][0]["kwargs"] == {
+            "operation": "task.create", "inputs": {"mode": "planning"},
+        }
         assert _git_snapshot(dirty) == mcp_dirty_before
         assert not (dirty / ".agent_memory.db").exists()
 
@@ -3886,10 +4013,16 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             **mcp_direct_environment,
             "ANCHOR_PROJECT_ID": "unborn",
             "ANCHOR_PROJECT_ROOT": str(mcp_unborn),
+            "ANCHOR_TRUST_DOMAIN": "personal",
             "SERVER_CWD": str(mcp_unborn),
             "MCP_LOG": str(audit_root / "mcp-unborn-stderr.log"),
             "MODE": "unborn",
         }
+        mcp_draft = json.loads(_run(
+            [str(venv_python), str(source_draft_script)], cwd=mcp_unborn,
+            environment=mcp_unborn_environment,
+        ).stdout)
+        mcp_unborn_environment["WORKFLOW_ID"] = mcp_draft["workflow_id"]
         mcp_unborn_result = json.loads(
             _run(
                 [str(venv_python), str(mcp_script)],
@@ -3933,7 +4066,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
         assert mcp_dirty_error["context"]["ownership_state"] == "interrupted_source_task"
         assert [
             operation["action"] for operation in mcp_dirty_error["next_operations"]
-        ] == ["task_rebind", "task"]
+        ] == ["task_rebind", "prepare"]
         prior_window = mcp_unborn_result["v2_envelope"]["result"]["task_window_id"]
         assert mcp_dirty_error["next_operations"][0]["kwargs"] == {
             "task_window_id": prior_window,
