@@ -399,3 +399,16 @@ def test_post_gate_same_size_restored_mtime_is_not_retired(project):
         terminal_status="completed",
     )
     assert "src/main.py" in check_filesystem_drift(str(project))["modified"]
+
+
+def test_legacy_terminal_state_without_snapshot_cannot_retire_history(project):
+    from types import SimpleNamespace
+
+    build_boot_manifest(str(project))
+    _ensure_boot_manifest_built()
+    (project / "src/main.py").write_text("UNVERIFIED_COMPATIBILITY_STATE = True\n")
+    _ss.retire_completed_task_drift(
+        session_state=SimpleNamespace(task_window_id="legacy"),
+        closure={"status": "closed", "task_window_id": "legacy"}, terminal_status="completed",
+    )
+    assert "src/main.py" in check_filesystem_drift(str(project))["modified"]

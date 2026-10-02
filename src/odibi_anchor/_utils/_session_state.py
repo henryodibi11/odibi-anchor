@@ -822,7 +822,7 @@ def retire_completed_task_drift(*, session_state: SessionState, closure: dict, t
     """
     from pathlib import Path
 
-    snapshot = session_state.task_gate_drift_snapshot
+    snapshot = getattr(session_state, "task_gate_drift_snapshot", None)
     if (terminal_status != "completed" or not snapshot
             or closure.get("status") not in {"closed", "already_closed"}
             or closure.get("task_window_id") != session_state.task_window_id
