@@ -158,7 +158,11 @@ def append_verified_restores(path, *, projects, manifest):
             observed = collect_artifact_baseline(state["plan"], session_state=SimpleNamespace(**owner))
             if _content(observed) != _content(proof["observation"]):
                 raise WorkflowError("integrity", "artifact restore content differs from verified baseline")
-            pending.append({"proof": proof, "owner": owner, "observation": observed,
+            # The manifest retains the full source observation. Bind its digest
+            # here instead of doubling per-file metadata within the packet limit.
+            retained_proof = {key: value for key, value in proof.items() if key != "observation"}
+            retained_proof["observation_sha256"] = digest(proof["observation"])
+            pending.append({"proof": retained_proof, "owner": owner, "observation": observed,
                             "authority_id": manifest["authority_id"],
                             "manifest_sha256": manifest["manifest_sha256"]})
         if not connection.execute("SELECT 1 FROM anchor_schema_versions WHERE domain=?", (DOMAIN,)).fetchone():

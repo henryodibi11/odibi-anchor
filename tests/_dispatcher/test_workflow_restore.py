@@ -250,3 +250,40 @@ def test_restore_at_original_location_keeps_recovery_authority(runtime, tmp_path
     advance(restarted, "block", reason="Pause for review", blocker_kind="awaiting_authority")
     advance(restarted, "resume", resolution="Owner confirmed continuation")
     assert advance(restarted, "accept_plan")["progress"] == "planned"
+
+
+def test_large_valid_draft_retains_bounded_restore_receipts(runtime, tmp_path, monkeypatch):
+    from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+    from odibi_anchor._dispatcher._workflow_evidence import collect_artifact_baseline
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+    from odibi_anchor.codebase._workflow import create_workflow
+
+    anchor, home, target, draft = runtime
+    paths = [f"notebooks/report-{i:04d}.md" for i in range(800)]
+    for name in paths:
+        (home / "workspace/projects/alpha" / name).write_bytes(b"x")
+    plan = {**draft["plan"], "scope": paths, "artifact_paths": paths}
+    large = create_workflow(home / "memory.db", owner=workflow_owner(_SESSION_STATE),
+                            request_id="large-draft", plan=plan,
+                            artifact_baseline=collect_artifact_baseline(plan, session_state=_SESSION_STATE))
+    task_id = anchor("context", output_format="dict")["facts"]["task"]["value"]["task_window_id"]
+    for hop in range(2):
+        durable = tmp_path / f"large-durable-{hop}"
+        snapshot(home, durable)
+        home = tmp_path / f"large-restored-{hop}"
+        restore(home, target, durable, monkeypatch, task_id)
+    # Import the current runtime collectors after rebootstrap invalidates modules.
+    from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+    from odibi_anchor._dispatcher._workflow_evidence import check_artifact_baseline
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+    from odibi_anchor.codebase._workflow import read_workflow
+
+    state = read_workflow(home / "memory.db", owner=workflow_owner(_SESSION_STATE),
+                          workflow_id=large["workflow_id"])
+    observed = check_artifact_baseline(state, session_state=_SESSION_STATE, path=home / "memory.db")
+    assert len(observed["files"]) == 800
+    with sqlite3.connect(home / "memory.db") as connection:
+        assert connection.execute("SELECT max(length(receipt_json)) FROM workflow_artifact_restores").fetchone()[0] <= 256000
+    mutate(home / "workspace/projects/alpha" / paths[-1], "same_bytes")
+    with pytest.raises(RuntimeError, match="pre-plan artifact changed"):
+        check_artifact_baseline(state, session_state=_SESSION_STATE, path=home / "memory.db")
