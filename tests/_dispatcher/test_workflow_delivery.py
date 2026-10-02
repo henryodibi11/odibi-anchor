@@ -31,12 +31,15 @@ def delivery(tmp_path, monkeypatch):
             "criteria": [{"id": "constant", "expected": "result is 2", "method": "pytest",
                           "test_targets": ["tests/test_constant.py"]}]}
     db = tmp_path / "authority.db"
-    workflow = w.create_workflow(db, owner=a.workflow_owner(producer), request_id="create", plan=plan)
+    baseline = e.collect_artifact_baseline(plan, session_state=producer)
+    workflow = w.create_workflow(db, owner=a.workflow_owner(producer), request_id="create", plan=plan,
+                                 artifact_baseline=baseline)
     producer.workflow_binding = a.bind_workflow(db, session_state=producer, workflow_id=workflow["workflow_id"])
     persist_accepted_task(db, session_state=producer, task_stage={"trust_domain": "personal"}, task_result=result())
     w.transition_workflow(db, owner=a.workflow_owner(producer), workflow_id=workflow["workflow_id"],
                           expected_generation=0, request_id="plan", operation="accept_plan",
-                          payload={"baseline": {"task_window_id": producer.task_window_id}, "authority_ref": "fixture"})
+                          payload={"baseline": {"task_window_id": producer.task_window_id, "artifact_observation": baseline},
+                                   "authority_ref": "fixture"})
     artifact = Path(producer.artifact_root) / "notebooks/result.md"
     artifact.parent.mkdir()
     artifact.write_bytes(b"Result: 2\n")

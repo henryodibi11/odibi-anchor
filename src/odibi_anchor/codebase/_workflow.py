@@ -150,6 +150,54 @@ def _matching(value: dict[str, Any], state: dict[str, Any]) -> None:
         raise WorkflowError("stale_evidence", "evidence must match the exact plan and candidate")
 
 
+def reconciliation_evidence(state: dict[str, Any]) -> dict[str, Any]:
+    """Project only exact retained obligations and evidence, never byte-readback inference.
+
+    Unsupported obligations stay unavailable. Existing criterion and producer
+    closure evidence are the only supported sources; this is not a ticket writer.
+    """
+    contract = state["plan"].get("reconciliation")
+    proof = {"workflow_id": state["workflow_id"], "plan_sha256": state["plan_sha256"],
+             "candidate_sha256": digest(state["candidate"]), "contract_sha256": digest(contract),
+             "status": "unavailable", "requirements": []}
+    if not isinstance(contract, dict) or not isinstance(contract.get("requirements"), list):
+        return {**proof, "reason": "Plan reconciliation contract is unavailable"}
+    requirements = contract["requirements"]
+    if not requirements:
+        reason = contract.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return {**proof, "reason": "An empty obligation set requires an explicit plan rationale"}
+        return {**proof, "status": "satisfied", "reason": reason, "basis": "explicit_empty_plan_obligations"}
+    ids = [item.get("id") if isinstance(item, dict) else None for item in requirements]
+    if (not all(isinstance(item, str) and item.strip() for item in ids)
+            or len(ids) != len(set(ids))):
+        return {**proof, "reason": "Reconciliation obligations require unique explicit IDs"}
+    qualification = state.get("qualification") or {}
+    bound = {key: proof[key] for key in ("plan_sha256", "candidate_sha256")}
+    for obligation in requirements:
+        entry = {"obligation": obligation, "status": "unavailable", "evidence_ref": None}
+        method = obligation.get("method")
+        if method == "qualification_criterion" and set(obligation) == {"id", "method", "criterion_id"}:
+            matches = [check for check in qualification.get("checks", [])
+                       if check.get("criterion_id") == obligation["criterion_id"]]
+            entry["status"] = "unsatisfied"
+            if (len(matches) == 1 and matches[0].get("status") == "satisfied"
+                    and all(matches[0].get(key) == value for key, value in bound.items())):
+                entry.update(status="satisfied", evidence_ref=digest(matches[0]))
+        elif method == "producer_learning" and set(obligation) == {"id", "method"}:
+            receipt = qualification.get("producer_terminal_record_sha256")
+            entry["status"] = "unsatisfied"
+            if receipt and all(qualification.get(key) == value for key, value in bound.items()):
+                entry.update(status="satisfied", evidence_ref=receipt,
+                             producer=state["candidate"]["producer"])
+        proof["requirements"].append(entry)
+    statuses = {item["status"] for item in proof["requirements"]}
+    proof["status"] = "unavailable" if "unavailable" in statuses else (
+        "unsatisfied" if "unsatisfied" in statuses else "satisfied"
+    )
+    return proof
+
+
 def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Pure transition predicate; retained snapshots never retroactively change."""
     result = json.loads(canonical(state))
@@ -205,6 +253,7 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
                       plan_sha256=digest(plan), admission=None, candidate=None, qualification=None,
                       approval=None, delivery=None, verification=None, blocker=None,
                       measurements={}, review_result=None)
+        result["artifact_baseline"] = payload.get("artifact_baseline")
         return result
     if operation == "resume":
         if state["status"] != "blocked":
@@ -301,7 +350,9 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
                 or payload.get("observed_identity") != state["candidate"]["identity"]
                 or payload.get("method") != "readback" or payload.get("status") != "satisfied"):
             raise WorkflowError("destination_unverified", "independent matching destination readback required")
-        if payload.get("reconciliation") != "satisfied":
+        reconciliation = reconciliation_evidence(state)
+        if (reconciliation["status"] != "satisfied"
+                or payload.get("reconciliation") != reconciliation):
             raise WorkflowError("missing_evidence", "required reconciliation remains owed")
         result.update(progress="delivery_verified", status="completed", verification=payload,
                       completed=True)
@@ -403,7 +454,7 @@ def _append(connection, state, request_id, request, previous):
 
 
 def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: str,
-                    plan: dict[str, Any]) -> dict[str, Any]:
+                    plan: dict[str, Any], artifact_baseline: dict[str, Any] | None = None) -> dict[str, Any]:
     """Create draft authority; request replay never invents historical evidence."""
     identity = _owner(owner)
     request_id = _text(request_id, "request_id")
@@ -424,6 +475,8 @@ def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: s
                  "candidate": None, "qualification": None, "approval": None,
                  "delivery": None, "verification": None, "blocker": None, "completed": False,
                  "measurements": {}, "review_result": None}
+        if artifact_baseline is not None:
+            state["artifact_baseline"] = _object(artifact_baseline, "artifact_baseline")
         _required_child_receipts(connection, state, identity, complete=False)
         return _append(connection, state, request_id, request, "")
 

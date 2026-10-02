@@ -740,6 +740,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'arrays, unresolved_decisions=[], destination and criteria. Declare exact source_paths '
         'or artifact_paths for candidate collection. Optional required_children pin workflow_id '
         'and plan_sha256; required children must finish before parent qualification.',
+        'Artifact drafts retain a pre-plan byte/metadata baseline. Changed planned outputs '
+        'cannot be admitted or laundered by registering them later. Ancillary planning notes '
+        'remain writable; historical missing baselines require recovery, not backfilling.',
         '`criteria`: unique id, expected and method. For method="pytest", test_targets is an '
         'exact list; measure with anchor("test", target=[...], workflow_criterion="id", '
         'output_format="dict"). For method="artifact_sha256", expected_sha256 maps every '
@@ -755,6 +758,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`prepare_delivery` grants no authority. request_delivery_approval obtains explicit human '
         'candidate-and-destination approval; verify_delivery independently reads that destination. '
         'Only delivery_verified is complete. No command pushes, merges, publishes or deploys.',
+        '`reconciliation`: declare requirements with unique id and method: qualification_criterion '
+        'plus criterion_id, or producer_learning. Empty requirements need an explicit reason. '
+        'Missing/unsupported contracts stay unavailable; missing evidence stays unsatisfied. '
+        'Destination bytes alone never discharge these obligations; delivered is not completed.',
         '`destination`: managed_artifacts; github_ref with repository/ref; github_release with '
         'repository/tag; pypi_release with name/version; databricks_workspace_files with host. '
         'Only supported exact candidate/readback combinations qualify; workspace FILE bytes only, '

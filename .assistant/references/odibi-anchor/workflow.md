@@ -1026,6 +1026,35 @@ on a fresh source or substantive artifact task, then accept the plan before edit
 project still requires separate owner approval. This migration does not authorize
 plain non-Git source edits or any external delivery action.
 
+Artifact workflow creation records the exact planned `artifact_paths` as absent
+or existing regular files (digest, size and modification metadata). Acceptance
+compares that retained pre-plan observation before admitting implementation.
+Draft output registration, changed/deleted/restored output bytes, links and stale
+baselines block; unrelated planning notes remain governed ancillary artifacts.
+Replaying creation never refreshes a baseline. Historical drafts/candidates that
+lack admission evidence cannot be qualified by observing their current bytes.
+Preserve them and recover at a safe boundary; do not rewrite immutable history.
+These are bounded filesystem observations, not locks or an OS sandbox.
+
+Destination byte readback and reconciliation are separate proofs. A plan must
+declare `reconciliation={"requirements": [...]}` before verified completion.
+Supported obligations are `{"id": "docs", "method": "qualification_criterion",
+"criterion_id": "docs-check"}` (the exact retained, satisfied criterion for the
+same candidate) and `{"id": "learning", "method": "producer_learning"}` (the
+verified producer gate/learning closure). Use a criterion that actually proves
+the named obligation; a passing unrelated test does not prove documentation or
+ticket state. No ticket/decision service observer is implied. Unsupported methods
+remain `unavailable`; missing criterion proof remains `unsatisfied`.
+
+When no reconciliation is owed, declare `{"requirements": [], "reason": "<why
+this bounded plan has no linked obligations>"}` explicitly. Missing historical
+contracts are unavailable, never silently interpreted as an empty set. Matching
+destination bytes may advance to `delivered` while reconciliation remains owed;
+`completed` stays false and `delivery_verified` is blocked. The retained proof
+binds workflow, plan, candidate, obligation contract and each exact evidence ref.
+Resolve the obligation or recover/replan with explicit authority, never drop it
+merely to obtain a green completion status.
+
 Interrupted legacy source tasks retain exact `anchor("task_rebind")` recovery;
 their original baseline and unphased history are not rewritten. A historical
 handoff is not permission to create new unphased source authority. Read-only tasks

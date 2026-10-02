@@ -41,12 +41,22 @@ def runtime(tmp_path, monkeypatch, request):
             "artifact_paths": ["notebooks/report.md"], "exclusions": [], "constraints": [],
             "risks": [], "stop_conditions": [], "unresolved_decisions": [],
             "destination": {"kind": "managed_artifacts"},
+            "reconciliation": {"requirements": [], "reason": "Isolated report has no linked external obligations"},
             "criteria": [{"id": "report", "expected": "Report contract holds", "method": "pytest",
                           "test_targets": ["test_report.py"]}]}
-    if getattr(request, "param", None) == "artifact":
+    parameter = getattr(request, "param", None)
+    if parameter == "artifact" or isinstance(parameter, dict):
         plan["criteria"] = [{"id": "report", "expected": "Exact Result: 5 line",
                              "method": "artifact_sha256", "expected_sha256": {
                                  "notebooks/report.md": hashlib.sha256(b"Result: 5\n").hexdigest()}}]
+    if isinstance(parameter, dict):
+        if parameter["reconciliation"] is None:
+            del plan["reconciliation"]
+        else:
+            plan["reconciliation"] = parameter["reconciliation"]
+    if getattr(request, "param", None) == "preexisting":
+        report.parent.mkdir(exist_ok=True)
+        report.write_bytes(b"Original report\n")
     draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
     anchor("review", output_format="dict")
     anchor("gate", output_format="dict")
@@ -681,6 +691,7 @@ def source_runtime(tmp_path, monkeypatch, request):
             "execution_mode": "source_change", "scope": ["source.py"], "source_paths": ["source.py"],
             "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
             "unresolved_decisions": [], "destination": {"kind": "github_ref", "repository": "acme/app", "ref": "refs/heads/main"},
+            "reconciliation": {"requirements": [], "reason": "Disposable source fixture has no linked obligations"},
             "criteria": [{"id": "constant", "expected": "VALUE equals 2", "method": "pytest",
                           "test_targets": ["test_source.py"]}]}
     draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
@@ -912,3 +923,94 @@ def test_fresh_standalone_source_rejection_preserves_authority_and_files(tmp_pat
         if "accepted_task_records" in tables:
             assert connection.execute("SELECT count(*) FROM accepted_task_records").fetchone()[0] == 0
     assert sorted(p.name for p in target.iterdir()) == [".git"]
+
+
+@pytest.mark.parametrize("runtime,mutation", [
+    (None, "write"), ("preexisting", "write"), ("preexisting", "delete"),
+    ("preexisting", "restore"), (None, "symlink"), ("preexisting", "symlink"),
+], indirect=["runtime"])
+def test_draft_artifact_mutation_cannot_be_laundered_at_admission(runtime, mutation):
+    anchor, home, _, _ = runtime
+    output = home / "workspace/projects/alpha/notebooks/report.md"
+    output.parent.mkdir(exist_ok=True)
+    old = output.read_bytes() if output.exists() else None
+    if mutation == "symlink":
+        output.unlink(missing_ok=True)
+        output.symlink_to(home / "other.md")
+    elif mutation == "delete":
+        output.unlink()
+    else:
+        output.write_bytes(b"Result: 5\n")
+        if mutation == "restore" and old is not None:
+            output.write_bytes(old)
+    with pytest.raises(RuntimeError, match="pre-plan artifact"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"]["progress"] == "draft"
+
+
+def test_draft_output_registration_requires_plan_but_notes_remain_writable(runtime):
+    anchor, home, _, _ = runtime
+    directory = home / "workspace/projects/alpha/notebooks"
+    directory.mkdir(exist_ok=True)
+    note = directory / "plan-notes.md"
+    note.write_text("Planning evidence, not the report output.\n")
+    assert anchor("touched", str(note), output_format="dict")
+    with pytest.raises(RuntimeError, match="accepted active plan"):
+        anchor("touched", str(directory / "report.md"), output_format="dict")
+    assert advance(anchor, "accept_plan")["progress"] == "planned"
+
+
+def test_draft_creation_replay_does_not_refresh_artifact_baseline(runtime):
+    anchor, home, _, draft = runtime
+    output = home / "workspace/projects/alpha/notebooks/report.md"
+    output.parent.mkdir(exist_ok=True)
+    output.write_bytes(b"Result: 5\n")
+    replay = anchor("workflow", "create", plan=draft["plan"], request_id="draft", output_format="dict")
+    assert replay["state"] == draft
+    with pytest.raises(RuntimeError, match="pre-plan artifact"):
+        advance(anchor, "accept_plan")
+
+
+@pytest.mark.parametrize("runtime", ["preexisting"], indirect=True)
+def test_unchanged_preexisting_artifact_has_explicit_admission_baseline(runtime):
+    anchor, _, _, _ = runtime
+    admitted = advance(anchor, "accept_plan")
+    baseline = admitted["admission"]["baseline"].get("artifact_observation")
+    assert baseline is not None
+    assert baseline["files"]["notebooks/report.md"]["sha256"] == hashlib.sha256(b"Original report\n").hexdigest()
+
+
+@pytest.mark.parametrize("runtime,expected", [
+    ({"reconciliation": None}, "unavailable"),
+    ({"reconciliation": {"requirements": [], "reason": ""}}, "unavailable"),
+    ({"reconciliation": {"requirements": [{"id": "ticket", "method": "github_issue"}]}}, "unavailable"),
+    ({"reconciliation": {"requirements": [{"id": "docs", "method": "qualification_criterion",
+                                          "criterion_id": "missing"}]}}, "unsatisfied"),
+    ({"reconciliation": {"requirements": [{"id": "docs", "method": "qualification_criterion",
+                                          "criterion_id": "report"},
+                                         {"id": "learning", "method": "producer_learning"}]}}, "satisfied"),
+], indirect=["runtime"])
+def test_destination_bytes_do_not_pay_unrelated_reconciliation(approved_runtime, expected):
+    anchor, _, _, _ = approved_runtime
+    if expected != "satisfied":
+        with pytest.raises(RuntimeError, match="reconciliation"):
+            advance(anchor, "verify_delivery")
+        state = anchor("workflow", output_format="dict")["state"]
+        assert state["progress"] == "delivered" and state["completed"] is False
+        proof = state["delivery"]["reconciliation"]
+    else:
+        state = advance(anchor, "verify_delivery")
+        assert state["progress"] == "delivery_verified" and state["completed"] is True
+        proof = state["verification"]["reconciliation"]
+    assert proof["status"] == expected
+    assert proof["plan_sha256"] == state["plan_sha256"]
+    assert proof["candidate_sha256"] == state["qualification"]["candidate_sha256"]
+
+
+def test_draft_replan_cannot_adopt_unadmitted_output(runtime):
+    anchor, home, _, draft = runtime
+    output = home / "workspace/projects/alpha/notebooks/report.md"
+    output.parent.mkdir(exist_ok=True)
+    output.write_bytes(b"Result: 5\n")
+    with pytest.raises(RuntimeError, match="pre-plan artifact"):
+        advance(anchor, "replan", plan={**draft["plan"], "goal": "Launder changed bytes"}, reason="Retry")

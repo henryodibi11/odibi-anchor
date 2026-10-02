@@ -7,6 +7,7 @@ import pytest
 from odibi_anchor._dispatcher._workflow_admission import bind_workflow, workflow_owner
 from odibi_anchor._dispatcher._workflow_evidence import (
     bind_review,
+    collect_artifact_baseline,
     collect_candidate,
     collect_review,
     collect_test_measurement,
@@ -35,13 +36,16 @@ def work(tmp_path, request):
             "criteria": [{"id": "constant", "expected": "VALUE is 2", "method": "pytest",
                           "test_targets": ["tests/test_constant.py"]}]}
     db = tmp_path / "authority.db"
-    workflow = create_workflow(db, owner=workflow_owner(producer), request_id="create", plan=plan)
+    baseline = collect_artifact_baseline(plan, session_state=producer)
+    workflow = create_workflow(db, owner=workflow_owner(producer), request_id="create", plan=plan,
+                               artifact_baseline=baseline)
     producer.workflow_binding = bind_workflow(db, session_state=producer, workflow_id=workflow["workflow_id"])
     persist_accepted_task(db, session_state=producer, task_stage={"trust_domain": "personal"}, task_result=result())
     workflow = transition_workflow(
         db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
         expected_generation=0, request_id="plan", operation="accept_plan",
-        payload={"baseline": {"task_window_id": producer.task_window_id}, "authority_ref": "owner:fixture"},
+        payload={"baseline": {"task_window_id": producer.task_window_id, "artifact_observation": baseline},
+                 "authority_ref": "owner:fixture"},
     )
     if mode == "source_change":
         (Path(producer.target_root) / "source.py").write_text("VALUE = 2\n")

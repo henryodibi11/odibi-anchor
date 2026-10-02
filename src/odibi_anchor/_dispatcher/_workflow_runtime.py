@@ -38,6 +38,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     )
     from odibi_anchor._dispatcher._workflow_evidence import (
         _accepted_task,
+        check_artifact_baseline,
+        collect_artifact_baseline,
         collect_artifact_measurement,
         collect_candidate,
         collect_plan_baseline,
@@ -69,7 +71,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         if command == "create":
             if workflow_id is not None or expected_generation is not None:
                 raise ValueError("create accepts plan and request_id, not existing workflow authority")
-            state = create_workflow(path, owner=workflow_owner(session_state), request_id=request_id, plan=plan)
+            state = create_workflow(
+                path, owner=workflow_owner(session_state), request_id=request_id, plan=plan,
+                artifact_baseline=collect_artifact_baseline(plan, session_state=session_state),
+            )
         else:
             prior = None
             binding = accepted["task"].get("workflow_binding")
@@ -152,7 +157,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         )
                         expected_generation = state["generation"]
                 elif command == "replan":
-                    payload = {"plan": plan, "reason": reason}
+                    if state["progress"] == "draft" and state["plan"]["execution_mode"] == "artifact_only":
+                        check_artifact_baseline(state, session_state=session_state)
+                    payload = {"plan": plan, "reason": reason,
+                               "artifact_baseline": collect_artifact_baseline(plan, session_state=session_state)}
                 elif command == "resume":
                     payload = {"resolution": resolution}
                 elif command == "block":

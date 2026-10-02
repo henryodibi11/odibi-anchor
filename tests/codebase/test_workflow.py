@@ -31,6 +31,7 @@ def plan(request):
             "stop_conditions": ["Changed input contract"], "unresolved_decisions": [],
             "criteria": [{"id": "AC1", "expected": "invalid order is rejected", "method": "pytest"},
                          {"id": "AC2", "expected": "valid order stays accepted", "method": "pytest"}],
+            "reconciliation": {"requirements": [], "reason": "No linked obligations in this isolated transition fixture"},
             "destination": {"kind": "git", "repository": "alpha", "ref": "main"}}
 
 
@@ -88,7 +89,12 @@ def delivered(run):
 
 def readback(state):
     return {**binding(state), "observer": "github:read-api", "evidence_ref": "readback:1",
-            "method": "readback", "status": "satisfied", "reconciliation": "satisfied",
+            "method": "readback", "status": "satisfied",
+            "reconciliation": {**binding(state), "workflow_id": state["workflow_id"],
+                               "contract_sha256": checksum(state["plan"]["reconciliation"]),
+                               "status": "satisfied", "requirements": [],
+                               "basis": "explicit_empty_plan_obligations",
+                               "reason": state["plan"]["reconciliation"]["reason"]},
             "destination": state["plan"]["destination"], "observed_identity": "b" * 40}
 
 
@@ -434,3 +440,13 @@ def test_dependency_graph_width_is_bounded(family):
     children = [family(f"leaf-{index}").initial for index in range(101)]
     with pytest.raises(workflow.WorkflowError, match="dependency graph exceeds"):
         family("too-wide", children)
+
+
+@pytest.mark.parametrize("field", ["workflow_id", "plan_sha256", "candidate_sha256", "contract_sha256", "requirements"])
+def test_reconciliation_proof_cannot_be_reused_or_forged(run, field):
+    state = delivered(run)
+    payload = readback(state)
+    payload["reconciliation"][field] = [] if field != "requirements" else ["forged"]
+    with pytest.raises(workflow.WorkflowError, match="reconciliation"):
+        run("verify_delivery", payload)
+    assert workflow.read_workflow(run.path, owner=state["owner"], workflow_id=state["workflow_id"]) == state

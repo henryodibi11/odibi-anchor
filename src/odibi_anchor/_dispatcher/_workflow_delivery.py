@@ -19,7 +19,14 @@ from urllib.parse import quote
 
 from odibi_anchor._dispatcher._workflow_admission import workflow_owner
 from odibi_anchor._dispatcher._workflow_evidence import collect_candidate, producer_completion, runtime_environment
-from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow, transition_workflow
+from odibi_anchor.codebase._workflow import (
+    WorkflowError,
+    canonical,
+    digest,
+    read_workflow,
+    reconciliation_evidence,
+    transition_workflow,
+)
 
 _OPERATIONS = {"managed_artifacts": "deliver_artifacts", "github_ref": "push",
                "github_release": "publish_release", "pypi_release": "publish_package",
@@ -292,4 +299,4 @@ def observe_destination(path, *, session_state, workflow_id, workspace_client=No
             "method": "readback", "status": "satisfied", "observer": "anchor." + kind,
             "evidence_ref": digest(observed), "observed": observed,
             "consistency": "bounded readback, not a destination lock or atomic multi-object snapshot",
-            "observed_at": datetime.now(UTC).isoformat(), "reconciliation": "satisfied"}
+            "observed_at": datetime.now(UTC).isoformat(), "reconciliation": reconciliation_evidence(state)}

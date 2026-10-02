@@ -132,19 +132,26 @@ def bound_workflow(path: str | Path, *, session_state: Any) -> dict[str, Any] | 
 
 
 def enforce_workflow_admission(path: str | Path, *, session_state: Any,
-                               effects: Collection[str], source_targets: Collection[str] = ()) -> None:
+                               effects: Collection[str], source_targets: Collection[str] = (),
+                               artifact_targets: Collection[str] = ()) -> None:
     """Reject implementation outside an accepted, active, exact workflow plan.
 
     Managed planning/evidence writes retain their existing mode/path checks. Reads
     and recovery remain possible after qualification and terminal task closure.
     """
-    if not set(effects).intersection({"source_write", "data_write", "external_mutation"}):
+    implementation_effects = set(effects).intersection({"source_write", "data_write", "external_mutation"})
+    if not implementation_effects and not artifact_targets:
         return
     if data_only_legacy_exception(session_state.active_task_profile) and "source_write" in effects:
         raise WorkflowError("wrong_mode", "data-only compatibility never permits source-write effects")
     state = bound_workflow(path, session_state=session_state)
     if state is None:
         return
+    if not implementation_effects:
+        root = Path(session_state.artifact_root).resolve()
+        outputs = {root / name for name in state["plan"].get("artifact_paths", [])}
+        if not any((root / target).absolute() in outputs for target in artifact_targets):
+            return  # Ancillary planning/evidence is not implementation of an output.
     if "external_mutation" in effects:
         raise WorkflowError("authority_required", "workflow phase never authorizes external mutation")
     if (state["status"] != "active" or state["phase"] != "implement_and_qualify"

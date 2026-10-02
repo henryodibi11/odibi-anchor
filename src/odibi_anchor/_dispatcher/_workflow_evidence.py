@@ -56,10 +56,65 @@ def _accepted_task(path, session_state, task_window_id, *, require_open=False):
         connection.close()
 
 
+def collect_artifact_baseline(plan, *, session_state):
+    """Observe planned outputs before implementation, including explicit absence.
+
+    Metadata detects same-byte rewrites; this is a bounded observation, not a
+    filesystem lock. Ancillary planning/evidence artifacts are not output paths.
+    """
+    from odibi_anchor._utils._session_state import is_managed_artifact_path
+
+    if not isinstance(plan, dict) or plan.get("execution_mode") != "artifact_only":
+        return None
+    root = Path(session_state.artifact_root).resolve()
+    files = {}
+    for name in _paths(plan, "artifact_paths"):
+        item = root / name
+        if (any(part.is_symlink() for part in (item, *item.parents) if part.is_relative_to(root))
+                or not item.resolve().is_relative_to(root)
+                or not is_managed_artifact_path(str(item), artifact_root=str(root),
+                                                target_root=session_state.target_root)):
+            raise WorkflowError("out_of_scope", "pre-plan artifact requires a managed non-link path")
+        try:
+            if not item.exists():
+                files[name] = None
+                continue
+            if not item.is_file():
+                raise WorkflowError("unavailable", "pre-plan artifact must be a regular file or absent")
+            before = item.stat()
+            data = item.read_bytes()
+            after = item.stat()
+            if any(getattr(before, key) != getattr(after, key) for key in (
+                "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns",
+            )):
+                raise WorkflowError("stale_evidence", "pre-plan artifact changed during observation")
+            files[name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                           "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns}
+        except OSError as exc:
+            raise WorkflowError("unavailable", "pre-plan artifact observation unavailable") from exc
+    return {"plan_sha256": digest(plan), "files": files}
+
+
+def check_artifact_baseline(state, *, session_state):
+    """Never replace unavailable historical evidence with a current snapshot."""
+    baseline = state.get("artifact_baseline")
+    if not baseline or baseline.get("plan_sha256") != state["plan_sha256"]:
+        raise WorkflowError("missing_evidence", "pre-plan artifact baseline unavailable; preserve work and recover authority")
+    observed = collect_artifact_baseline(state["plan"], session_state=session_state)
+    if observed != baseline:
+        raise WorkflowError("stale_evidence", "pre-plan artifact changed; preserve work and recover authority")
+    return observed
+
+
 def collect_plan_baseline(path, *, session_state, record):
-    """Observe source admission without laundering pre-plan edits or adoption."""
+    """Observe admission without laundering pre-plan edits or adoption."""
     baseline_ref = {"accepted_task_record": record["record_id"]}
-    if record["task"]["profile"]["execution_mode"] != "source_change":
+    mode = record["task"]["profile"]["execution_mode"]
+    if mode == "artifact_only":
+        state = read_workflow(path, owner=workflow_owner(session_state),
+                              workflow_id=record["task"]["workflow_binding"]["workflow_id"])
+        return {**baseline_ref, "artifact_observation": check_artifact_baseline(state, session_state=session_state)}
+    if mode != "source_change":
         return baseline_ref
     from odibi_anchor._repository_snapshot import capture_task_change_scope
     from odibi_anchor.codebase._task_authority import _restore_baseline
@@ -226,6 +281,11 @@ def collect_candidate(path: str | Path, *, session_state: Any,
     elif mode == "artifact_only":
         from odibi_anchor._utils._session_state import is_managed_artifact_path
 
+        baseline = state.get("artifact_baseline")
+        admitted = (state.get("admission") or {}).get("baseline", {}).get("artifact_observation")
+        if (not baseline or baseline.get("plan_sha256") != state["plan_sha256"]
+                or admitted != baseline):
+            raise WorkflowError("missing_evidence", "candidate lacks exact pre-plan artifact admission evidence")
         kind = "managed_artifacts"
         root = Path(session_state.artifact_root).resolve()
         snapshot = {}

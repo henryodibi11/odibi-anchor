@@ -354,6 +354,7 @@ def run_pre_dispatch_enforcement(
             _ENV["memory_db"], session_state=session_state, effects=resolution.effects,
             source_targets=(kwargs["target"],)
             if action in {"safe", "semantic"} and "target" in kwargs else (),
+            artifact_targets=args[:1] if action == "touched" else (),
         )
 
     task_baseline = getattr(session_state, "task_repository_baseline", None)
