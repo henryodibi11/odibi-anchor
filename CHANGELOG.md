@@ -2,6 +2,35 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.22] - 2026-10-02
+
+### Added
+
+- Durable Plan → Implement & Qualify → Deliver workflows for substantive work, with
+  exact plan/candidate evidence, separate high-risk review tasks, explicit human delivery
+  authority, and supported GitHub, PyPI, managed-artifact and workspace-file readback.
+- Distinct implemented, qualified, approved-for-delivery, delivered and delivery-verified
+  states. Only verified destination completion completes a workflow; local gates do not.
+
+### Fixed
+
+- Pre-plan artifact admission prevents draft-output laundering and preserves verified
+  snapshot/restore provenance through implementation and exact task rebind qualification.
+- Reconciliation remains a separate evidenced obligation from destination byte readback.
+- Task-local drift baselines and the unsupported/unphased data-only compatibility status
+  survive the relevant runtime and recovery boundaries.
+
+### Operational restrictions
+
+- Snapshot/restore remains single-writer: one active writer per durable authority, with
+  exclusive access to restoration destinations for the entire operation. A pre-existing
+  collision-cleanup race can delete a competing writer's directory and requires a separate
+  repair; this release neither fixes it nor qualifies concurrent/shared-destination restore.
+- Ordinary source edits in plain non-Git folders remain blocked. Historical evidence is
+  never synthesized, and old runtimes cannot resume workflow-bound v2 task authority.
+- High-risk review records a separate accepted read-only task with
+  `reviewer_authentication=none`; it does not claim distinct authenticated principals.
+
 ## [0.3.21] - 2026-10-01
 
 ### Fixed

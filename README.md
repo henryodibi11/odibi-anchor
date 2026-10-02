@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.21"
+python -m pip install "odibi-anchor==0.3.22"
 anchor help
 ```
 
@@ -36,7 +36,7 @@ For source development, clone the repository, create a virtual environment, and 
 Install the MCP extra and configure one long-lived stdio server:
 
 ```bash
-python -m pip install "odibi-anchor[mcp]==0.3.21"
+python -m pip install "odibi-anchor[mcp]==0.3.22"
 export ANCHOR_HOME=/absolute/writable/odibi-anchor-state
 export ANCHOR_PROJECT_ID=my-project
 export ANCHOR_PROJECT_ROOT=/absolute/path/to/my-project
@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.21"
+%pip install "odibi-anchor[databricks]==0.3.22"
 dbutils.library.restartPython()
 ```
 
@@ -145,6 +145,14 @@ new tasks are established through the normal lifecycle.
 Server routing is an immutable binding between `ANCHOR_PROJECT_ID` and the exact canonical `ANCHOR_PROJECT_ROOT`. Startup verifies the ID, registered target, and requested root agree. If the root matches exactly one managed project, `launch()` can derive its ID; ambiguous roots fail closed and require an explicit ID. Once bound, changing environment variables or `workspace/.active_project` cannot redirect that process. `.active_project` is an interactive preference only—**it is not routing authority**.
 
 Concurrent runtimes may share an `ANCHOR_HOME` only when it is a **local filesystem** that provides the required locking and atomic filesystem semantics. Do not place a concurrently shared home on DBFS, object storage, an NFS-like mount, or another network/distributed filesystem. Bind every process explicitly, use distinct project IDs for distinct roots, and use a separate per-project `ANCHOR_HOME` when local-filesystem guarantees are uncertain. A shared home does not make same-project conflicting writers safe.
+
+**Snapshot/restore requires a single writer.** Use one active writer per durable authority,
+and do not restore while another agent, process, or person can create or modify the destination.
+A known pre-existing collision-cleanup race can delete a competing writer's directory after
+the initial absence check. This release does not repair that race or qualify concurrent restore;
+exclusive access is an operational restriction, not a distributed lock. If exclusivity cannot
+be established, stop rather than retry against a destination another writer may own.
+Independent-compute concurrency is separately tracked in [#22](https://github.com/henryodibi11/odibi-anchor/issues/22).
 
 ## Security and support
 
