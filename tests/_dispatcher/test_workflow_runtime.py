@@ -26,11 +26,16 @@ def runtime(tmp_path, monkeypatch, request):
     anchor, _, _ = init(root=str(target), project="alpha", output_format="dict")
     anchor("orient", output_format="dict")
     anchor("new_session", name="workflow_plan", inline=True, output_format="dict")
-    accepted = anchor("task", "Plan exact report output", goal="Qualify report bytes", mode="planning",
+    with pytest.raises(RuntimeError, match="Fresh substantive artifact tasks require"):
+        anchor("task", "Produce report without workflow", goal="Qualify report bytes", mode="planning",
+               risk="medium", rigor="compact", trust_domain="personal",
+               in_scope=["notebooks/report.md"], constraints=["Managed artifacts only"],
+               acceptance_criteria=["Report matches contract"], output_format="dict")
+    accepted = anchor("task", "Plan exact report output", goal="Qualify report bytes", mode="analysis",
                       risk="low", rigor="direct", trust_domain="personal",
                       in_scope=["notebooks/report.md"], constraints=["Managed artifacts only"],
                       acceptance_criteria=["Report matches its contract"], output_format="dict")
-    assert accepted["workflow"]["status"] == "legacy_unphased"
+    assert accepted["workflow"]["status"] == "read_only_unphased"
     plan = {"schema_version": 1, "goal": "Qualify report bytes", "risk": "low",
             "execution_mode": "artifact_only", "scope": ["notebooks/report.md"],
             "artifact_paths": ["notebooks/report.md"], "exclusions": [], "constraints": [],

@@ -594,9 +594,9 @@ def run_post_dispatch(
         if task_stage is not None and "workflow_id" in task_stage:
             # Canonical fresh-task staging always includes workflow_id, even
             # when absent. Historical records/rebind do not pass through here.
-            from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+            from odibi_anchor._dispatcher._workflow_admission import require_task_workflow
 
-            require_source_workflow(
+            require_task_workflow(
                 session_state=session_state, profile=staged_profile,
                 trust_domain=task_stage.get("trust_domain"), workflow_id=task_stage["workflow_id"],
             )

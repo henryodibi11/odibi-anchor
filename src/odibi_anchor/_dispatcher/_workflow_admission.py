@@ -1,7 +1,7 @@
 """Phase admission for runtime-owned workflow bindings.
 
 This is additive to execution-mode/path/provider enforcement, never a replacement.
-Fresh source tasks require enrollment; historical task authority stays immutable.
+Fresh substantive writes require enrollment; historical task authority stays immutable.
 """
 
 from __future__ import annotations
@@ -22,12 +22,24 @@ def data_only_legacy_exception(profile: Any) -> bool:
             and not task_profile_effect_compatible("source_write", profile))
 
 
-def require_source_workflow(*, session_state: Any, profile: Any,
-                            trust_domain: str | None, workflow_id: str | None) -> None:
+def lightweight_artifact_task(profile: Any) -> bool:
+    """Use existing immutable risk/rigor classification, never a bypass flag."""
+    from odibi_anchor.assurance.evaluator import build_assurance_plan
+
+    return (profile is not None and profile.execution_mode == "artifact_only"
+            and profile.risk == "low" and profile.rigor == "direct"
+            and build_assurance_plan(profile).tier not in {"T2", "T3"})
+
+
+def require_task_workflow(*, session_state: Any, profile: Any,
+                          trust_domain: str | None, workflow_id: str | None) -> None:
     """Check fresh acceptance only; never reinterpret an immutable legacy task."""
     from odibi_anchor._dispatcher._effects import task_profile_effect_compatible
 
-    if not task_profile_effect_compatible("source_write", profile):
+    source = task_profile_effect_compatible("source_write", profile)
+    substantive_artifact = (profile is not None and profile.execution_mode == "artifact_only"
+                            and not lightweight_artifact_task(profile))
+    if not source and not substantive_artifact:
         return
     missing = [name for name, value in (
         ("project", session_state.active_project), ("trust_domain", trust_domain),
@@ -37,11 +49,12 @@ def require_source_workflow(*, session_state: Any, profile: Any,
         return
     error = WorkflowError(
         "workflow_required",
-        "Fresh source tasks require explicit managed project, trust_domain and workflow_id; "
+        f"Fresh {'source' if source else 'substantive artifact'} tasks require "
+        "explicit managed project, trust_domain and workflow_id; "
         f"missing: {', '.join(missing)}. Bind an existing authorized project with init(project=...). "
         "Declare its authorized trust_domain on the task (or ANCHOR_TRUST_DOMAIN). "
-        "In a planning task create a bounded plan with anchor('workflow', 'create', ...), "
-        "then bind its workflow_id on a fresh source task and accept_plan before edits. "
+        "In a read-only investigation task create a bounded plan with anchor('workflow', 'create', ...), "
+        "then bind its workflow_id on a fresh producer task and accept_plan before edits. "
         "Project creation requires separate explicit approval. For interrupted historical work "
         "use anchor('task_rebind'), not replacement task creation.",
     )
@@ -180,6 +193,11 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "read_only_unphased", "completed": False,
                     "delivery_verified": False, "next_step": "report_observed_result"}
+        if lightweight_artifact_task(profile):
+            return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
+                    "status": "lightweight_unphased", "completed": False,
+                    "delivery_verified": False, "next_step": "verify_bounded_result",
+                    "limitation": "Low-risk direct work only; enroll for substantive or delivery-verified outcomes."}
         if data_only_legacy_exception(session_state.active_task_profile):
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "unphased_unsupported_collector", "completed": False,

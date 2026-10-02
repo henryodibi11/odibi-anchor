@@ -334,7 +334,7 @@ def test_replacement_task_reset_clears_old_evidence_and_keeps_only_new_plan(cont
         )
     ]
     stage, projected = _project(
-        _stage(state, execution_mode="artifact_only", continuation=continuation)
+        _stage(state, execution_mode="artifact_only", risk="low", rigor="direct", continuation=continuation)
     )
 
     _post_task(state, stage, projected)

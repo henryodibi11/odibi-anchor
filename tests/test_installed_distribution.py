@@ -1556,7 +1556,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
 
         TASK = dict(
             arg0="Qualify revision-8 structured learning.", goal="Exercise the complete learning lifecycle.",
-            mode="implementation", execution_mode="artifact_only",
+            mode="implementation", execution_mode="artifact_only", risk="low", rigor="direct",
             current_state="An isolated installed-wheel target exists.",
             desired_outcome="Learning is assessed without transport drift.", constraints=["Read only target."],
             known_facts=["The candidate is an installed wheel."],
@@ -2103,7 +2103,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
         home = tmp_path / f"home-cli-{transport}"
         cli_task = {
             "arg0":"CLI learning lifecycle.", "goal":"Qualify CLI learning.", "mode":"implementation",
-            "execution_mode":"artifact_only", "current_state":"fresh",
+            "execution_mode":"artifact_only", "risk":"low", "rigor":"direct", "current_state":"fresh",
             "desired_outcome":"assessed", "constraints":["read only"], "known_facts":["wheel"],
             "evidence":[{"source":"test","observation":"wheel"}], "in_scope":["learning"], "out_of_scope":["source"],
             "risks":["drift"], "acceptance_criteria":["gate"], "stop_conditions":["failure"], "deliverables":["result"]}
@@ -3149,6 +3149,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                     goal="Prove installed state remains isolated across project routing.",
                     mode=mode,
                     execution_mode="artifact_only" if mode == "implementation" else "read_only",
+                    risk="low", rigor="direct",
                     current_state="Disposable installed-wheel fixture.",
                     desired_outcome="Only the selected managed artifact root contains records.",
                     constraints=["Do not modify target source."],
@@ -3676,6 +3677,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                             "goal": "Prove MCP refreshes routing before returning success.",
                             "mode": "implementation",
                             "execution_mode": "artifact_only",
+                            "risk": "low", "rigor": "direct",
                             "current_state": "Alpha is active on a clean committed target.",
                             "desired_outcome": "Beta is active without alpha artifact leakage.",
                             "constraints": ["Do not modify target source."],

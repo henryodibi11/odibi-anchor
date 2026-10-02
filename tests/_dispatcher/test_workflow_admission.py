@@ -127,7 +127,7 @@ def test_missing_legacy_binding_does_not_create_workflow_or_prior_evidence(tmp_p
 
 @pytest.mark.parametrize("missing", ["project", "trust_domain", "workflow_id"])
 def test_fresh_source_requires_each_explicit_authority(runtime, missing):
-    from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+    from odibi_anchor._dispatcher._workflow_admission import require_task_workflow
 
     _, session = runtime
     values = {"project": "project-a", "trust_domain": "personal", "workflow_id": "wf_explicit"}
@@ -135,7 +135,7 @@ def test_fresh_source_requires_each_explicit_authority(runtime, missing):
     session.active_project = values.pop("project")
     original_binding = session.workflow_binding.copy()
     with pytest.raises(RuntimeError, match="Fresh source tasks require") as caught:
-        require_source_workflow(session_state=session, profile=session.active_task_profile, **values)
+        require_task_workflow(session_state=session, profile=session.active_task_profile, **values)
     assert caught.value.code == "workflow_required"
     assert caught.value.context["missing_authority"] == [missing]
     assert caught.value.context["automatic_project_creation"] is False
@@ -151,17 +151,18 @@ def test_fresh_source_requires_each_explicit_authority(runtime, missing):
     ("artifact_only", [], False), ("read_only", [], False),
 ])
 def test_enrollment_uses_effects_without_widening_data_exception(mode, traits, source_capable):
-    from odibi_anchor._dispatcher._workflow_admission import require_source_workflow
+    from odibi_anchor._dispatcher._workflow_admission import require_task_workflow
 
-    profile = normalize_task_profile(work_type="change", execution_mode=mode, traits=traits)
+    profile = normalize_task_profile(work_type="change", execution_mode=mode, traits=traits,
+                                     risk="low", rigor="direct")
     session = SessionState(active_task_profile=profile)
     if source_capable:
         with pytest.raises(RuntimeError, match="project, trust_domain, workflow_id"):
-            require_source_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+            require_task_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
         session.active_project = "declared"
-        require_source_workflow(session_state=session, profile=profile, trust_domain="personal", workflow_id="wf_explicit")
+        require_task_workflow(session_state=session, profile=profile, trust_domain="personal", workflow_id="wf_explicit")
     else:
-        require_source_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+        require_task_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
 
 
 def test_read_only_lightweight_projection_never_invents_delivery(tmp_path):
@@ -173,6 +174,32 @@ def test_read_only_lightweight_projection_never_invents_delivery(tmp_path):
     assert packet["next_step"] == "report_observed_result"
     assert "state" not in packet and "binding" not in packet
     assert not db.exists()
+
+
+@pytest.mark.parametrize("risk,rigor,traits,required", [
+    ("low", "direct", [], False), ("low", "compact", [], True),
+    ("low", "full", [], True), ("medium", "direct", [], True),
+    ("high", "direct", [], True), ("low", "direct", ["destructive"], True),
+    ("low", "direct", ["schema-change"], True),
+])
+def test_artifact_enrollment_scales_with_immutable_profile(tmp_path, risk, rigor, traits, required):
+    from odibi_anchor._dispatcher._workflow_admission import require_task_workflow
+
+    profile = normalize_task_profile(work_type="communicate", execution_mode="artifact_only",
+                                     risk=risk, rigor=rigor, traits=traits)
+    session = SessionState(active_task_profile=profile)
+    if required:
+        with pytest.raises(RuntimeError, match="project, trust_domain, workflow_id"):
+            require_task_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+        session.active_project = "explicit"
+        require_task_workflow(session_state=session, profile=profile,
+                              trust_domain="personal", workflow_id="wf_explicit")
+    else:
+        require_task_workflow(session_state=session, profile=profile, trust_domain=None, workflow_id=None)
+        packet = workflow_packet(tmp_path / "absent.db", session_state=session)
+        assert packet["status"] == "lightweight_unphased"
+        assert packet["completed"] is False and packet["delivery_verified"] is False
+        assert "state" not in packet
 
 
 def test_canonical_packet_preserves_content_and_is_not_authority(runtime):

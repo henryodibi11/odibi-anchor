@@ -1005,19 +1005,24 @@ No gate-wide or exposure-based bulk confirmation occurs.
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
   `nothing_reusable_learned`. State is local—no cloud replication.
 
-## Fresh source authority and legacy recovery
+## Fresh workflow authority and legacy recovery
 
 Fresh source-capable tasks require an explicitly bound managed project, an explicit
 `trust_domain`, and a `workflow_id`. This includes profiles permitting both source
-and data writes. Standalone `init(root=...)` is still available for investigation,
+and data writes. Substantive `artifact_only` tasks require the same authority.
+The lightweight artifact path requires `risk="low"`, `rigor="direct"`, and no
+material/critical assurance escalation (T2/T3). It is for genuinely bounded trivial
+work, not a way to relabel substantive work. Standalone `init(root=...)` remains available for investigation,
 but is not sufficient authority for new source work. Neither project nor trust
 identity is inferred from a directory name, login, previous selection, or mode.
 
 Bind the existing authorized project with `init(project=...)`, declare its trust
 domain on the task (or through the configured `ANCHOR_TRUST_DOMAIN`), and create a
-bounded workflow plan in a planning task using `anchor("workflow", "create", ...)`.
+bounded workflow plan in a read-only investigation task using `anchor("workflow", "create", ...)`.
+The governance event does not grant artifact or source edit permission. Close the
+inquiry's applicable task obligations before accepting the producer task.
 Use `anchor("help", "workflow")` for the plan schema. Bind the returned workflow ID
-on a fresh source task, then accept the plan before editing. Creating a missing
+on a fresh source or substantive artifact task, then accept the plan before editing. Creating a missing
 project still requires separate owner approval. This migration does not authorize
 plain non-Git source edits or any external delivery action.
 
@@ -1027,6 +1032,27 @@ handoff is not permission to create new unphased source authority. Read-only tas
 use a lightweight `read_only_unphased` projection with `completed=false` and
 `delivery_verified=false`; reporting a checked answer creates no fictional
 destination receipt. Task-window closure and verified workflow delivery differ.
+Lightweight artifacts similarly report `lightweight_unphased`, `completed=false`
+and `delivery_verified=false`. They retain normal review, gate and learning duties
+where applicable. Use an explicit workflow even for small artifacts when verified
+destination completion is required.
+
+Replanning invalidates the old accepted binding. Context and canonical handoff
+remain readable with `binding_status="stale_plan"` and
+`next_step="close_task_then_reenroll"`; they never upgrade the immutable task.
+Close its existing obligations and bind a fresh task to the revised workflow at a
+safe boundary. Dirty source still requires exact ownership recovery. An unknown
+delivery outcome stays blocked when readback is missing, different or unavailable:
+these observations do not prove the remote operation has terminated.
+
+Plans may declare `required_children=[{"workflow_id": "wf_...", "plan_sha256": "sha256:..."}]`.
+Dependencies must have the exact same project, roots and trust authority. Parent
+qualification requires every child to be `delivery_verified` against the pinned
+plan and retains observed candidate/verification hashes. The parent still needs
+its own checks, review, approval and destination verification. Cycles, stale plans,
+missing/foreign children and graphs beyond 100 children or 20 levels block progress.
+Optional follow-up is not a satisfied required child. Revise the parent plan to
+change requirements; never count closed task windows as delivered children.
 
 ## Temporary data-only workflow compatibility
 

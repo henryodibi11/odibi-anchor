@@ -174,7 +174,7 @@ def test_public_gate_rejects_explicit_profile_target_drift(tmp_path, execution_m
         orientation = anchor("orient", output_format="dict")
         session = anchor("new_session", name="boundary", inline=True, output_format="dict")
         task = anchor("task", "Verify explicit execution boundaries", goal="Reject target drift",
-                      mode="implementation", execution_mode=sys.argv[2],
+                      mode="implementation", execution_mode=sys.argv[2], risk="low", rigor="direct",
                       acceptance_criteria=["Unauthorized target changes cannot pass"], output_format="dict")
         skill = anchor("skill_loaded", "code-comprehension", output_format="dict")
         path.write_text('{"value":2}\\n')
