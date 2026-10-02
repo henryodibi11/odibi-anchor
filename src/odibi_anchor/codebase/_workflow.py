@@ -105,6 +105,20 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
         raise ValueError("plan.risk must be low, medium or high")
     if plan.get("execution_mode") not in {"read_only", "artifact_only", "source_change", "data_change"}:
         raise ValueError("invalid plan execution_mode")
+    children = plan.get("required_children", [])
+    if not isinstance(children, list):
+        raise ValueError("plan.required_children must be an array")
+    child_ids = []
+    for child in children:
+        if not isinstance(child, dict) or set(child) != {"workflow_id", "plan_sha256"}:
+            raise ValueError("required child requires exact workflow_id and plan_sha256")
+        child_ids.append(_text(child["workflow_id"], "child.workflow_id"))
+        pin = child["plan_sha256"]
+        if (not isinstance(pin, str) or not pin.startswith("sha256:") or len(pin) != 71
+                or any(char not in "0123456789abcdef" for char in pin[7:])):
+            raise ValueError("child.plan_sha256 must be a canonical SHA256 identity")
+    if len(child_ids) != len(set(child_ids)):
+        raise ValueError("required child workflow IDs must be unique")
     if ready:
         for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions"):
             if not isinstance(plan.get(key), list):
@@ -410,6 +424,7 @@ def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: s
                  "candidate": None, "qualification": None, "approval": None,
                  "delivery": None, "verification": None, "blocker": None, "completed": False,
                  "measurements": {}, "review_result": None}
+        _required_child_receipts(connection, state, identity, complete=False)
         return _append(connection, state, request_id, request, "")
 
 
@@ -441,6 +456,46 @@ def replay_public_request(path: str | Path, *, owner: Mapping[str, Any], workflo
     return None
 
 
+def _required_child_receipts(connection, state, owner, *, complete):
+    """Read bounded exact-owner dependencies under the caller's write transaction."""
+    loaded = {}
+    checked = set()
+
+    def visit(node, ancestors):
+        identifier = node["workflow_id"]
+        if identifier in ancestors:
+            raise WorkflowError("dependency_cycle", "required child dependency cycle")
+        if len(ancestors) > 20 or len(loaded) > 100:
+            raise WorkflowError("unavailable", "dependency graph exceeds 100 nodes or 20 levels")
+        if identifier in checked:
+            return
+        for reference in node["plan"].get("required_children", []):
+            child_id = reference["workflow_id"]
+            if child_id in ancestors or child_id == identifier:
+                raise WorkflowError("dependency_cycle", "required child dependency cycle")
+            if child_id not in loaded:
+                loaded[child_id] = _events(connection, child_id, owner)[-1]["state"]
+            child = loaded[child_id]
+            if child["plan_sha256"] != reference["plan_sha256"]:
+                raise WorkflowError("stale_plan", "required child plan changed; replan the parent")
+            if complete and (child["status"] != "completed"
+                             or child["progress"] != "delivery_verified"
+                             or child["completed"] is not True
+                             or not child["candidate"] or not child["verification"]):
+                raise WorkflowError("missing_evidence", "required child is not delivery verified")
+            visit(child, ancestors | {identifier})
+        checked.add(identifier)
+
+    visit(state, set())
+    if not complete:
+        return []
+    return [{"workflow_id": child["workflow_id"], "plan_sha256": child["plan_sha256"],
+             "candidate_sha256": digest(child["candidate"]),
+             "verification_sha256": digest(child["verification"])}
+            for reference in state["plan"].get("required_children", [])
+            for child in [loaded[reference["workflow_id"]]]]
+
+
 def transition_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_id: str,
                         expected_generation: int, request_id: str, operation: str,
                         payload: dict[str, Any], public_request: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -468,5 +523,13 @@ def transition_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_
         if current["generation"] != expected_generation:
             raise WorkflowError("conflict", "workflow generation changed; refresh before acting")
         state = _apply(current, operation, request["payload"])
+        if operation in {"accept_plan", "replan", "qualify", "approve_delivery", "verify_delivery"}:
+            complete = operation in {"qualify", "approve_delivery", "verify_delivery"}
+            receipts = _required_child_receipts(connection, state, identity, complete=complete)
+            if operation == "qualify" and state["plan"].get("required_children"):
+                # Do not mutate the canonical request: exact retries compare it.
+                state["qualification"] = {**state["qualification"], "required_children": receipts}
+            elif receipts and current["qualification"].get("required_children") != receipts:
+                raise WorkflowError("stale_evidence", "required child completion changed since qualification")
         state["generation"] += 1
         return _append(connection, state, request_id, request, digest(events[-1]))

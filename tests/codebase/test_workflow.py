@@ -325,3 +325,112 @@ def test_replan_cannot_erase_risk_and_review_requirement(run, owner, plan, risk)
     with pytest.raises(workflow.WorkflowError, match="risk downgrade"):
         run("replan", {"reason": "avoid review", "plan": {**plan, "risk": risk}})
     assert workflow.read_workflow(run.path, owner=owner, workflow_id=before["workflow_id"]) == before
+
+
+@pytest.fixture
+def family(tmp_path, owner, plan):
+    """Several independently progressing workflows in one actual authority DB."""
+    path = tmp_path / "family.db"
+
+    def create(name, children=(), authority=None):
+        identity = authority or owner
+        initial = workflow.create_workflow(
+            path, owner=identity, request_id=name,
+            plan={**plan, "required_children": [
+                {"workflow_id": child["workflow_id"], "plan_sha256": child["plan_sha256"]}
+                for child in children
+            ]},
+        )
+
+        def advance(operation, payload, *, state=None, request_id=None):
+            current = state or workflow.read_workflow(path, owner=identity, workflow_id=initial["workflow_id"])
+            return workflow.transition_workflow(
+                path, owner=identity, workflow_id=initial["workflow_id"],
+                expected_generation=current["generation"],
+                request_id=request_id or f"{operation}:{current['generation']}",
+                operation=operation, payload=payload,
+            )
+
+        advance.initial = initial
+        advance.path = path
+        return advance
+
+    return create
+
+
+def test_parent_requires_all_children_and_its_own_checks(family, owner):
+    left, right = family("left"), family("right")
+    parent = family("parent", [left.initial, right.initial])
+    before = implemented(parent)
+    left_done = left("verify_delivery", readback(delivered(left)))
+    with pytest.raises(workflow.WorkflowError, match=r"required child.*verified"):
+        parent("qualify", {**qualification(before), "required_children": [{"completed": True}]})
+    assert workflow.read_workflow(parent.path, owner=owner, workflow_id=before["workflow_id"]) == before
+    right_done = right("verify_delivery", readback(delivered(right)))
+    with pytest.raises(workflow.WorkflowError, match="criterion evidence"):
+        parent("qualify", {**qualification(before), "checks": []})
+    qualified = parent("qualify", qualification(before))
+    assert parent("qualify", qualification(before), state=before) == qualified
+    assert qualified["qualification"]["required_children"] == [
+        {"workflow_id": child["workflow_id"], "plan_sha256": child["plan_sha256"],
+         "candidate_sha256": checksum(child["candidate"]),
+         "verification_sha256": checksum(child["verification"])}
+        for child in (left_done, right_done)
+    ]
+    approved = parent("approve_delivery", approval(qualified))
+    observed = parent("reconcile_delivery", {**readback(approved), "outcome": "delivered"})
+    assert parent("verify_delivery", readback(observed))["completed"] is True
+
+
+def test_child_replan_invalidates_parent_without_rewriting_history(family, owner, plan):
+    child = family("child")
+    parent = family("parent", [child.initial])
+    before = implemented(parent)
+    child("replan", {"plan": {**plan, "goal": "Changed required outcome"}, "reason": "new fact"})
+    with pytest.raises(workflow.WorkflowError, match="child plan changed"):
+        parent("qualify", qualification(before))
+    assert workflow.read_workflow(parent.path, owner=owner, workflow_id=before["workflow_id"]) == before
+
+
+def test_dependencies_reject_foreign_missing_duplicate_and_cycle(family, owner):
+    foreign = family("foreign", authority={**owner, "project_id": "other"})
+    with pytest.raises(workflow.WorkflowError, match="exact authority"):
+        family("parent-foreign", [foreign.initial])
+    with pytest.raises(workflow.WorkflowError, match="not found"):
+        family("parent-missing", [{"workflow_id": "wf_missing", "plan_sha256": "sha256:" + "0" * 64}])
+    child = family("child")
+    with pytest.raises(ValueError, match="unique"):
+        family("duplicates", [child.initial, child.initial])
+    parent = family("parent", [child.initial])
+    cycle_plan = {**child.initial["plan"], "required_children": [
+        {"workflow_id": parent.initial["workflow_id"], "plan_sha256": parent.initial["plan_sha256"]}
+    ]}
+    with pytest.raises(workflow.WorkflowError, match="cycle"):
+        child("replan", {"plan": cycle_plan, "reason": "accidental cycle"})
+
+
+@pytest.mark.parametrize("references", [None, {}, ["child"], [{"workflow_id": "wf_x"}],
+                                        [{"workflow_id": "wf_x", "plan_sha256": "latest"}]])
+def test_required_child_contract_is_not_freeform(run, plan, references):
+    with pytest.raises(ValueError, match=r"required_children|child"):
+        run("replan", {"plan": {**plan, "required_children": references}, "reason": "malformed"})
+
+
+def test_dependency_graph_is_bounded_and_exact_retry_is_historical(family, owner):
+    child = family("leaf")
+    parent = family("parent", [child.initial])
+    accepted = parent("accept_plan", {"baseline": {"head": "a" * 40}, "authority_ref": "owner"},
+                      request_id="accept")
+    child("replan", {"plan": {**child.initial["plan"], "goal": "New"}, "reason": "new fact"})
+    assert parent("accept_plan", {"baseline": {"head": "a" * 40}, "authority_ref": "owner"},
+                  state=parent.initial, request_id="accept") == accepted
+    child = family("chain-leaf")
+    with pytest.raises(workflow.WorkflowError, match="dependency graph exceeds"):
+        for index in range(25):
+            child = family(f"chain-{index}", [child.initial])
+
+
+def test_dependency_graph_width_is_bounded(family):
+    children = [family(f"leaf-{index}").initial for index in range(101)]
+    with pytest.raises(workflow.WorkflowError, match="dependency graph exceeds"):
+        family("too-wide", children)
