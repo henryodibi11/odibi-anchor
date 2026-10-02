@@ -95,13 +95,15 @@ def collect_artifact_baseline(plan, *, session_state):
     return {"plan_sha256": digest(plan), "files": files}
 
 
-def check_artifact_baseline(state, *, session_state):
+def check_artifact_baseline(state, *, session_state, path):
     """Never replace unavailable historical evidence with a current snapshot."""
+    from odibi_anchor.codebase._workflow_artifact_restore import matches_restored_baseline
+
     baseline = state.get("artifact_baseline")
     if not baseline or baseline.get("plan_sha256") != state["plan_sha256"]:
         raise WorkflowError("missing_evidence", "pre-plan artifact baseline unavailable; preserve work and recover authority")
     observed = collect_artifact_baseline(state["plan"], session_state=session_state)
-    if observed != baseline:
+    if not matches_restored_baseline(path, state=state, owner=workflow_owner(session_state), observed=observed):
         raise WorkflowError("stale_evidence", "pre-plan artifact changed; preserve work and recover authority")
     return observed
 
@@ -113,7 +115,7 @@ def collect_plan_baseline(path, *, session_state, record):
     if mode == "artifact_only":
         state = read_workflow(path, owner=workflow_owner(session_state),
                               workflow_id=record["task"]["workflow_binding"]["workflow_id"])
-        return {**baseline_ref, "artifact_observation": check_artifact_baseline(state, session_state=session_state)}
+        return {**baseline_ref, "artifact_observation": check_artifact_baseline(state, session_state=session_state, path=path)}
     if mode != "source_change":
         return baseline_ref
     from odibi_anchor._repository_snapshot import capture_task_change_scope

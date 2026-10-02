@@ -158,7 +158,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         expected_generation = state["generation"]
                 elif command == "replan":
                     if state["progress"] == "draft" and state["plan"]["execution_mode"] == "artifact_only":
-                        check_artifact_baseline(state, session_state=session_state)
+                        check_artifact_baseline(state, session_state=session_state, path=path)
                     payload = {"plan": plan, "reason": reason,
                                "artifact_baseline": collect_artifact_baseline(plan, session_state=session_state)}
                 elif command == "resume":

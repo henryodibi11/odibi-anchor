@@ -287,8 +287,10 @@ def _inspect_local_database(path: Path) -> dict[str, Any]:
         ).fetchall()
         from odibi_anchor.codebase._authority_relocation import load_relocations
         from odibi_anchor.codebase._workflow import _events, _schema
+        from odibi_anchor.codebase._workflow_artifact_restore import load_restores
 
         load_relocations(connection)
+        load_restores(connection)
         tables = {row[1] for row in objects if row[0] == "table"}
         workflow_version = (
             connection.execute("SELECT 1 FROM anchor_schema_versions WHERE domain='workflow'").fetchone()
@@ -1092,11 +1094,19 @@ def snapshot_state(
         if inspection["integrity_check"] != "ok":
             raise RuntimeError("staged snapshot failed SQLite integrity check")
         snapshot_sha256 = _sha256(staged)
+        from odibi_anchor.codebase._workflow_artifact_restore import snapshot_proofs
+
+        proofs = snapshot_proofs(staged, artifacts_source) if artifacts_source is not None else []
         artifact_manifest = (
             _stage_artifact_bundle(artifacts_source, staged_artifacts)
             if artifacts_source is not None
             else None
         )
+        if artifact_manifest is not None:
+            if snapshot_proofs(staged, artifacts_source) != proofs:
+                raise RuntimeError("draft artifact baseline changed during snapshot")
+            if proofs:
+                artifact_manifest["workflow_baselines"] = proofs
         with _snapshot_view(
             root,
             qualified["authority_id"],
@@ -1154,6 +1164,7 @@ def snapshot_state(
                         artifact_manifest is not None
                         and existing["format"] == _FORMAT_V2
                         and existing["artifacts"]["sha256"] == artifact_manifest["sha256"]
+                        and existing["artifacts"].get("workflow_baselines", []) == artifact_manifest.get("workflow_baselines", [])
                     )
                 )
             )
@@ -1446,6 +1457,9 @@ def restore_latest(
                     )
                 try:
                     shutil.copytree(staged_artifacts, artifacts_destination)
+                    from odibi_anchor.codebase._workflow_artifact_restore import append_verified_restores
+
+                    append_verified_restores(staged, projects=artifacts_destination, manifest=manifest)
                 except Exception:
                     if artifacts_destination.is_dir() and not artifacts_destination.is_symlink():
                         shutil.rmtree(artifacts_destination)

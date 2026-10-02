@@ -1324,6 +1324,44 @@ def test_package_metadata_provenance_matrix(tmp_path: Path) -> None:
     assert not audit_root.exists()
 
 
+def test_base_wheel_preserves_verified_draft_artifact_restore(tmp_path: Path) -> None:
+    """Run the public recovery/anti-laundering matrix outside source, without extras."""
+    audit_root = tmp_path / "installed-draft-restore"
+    wheels = audit_root / "wheels"
+    target = audit_root / "target"
+    wheels.mkdir(parents=True)
+    target.mkdir()
+    environment = _clean_environment(audit_root)
+    _run([sys.executable, "-m", "pip", "wheel", "--no-deps", *build_pip_arguments(),
+          "--wheel-dir", str(wheels), "."], cwd=REPOSITORY_ROOT, environment=environment, timeout=300)
+    python = _create_venv(audit_root / "venv", environment)
+    _run([str(python), "-m", "pip", "install", *install_pip_arguments(),
+          str(next(wheels.glob("odibi_anchor-*.whl"))), "pytest>=7.0"],
+         environment=environment, timeout=300)
+    for name in ("tests/__init__.py", "tests/conftest.py", "tests/_dispatcher/__init__.py",
+                 "tests/_dispatcher/test_workflow_runtime.py", "tests/_dispatcher/test_workflow_restore.py"):
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPOSITORY_ROOT / name, destination)
+    script = _write_script(target, "qualify.py", """
+        import importlib.util
+        from pathlib import Path
+        import odibi_anchor
+        from odibi_anchor.pytest_runner import run_pytest
+
+        assert "site-packages" in Path(odibi_anchor.__file__).parts
+        assert importlib.util.find_spec("numpy") is None
+        assert importlib.util.find_spec("pandas") is None
+        summary, proc = run_pytest(["tests/_dispatcher/test_workflow_restore.py", "-q"],
+                                   cwd=Path(__file__).parent, timeout=180, capture_output=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert summary["passed"] > 0 and summary["skipped"] == 0
+        print("verified-base-wheel-restore")
+    """)
+    result = _run([str(python), str(script)], cwd=target, environment=environment, timeout=240)
+    assert result.stdout.strip() == "verified-base-wheel-restore"
+
+
 def test_installed_wheel_runner_honors_ambient_canonical_plugin_requests(tmp_path: Path) -> None:
     """Qualify exact plugin provenance through every ambient request surface."""
     audit_root = tmp_path / "installed-pytest-runner"
