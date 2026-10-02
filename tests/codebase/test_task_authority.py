@@ -906,6 +906,12 @@ def test_workflow_binding_survives_rebind_without_changing_baseline(tmp_path):
     )
     persist_accepted_task(db, session_state=original,
                           task_stage={"trust_domain": "personal"}, task_result=result())
+    with sqlite3.connect(db) as connection:
+        record = json.loads(connection.execute(
+            "SELECT record_json FROM accepted_task_records",
+        ).fetchone()[0])
+    assert record["format"] == "odibi-anchor-accepted-task-v2"
+    assert record["task"]["workflow_binding"] == original.workflow_binding
     restarted = fresh_state(original, workflow_binding=None)
     rebind_latest_open_task(db, session_state=restarted)
     assert restarted.workflow_binding == original.workflow_binding
@@ -917,6 +923,33 @@ def test_legacy_rebind_clears_binding_instead_of_synthesizing_history(tmp_path):
     original = state(tmp_path)
     db = tmp_path / "memory.db"
     persist_accepted_task(db, session_state=original, task_stage={}, task_result=result())
+    with sqlite3.connect(db) as connection:
+        record = json.loads(connection.execute(
+            "SELECT record_json FROM accepted_task_records",
+        ).fetchone()[0])
+    assert record["format"] == "odibi-anchor-accepted-task-v1"
+    assert "workflow_binding" not in record["task"]
     restarted = fresh_state(original, workflow_binding={"workflow_id": "unrelated"})
     rebind_latest_open_task(db, session_state=restarted)
     assert restarted.workflow_binding is None
+
+
+@pytest.mark.parametrize("version,binding", [
+    ("v1", None), ("v1", {"workflow_id": "wf_bound"}),
+    ("v2", "absent"), ("v2", None), ("v2", {}), ("v2", []),
+    ("v3", {"workflow_id": "wf_bound"}),
+])
+def test_accepted_record_rejects_version_binding_mismatch(tmp_path, version, binding):
+    from odibi_anchor.codebase._task_authority import (
+        _validate_record,
+        build_accepted_task_record,
+    )
+
+    record = build_accepted_task_record(
+        session_state=state(tmp_path), task_stage={}, task_result=result(),
+    )
+    record["format"] = "odibi-anchor-accepted-task-" + version
+    if binding != "absent":
+        record["task"]["workflow_binding"] = binding
+    with pytest.raises(ValueError, match=r"format|workflow binding"):
+        _validate_record(record)

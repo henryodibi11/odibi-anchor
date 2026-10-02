@@ -22,6 +22,7 @@ from odibi_anchor.codebase._authority_relocation import load_relocations, rebase
 DOMAIN = "task_authority"
 VERSION = 1
 FORMAT = "odibi-anchor-accepted-task-v1"
+WORKFLOW_FORMAT = "odibi-anchor-accepted-task-v2"
 _DDL = (
     "CREATE TABLE accepted_task_records (task_window_id TEXT PRIMARY KEY, record_id TEXT NOT NULL UNIQUE, project_id TEXT, target_root TEXT NOT NULL, execution_mode TEXT NOT NULL, accepted_at TEXT NOT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL CHECK(length(record_sha256)=64), created_at TEXT NOT NULL)",
     "CREATE INDEX idx_accepted_task_identity ON accepted_task_records(project_id,target_root,accepted_at,task_window_id)",
@@ -270,18 +271,26 @@ def build_accepted_task_record(
     }
     binding = getattr(session_state, "workflow_binding", None)
     if binding is not None:
+        # Older readers reject this format instead of restoring write authority
+        # while silently discarding the workflow's phase/scope restrictions.
+        record["format"] = WORKFLOW_FORMAT
         record["task"]["workflow_binding"] = _encode(binding)
     return record
 
 
 def _validate_record(record: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    if not isinstance(record, dict) or record.get("format") != FORMAT:
+    if not isinstance(record, dict) or record.get("format") not in {FORMAT, WORKFLOW_FORMAT}:
         raise ValueError("unsupported accepted task record format")
     identity, task, obligations = (
         record.get("identity"), record.get("task"), record.get("obligations"),
     )
     if not all(isinstance(value, dict) for value in (identity, task, obligations)):
         raise ValueError("accepted task record sections are incomplete")
+    if record["format"] == FORMAT:
+        if "workflow_binding" in task:
+            raise ValueError("legacy accepted task format cannot carry a workflow binding")
+    elif not isinstance(task.get("workflow_binding"), dict) or not task["workflow_binding"]:
+        raise ValueError("workflow accepted task format requires a workflow binding")
     required_identity = {"task_window_id", "session_id", "artifact_root", "target_root"}
     if any(not identity.get(key) for key in required_identity):
         raise ValueError("accepted task identity is incomplete")

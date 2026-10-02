@@ -1037,6 +1037,14 @@ and `delivery_verified=false`. They retain normal review, gate and learning duti
 where applicable. Use an explicit workflow even for small artifacts when verified
 destination completion is required.
 
+Workflow-bound accepted tasks use record format `odibi-anchor-accepted-task-v2`.
+Unbound legacy tasks remain v1. The new reader preserves both valid contracts and
+rejects mismatched format/binding pairs without rewriting immutable records.
+v0.3.21 and older readers reject v2 rather than silently restoring write authority
+without the workflow binding. Do not downgrade a runtime that owns open v2 tasks;
+resume with a workflow-aware version. This is a reader compatibility boundary,
+not filesystem sandboxing against arbitrary old binaries or direct tools.
+
 Replanning invalidates the old accepted binding. Context and canonical handoff
 remain readable with `binding_status="stale_plan"` and
 `next_step="close_task_then_reenroll"`; they never upgrade the immutable task.
