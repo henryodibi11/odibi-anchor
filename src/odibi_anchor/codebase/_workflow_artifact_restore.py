@@ -72,10 +72,15 @@ def _matches(state, owner, observed, receipts):
                and receipt["proof"]["workflow_id"] == state["workflow_id"] for receipt in receipts)
 
 
-def matches_restored_baseline(path, *, state, owner, observed):
-    """Accept exact current local observations, never refresh them at admission."""
+def matches_restored_baseline(path, *, state, owner, observed, historical=False):
+    """Verify exact observations; historical admission may follow attested relocation."""
     with _connection(path) as connection:
-        return _matches(state, owner, observed, load_restores(connection))
+        receipts = load_restores(connection)
+        if historical:
+            relocations = load_relocations(connection)
+            receipts = [{**receipt, "owner": rebase_identity(receipt["owner"], relocations, owner["anchor_home"])}
+                        for receipt in receipts]
+        return _matches(state, owner, observed, receipts)
 
 
 def _drafts(connection):

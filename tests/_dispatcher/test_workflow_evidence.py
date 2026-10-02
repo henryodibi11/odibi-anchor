@@ -40,12 +40,13 @@ def work(tmp_path, request):
     workflow = create_workflow(db, owner=workflow_owner(producer), request_id="create", plan=plan,
                                artifact_baseline=baseline)
     producer.workflow_binding = bind_workflow(db, session_state=producer, workflow_id=workflow["workflow_id"])
-    persist_accepted_task(db, session_state=producer, task_stage={"trust_domain": "personal"}, task_result=result())
+    accepted = persist_accepted_task(db, session_state=producer, task_stage={"trust_domain": "personal"}, task_result=result())
     workflow = transition_workflow(
         db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
         expected_generation=0, request_id="plan", operation="accept_plan",
-        payload={"baseline": {"task_window_id": producer.task_window_id, "artifact_observation": baseline},
-                 "authority_ref": "owner:fixture"},
+        payload={"baseline": {"task_window_id": producer.task_window_id, "artifact_observation": baseline,
+                              "accepted_task_record": accepted["record_id"]},
+                 "authority_ref": "accepted_task:" + producer.task_window_id},
     )
     if mode == "source_change":
         (Path(producer.target_root) / "source.py").write_text("VALUE = 2\n")

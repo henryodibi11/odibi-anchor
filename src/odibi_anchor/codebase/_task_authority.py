@@ -36,6 +36,16 @@ _DDL = (
 SCHEMA_TEXT = ";\n".join(_DDL) + ";\n"
 SCHEMA_SHA256 = hashlib.sha256(SCHEMA_TEXT.encode()).hexdigest()
 
+# Optional additive domain: the v1 rebound event is unique per task and cannot
+# truthfully represent each fresh runtime. Never rewrite that historical event.
+_SESSION_DOMAIN = "task_rebind_sessions"
+_SESSION_DDL = (
+    "CREATE TABLE task_rebind_sessions (task_window_id TEXT NOT NULL REFERENCES accepted_task_records(task_window_id), session_id TEXT NOT NULL, receipt_json TEXT NOT NULL, receipt_sha256 TEXT NOT NULL, PRIMARY KEY(task_window_id,session_id))",
+    "CREATE TRIGGER task_rebind_sessions_no_update BEFORE UPDATE ON task_rebind_sessions BEGIN SELECT RAISE(ABORT,'rebind session receipts are immutable'); END",
+    "CREATE TRIGGER task_rebind_sessions_no_delete BEFORE DELETE ON task_rebind_sessions BEGIN SELECT RAISE(ABORT,'rebind session receipts are immutable'); END",
+)
+_SESSION_SCHEMA = hashlib.sha256((";\n".join(_SESSION_DDL) + ";\n").encode()).hexdigest()
+
 
 class TaskAuthorityUnavailable(RuntimeError):
     """The requested durable task authority cannot be safely rebound."""
@@ -157,6 +167,111 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
     ).fetchall()
     if [tuple(row) for row in actual_rows] != expected_rows:
         raise RuntimeError("task authority schema checksum mismatch")
+    _load_rebind_sessions(connection)
+
+
+def _load_rebind_sessions(connection):
+    """Validate optional immutable runtime lineage without inventing legacy proof."""
+    version = connection.execute(
+        "SELECT version,schema_sha256 FROM anchor_schema_versions WHERE domain=?", (_SESSION_DOMAIN,),
+    ).fetchone()
+    query = "SELECT type,name,sql FROM sqlite_master WHERE tbl_name='task_rebind_sessions' AND sql IS NOT NULL ORDER BY type,name"
+    actual = [tuple(row) for row in connection.execute(query)]
+    if version is None and not actual:
+        return []
+    if tuple(version or ()) != (1, _SESSION_SCHEMA):
+        raise TaskAuthorityUnavailable("rebind session schema version/checksum mismatch")
+    with sqlite3.connect(":memory:") as expected:
+        for statement in _SESSION_DDL:
+            expected.execute(statement)
+        if actual != expected.execute(query).fetchall():
+            raise TaskAuthorityUnavailable("rebind session schema modified")
+    receipts = []
+    for task, session, raw, checksum in connection.execute(
+        "SELECT task_window_id,session_id,receipt_json,receipt_sha256 FROM task_rebind_sessions"
+    ):
+        receipt = json.loads(raw)
+        if (_canonical(receipt) != raw or hashlib.sha256(raw.encode()).hexdigest() != checksum
+                or set(receipt) != {"task_window_id", "session_id", "accepted_record_sha256",
+                                    "owner", "rebind_event_sha256", "created_at"}
+                or receipt["task_window_id"] != task or receipt["session_id"] != session
+                or not isinstance(session, str) or not session
+                or set(receipt["owner"]) != {"project_id", "anchor_home", "project_root", "artifact_root",
+                                             "target_root", "repository_provider_id", "trust_domain"}):
+            raise TaskAuthorityUnavailable("rebind session receipt integrity mismatch")
+        receipts.append(receipt)
+    return receipts
+
+
+def _record_rebind_session(path, *, record, session_state, event):
+    """Append only after exact open-task restoration; preserve actual runtime IDs."""
+    connection = _connect(path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _verify_schema(connection)
+        task = record["identity"]["task_window_id"]
+        session = session_state.session_id
+        if not isinstance(session, str) or not session:
+            raise TaskAuthorityUnavailable("rebind requires an exact runtime session")
+        if connection.execute("SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'", (task,)).fetchone():
+            raise TaskAuthorityUnavailable("closed task cannot acquire runtime lineage")
+        if (connection.execute("SELECT 1 FROM sqlite_master WHERE name='terminal_task_records'").fetchone()
+                and connection.execute("SELECT 1 FROM terminal_task_records WHERE task_window_id=?", (task,)).fetchone()):
+            raise TaskAuthorityUnavailable("terminal task cannot acquire runtime lineage")
+        owner = _owner_identity(session_state)
+        if not _matches_owner(record, owner, load_relocations(connection)):
+            raise TaskAuthorityUnavailable("rebind session requires exact task owner")
+        receipt = {"task_window_id": task, "session_id": session, "owner": owner,
+                   "accepted_record_sha256": hashlib.sha256(_canonical(record).encode()).hexdigest(),
+                   "rebind_event_sha256": event["event_sha256"], "created_at": _now()}
+        existing = next((r for r in _load_rebind_sessions(connection)
+                         if r["task_window_id"] == task and r["session_id"] == session), None)
+        if existing is not None:
+            receipt["created_at"] = existing["created_at"]
+            if receipt != existing:
+                raise TaskAuthorityUnavailable("rebind session idempotency conflict")
+        else:
+            if not connection.execute("SELECT 1 FROM anchor_schema_versions WHERE domain=?", (_SESSION_DOMAIN,)).fetchone():
+                for statement in _SESSION_DDL:
+                    connection.execute(statement)
+                connection.execute("INSERT INTO anchor_schema_versions VALUES(?,?,?,?)",
+                                   (_SESSION_DOMAIN, 1, _SESSION_SCHEMA, _now()))
+            raw = _canonical(receipt)
+            connection.execute("INSERT INTO task_rebind_sessions VALUES(?,?,?,?)",
+                               (task, session, raw, hashlib.sha256(raw.encode()).hexdigest()))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def verified_task_session(connection, *, accepted, session_id, ended_at):
+    """A terminal runtime is the accepted session or an exact pre-terminal rebind."""
+    if session_id == accepted["identity"]["session_id"]:
+        return True
+    task = accepted["identity"]["task_window_id"]
+    checksum = hashlib.sha256(_canonical(accepted).encode()).hexdigest()
+    relocations = load_relocations(connection)
+    for receipt in _load_rebind_sessions(connection):
+        if (receipt["task_window_id"] != task or receipt["session_id"] != session_id
+                or receipt["accepted_record_sha256"] != checksum
+                or not _matches_owner(accepted, receipt["owner"], relocations)
+                or datetime.fromisoformat(receipt["created_at"].replace("Z", "+00:00"))
+                > datetime.fromisoformat(ended_at.replace("Z", "+00:00"))):
+            continue
+        row = connection.execute(
+            "SELECT event_id,event_json,event_sha256,created_at FROM accepted_task_events WHERE task_window_id=? AND event_type='rebound'",
+            (task,),
+        ).fetchone()
+        if row is not None:
+            event = {"event_id": row["event_id"], "task_window_id": task, "event_type": "rebound",
+                     "details": {"accepted_record_sha256": checksum}, "created_at": row["created_at"]}
+            if (_canonical(event) == row["event_json"] and hashlib.sha256(row["event_json"].encode()).hexdigest()
+                    == row["event_sha256"] == receipt["rebind_event_sha256"]):
+                return True
+    return False
 
 
 def _encode(value: Any) -> Any:
@@ -767,6 +882,7 @@ def rebind_latest_open_task(
             path, identity["task_window_id"], "rebound",
             {"accepted_record_sha256": hashlib.sha256(_canonical(record).encode()).hexdigest()},
         )
+        _record_rebind_session(path, record=record, session_state=session_state, event=event)
     except TaskAuthorityUnavailable:
         vars(session_state).clear()
         vars(session_state).update(prior_state)

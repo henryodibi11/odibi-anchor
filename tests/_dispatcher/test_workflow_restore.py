@@ -287,3 +287,168 @@ def test_large_valid_draft_retains_bounded_restore_receipts(runtime, tmp_path, m
     mutate(home / "workspace/projects/alpha" / paths[-1], "same_bytes")
     with pytest.raises(RuntimeError, match="pre-plan artifact changed"):
         check_artifact_baseline(state, session_state=_SESSION_STATE, path=home / "memory.db")
+
+
+@pytest.mark.parametrize("runtime", ["artifact", "preexisting_artifact"], indirect=True)
+@pytest.mark.parametrize("second_recovery", [None, "planned", "implemented", "reviewed", "replan", "qualification"])
+def test_complete_recovered_producer_lifecycle(runtime, tmp_path, monkeypatch, second_recovery):
+    from tests._dispatcher.test_workflow_runtime import finish_producer
+
+    anchor, home, target, draft = runtime
+    task_id = anchor("context", output_format="dict")["facts"]["task"]["value"]["task_window_id"]
+    with sqlite3.connect(home / "memory.db") as connection:
+        original = connection.execute("SELECT record_json FROM accepted_task_records WHERE task_window_id=?",
+                                      (task_id,)).fetchone()[0]
+    snapshot(home, tmp_path / "first")
+    home = tmp_path / "restored-first"
+    anchor = restore(home, target, tmp_path / "first", monkeypatch, task_id)
+    if second_recovery == "replan":
+        advance(anchor, "replan", plan=draft["plan"], reason="Same contract after verified restore")
+    admitted = advance(anchor, "accept_plan")
+    assert admitted["progress"] == "planned"
+    for phase in ("planned", "implemented", "reviewed"):
+        if second_recovery == phase:
+            snapshot(home, tmp_path / "second")
+            home = tmp_path / "restored-second"
+            anchor = restore(home, target, tmp_path / "second", monkeypatch, task_id)
+        if phase == "planned":
+            output(home).write_bytes(b"Result: 5\n")
+            anchor("touched", str(output(home)), output_format="dict")
+            assert advance(anchor, "implemented")["progress"] == "implemented"
+        elif phase == "implemented":
+            checked = advance(anchor, "check_artifact", criterion_id="report")
+            assert checked["measurements"]["report"]["status"] == "satisfied"
+            advance(anchor, "review", findings=[])
+    terminal = finish_producer(anchor)
+    assert terminal["record"]["terminal"]["status"] == "completed"
+    assert terminal["record"]["identities"]["task_window_id"] == task_id
+    assert terminal["record"]["identities"]["session_id"] != json.loads(original)["identity"]["session_id"]
+    if second_recovery == "qualification":
+        # Closed producers are never rebound. Recover a separately accepted
+        # exact-candidate review task, then consume the retained producer proof.
+        anchor("new_session", name="separate_qualification", inline=True, output_format="dict")
+        review = anchor("task", "Review recovered exact candidate", goal="Verify report output", mode="review",
+                        risk="low", rigor="direct", trust_domain="personal", workflow_id=draft["workflow_id"],
+                        acceptance_criteria=["Exact bytes and producer closure"], output_format="dict")
+        anchor("skill_loaded", "code-comprehension", output_format="dict")
+        advance(anchor, "review", findings=[])
+        snapshot(home, tmp_path / "second")
+        home = tmp_path / "restored-second"
+        anchor = restore(home, target, tmp_path / "second", monkeypatch, review["task_window_id"])
+        anchor("skill_loaded", "code-comprehension", output_format="dict")
+    qualified = advance(anchor, "qualify")
+    assert qualified["progress"] == "qualified" and qualified["completed"] is False
+    assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
+    with sqlite3.connect(home / "memory.db") as connection:
+        assert connection.execute("SELECT record_json FROM accepted_task_records WHERE task_window_id=?",
+                                  (task_id,)).fetchone()[0] == original
+    assert anchor("workflow", "prepare_delivery", output_format="dict")["authority_granted"] is False
+
+
+@pytest.mark.parametrize("runtime", ["preexisting_artifact"], indirect=True)
+@pytest.mark.parametrize("damage", ["missing", "cross_workflow", "cross_project"])
+def test_implementation_requires_exact_retained_restore_proof(runtime, tmp_path, monkeypatch, damage):
+    import hashlib
+
+    anchor, home, target, _ = runtime
+    task = anchor("context", output_format="dict")["facts"]["task"]["value"]["task_window_id"]
+    snapshot(home, tmp_path / "durable")
+    home = tmp_path / "restored"
+    anchor = restore(home, target, tmp_path / "durable", monkeypatch, task)
+    admitted = advance(anchor, "accept_plan")
+    output(home).write_bytes(b"Result: 5\n")
+    anchor("touched", str(output(home)), output_format="dict")
+    from odibi_anchor.codebase._workflow import canonical, create_workflow
+    from odibi_anchor.codebase._workflow_artifact_restore import _DDL
+
+    other = create_workflow(home / "memory.db", owner=admitted["owner"], request_id="other",
+                            plan=admitted["plan"], artifact_baseline=admitted["artifact_baseline"])
+    with sqlite3.connect(home / "memory.db") as connection:
+        if damage == "missing":
+            connection.execute("DROP TABLE workflow_artifact_restores")
+            connection.execute("DELETE FROM anchor_schema_versions WHERE domain='workflow_artifact_restore'")
+        else:
+            receipt = json.loads(connection.execute("SELECT receipt_json FROM workflow_artifact_restores").fetchone()[0])
+            if damage == "cross_workflow":
+                receipt["proof"]["workflow_id"] = other["workflow_id"]
+            else:
+                receipt["owner"]["project_id"] = "beta"
+            # Recompute the envelope to test semantic binding, not just checksum rejection.
+            raw = canonical(receipt)
+            connection.execute("DROP TRIGGER workflow_artifact_restores_no_update")
+            connection.execute("UPDATE workflow_artifact_restores SET receipt_json=?,receipt_sha256=?",
+                               (raw, "sha256:" + hashlib.sha256(raw.encode()).hexdigest()))
+            connection.execute(_DDL[1])
+    with pytest.raises(RuntimeError, match="exact pre-plan artifact admission"):
+        advance(anchor, "implemented")
+
+
+@pytest.mark.parametrize("runtime", ["artifact"], indirect=True)
+@pytest.mark.parametrize("damage", ["unrelated_session", "missing", "cross_project", "other_task_record",
+                                    "rebound_event", "late", "schema", "missing_closure", "changed_candidate"])
+def test_recovered_qualification_requires_exact_completion_lineage(runtime, tmp_path, monkeypatch, damage):
+    import hashlib
+
+    from tests._dispatcher.test_workflow_runtime import finish_producer
+
+    anchor, home, target, _ = runtime
+    task = anchor("context", output_format="dict")["facts"]["task"]["value"]["task_window_id"]
+    snapshot(home, tmp_path / "durable")
+    home = tmp_path / "restored"
+    anchor = restore(home, target, tmp_path / "durable", monkeypatch, task)
+    advance(anchor, "accept_plan")
+    output(home).write_bytes(b"Result: 5\n")
+    anchor("touched", str(output(home)), output_format="dict")
+    advance(anchor, "implemented")
+    advance(anchor, "check_artifact", criterion_id="report")
+    advance(anchor, "review", findings=[])
+    finish_producer(anchor)
+    from odibi_anchor.codebase._task_authority import _DDL, _SESSION_DDL, _canonical
+
+    with sqlite3.connect(home / "memory.db") as connection:
+        if damage == "missing":
+            connection.execute("DROP TABLE task_rebind_sessions")
+            connection.execute("DELETE FROM anchor_schema_versions WHERE domain='task_rebind_sessions'")
+        elif damage == "schema":
+            connection.execute("DROP TRIGGER task_rebind_sessions_no_update")
+        elif damage == "missing_closure":
+            connection.execute("DROP TRIGGER accepted_task_events_no_delete")
+            connection.execute("DELETE FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'", (task,))
+            connection.execute(_DDL[-1])
+        elif damage in {"unrelated_session", "cross_project", "other_task_record", "rebound_event", "late"}:
+            receipt = json.loads(connection.execute("SELECT receipt_json FROM task_rebind_sessions").fetchone()[0])
+            with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+                connection.execute("UPDATE task_rebind_sessions SET receipt_sha256='bad'")
+            if damage == "unrelated_session":
+                receipt["session_id"] = "unrelated-runtime"
+            elif damage == "cross_project":
+                receipt["owner"]["project_id"] = "beta"
+            elif damage == "other_task_record":
+                receipt["accepted_record_sha256"] = connection.execute(
+                    "SELECT record_sha256 FROM accepted_task_records WHERE task_window_id!=?", (task,)).fetchone()[0]
+            elif damage == "rebound_event":
+                receipt["rebind_event_sha256"] = "0" * 64
+            else:
+                receipt["created_at"] = "2099-01-01T00:00:00.000000Z"
+            raw = _canonical(receipt)
+            connection.execute("DROP TRIGGER task_rebind_sessions_no_update")
+            connection.execute("UPDATE task_rebind_sessions SET session_id=?,receipt_json=?,receipt_sha256=?",
+                               (receipt["session_id"], raw, hashlib.sha256(raw.encode()).hexdigest()))
+            connection.execute(_SESSION_DDL[1])
+    if damage == "changed_candidate":
+        output(home).write_bytes(b"Different bytes after completed producer\n")
+    with pytest.raises(RuntimeError, match=r"lineage|rebind session schema|task closure|candidate changed"):
+        advance(anchor, "qualify")
+
+
+@pytest.mark.parametrize("runtime", ["preexisting_artifact"], indirect=True)
+def test_recovered_producer_cannot_use_a_stale_plan(runtime, tmp_path, monkeypatch):
+    anchor, home, target, draft = runtime
+    task = anchor("context", output_format="dict")["facts"]["task"]["value"]["task_window_id"]
+    snapshot(home, tmp_path / "durable")
+    home = tmp_path / "restored"
+    anchor = restore(home, target, tmp_path / "durable", monkeypatch, task)
+    advance(anchor, "accept_plan")
+    advance(anchor, "replan", plan={**draft["plan"], "goal": "A different plan"}, reason="Changed requirements")
+    with pytest.raises(RuntimeError, match="plan"):
+        advance(anchor, "implemented")

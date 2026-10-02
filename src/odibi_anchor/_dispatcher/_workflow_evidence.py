@@ -173,7 +173,12 @@ def collect_plan_baseline(path, *, session_state, record):
 
 def producer_completion(path, *, session_state, producer):
     """Verify existing task closure; never synthesize a gate or learning receipt."""
-    from odibi_anchor.codebase._task_authority import _canonical, _connect, _verify_schema
+    from odibi_anchor.codebase._task_authority import (
+        _canonical,
+        _connect,
+        _verify_schema,
+        verified_task_session,
+    )
     from odibi_anchor.codebase._task_execution import inspect_terminal_records
 
     accepted = _accepted_task(path, session_state, producer)
@@ -185,12 +190,16 @@ def producer_completion(path, *, session_state, producer):
     terminal = records[0]
     record = terminal["record"]
     if (record["terminal"]["status"] != "completed"
-            or record["identities"]["session_id"] != identity["session_id"]
+            or record["identities"]["task_window_id"] != producer
+            or record["identities"]["project_id"] != identity["project_id"]
             or not record.get("learning_assessment")):
         raise WorkflowError("missing_evidence", "producer terminal record lacks completed gate-and-learning proof")
     connection = _connect(path, read_only=True)
     try:
         _verify_schema(connection)
+        if not verified_task_session(connection, accepted=accepted,
+                                     session_id=record["identities"]["session_id"], ended_at=record["ended_at"]):
+            raise WorkflowError("missing_evidence", "producer terminal record lacks verified task-session lineage")
         closure = connection.execute(
             "SELECT event_id,event_json,event_sha256,created_at FROM accepted_task_events "
             "WHERE task_window_id=? AND event_type='closed'", (producer,),
@@ -282,11 +291,16 @@ def collect_candidate(path: str | Path, *, session_state: Any,
                         "changed_paths": list(scope.changed_paths)}
     elif mode == "artifact_only":
         from odibi_anchor._utils._session_state import is_managed_artifact_path
+        from odibi_anchor.codebase._workflow_artifact_restore import matches_restored_baseline
 
         baseline = state.get("artifact_baseline")
-        admitted = (state.get("admission") or {}).get("baseline", {}).get("artifact_observation")
+        admission = state.get("admission") or {}
+        admitted = admission.get("baseline", {}).get("artifact_observation")
         if (not baseline or baseline.get("plan_sha256") != state["plan_sha256"]
-                or admitted != baseline):
+                or admission.get("authority_ref") != "accepted_task:" + producer
+                or admission.get("baseline", {}).get("accepted_task_record") != record["record_id"]
+                or not matches_restored_baseline(path, state=state, owner=workflow_owner(session_state),
+                                                observed=admitted, historical=True)):
             raise WorkflowError("missing_evidence", "candidate lacks exact pre-plan artifact admission evidence")
         kind = "managed_artifacts"
         root = Path(session_state.artifact_root).resolve()

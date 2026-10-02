@@ -45,7 +45,7 @@ def runtime(tmp_path, monkeypatch, request):
             "criteria": [{"id": "report", "expected": "Report contract holds", "method": "pytest",
                           "test_targets": ["test_report.py"]}]}
     parameter = getattr(request, "param", None)
-    if parameter == "artifact" or isinstance(parameter, dict):
+    if parameter in ("artifact", "preexisting_artifact") or isinstance(parameter, dict):
         plan["criteria"] = [{"id": "report", "expected": "Exact Result: 5 line",
                              "method": "artifact_sha256", "expected_sha256": {
                                  "notebooks/report.md": hashlib.sha256(b"Result: 5\n").hexdigest()}}]
@@ -54,7 +54,7 @@ def runtime(tmp_path, monkeypatch, request):
             del plan["reconciliation"]
         else:
             plan["reconciliation"] = parameter["reconciliation"]
-    if getattr(request, "param", None) == "preexisting":
+    if parameter in ("preexisting", "preexisting_artifact"):
         report.parent.mkdir(exist_ok=True)
         report.write_bytes(b"Original report\n")
     draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
