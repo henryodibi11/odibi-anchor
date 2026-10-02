@@ -163,7 +163,17 @@ def enforce_workflow_admission(path: str | Path, *, session_state: Any,
 
 def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
     """Return a complete content-addressed projection, not executable authority."""
-    state = bound_workflow(path, session_state=session_state)
+    stale_plan = False
+    try:
+        state = bound_workflow(path, session_state=session_state)
+    except WorkflowError as exc:
+        if exc.code != "stale_plan":
+            raise
+        # bound_workflow has already checked the exact owner and task binding.
+        # A diagnostic projection must not upgrade that immutable old authority.
+        state = read_workflow(path, owner=workflow_owner(session_state),
+                              workflow_id=session_state.workflow_binding["workflow_id"])
+        stale_plan = True
     if state is None:
         profile = session_state.active_task_profile
         if profile is not None and profile.execution_mode == "read_only":
@@ -185,7 +195,9 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
                     }}
         return {"kind": "workflow_packet", "schema_version": 1, "status": "legacy_unphased",
                 "next_step": "enroll_at_safe_boundary", "authority": "projection"}
-    if state["status"] == "blocked":
+    if stale_plan:
+        next_step = "close_task_then_reenroll"
+    elif state["status"] == "blocked":
         next_step = "reconcile_delivery" if state["blocker"]["kind"] == "outcome_unknown" else "resolve_blocker"
     elif state["status"] in {"cancelled", "completed"}:
         next_step = "none"
@@ -195,6 +207,18 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
                      "approved_for_delivery": "deliver", "delivered": "verify_delivery"}[state["progress"]]
     packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
               "binding": session_state.workflow_binding, "state": state, "next_step": next_step}
+    if stale_plan:
+        packet.update(status="recovery_required", binding_status="stale_plan",
+                      completed=False, delivery_verified=False,
+                      recovery={
+                          "workflow_id": state["workflow_id"], "rebind_upgrades_plan": False,
+                          "steps": [
+                              "Inspect the current plan; do not implement through the old binding.",
+                              "Close the old task with its existing review, gate and learning obligations.",
+                              "At a safe boundary accept a fresh task with this exact workflow_id.",
+                              "Dirty source requires existing exact ownership recovery, never a fresh baseline bypass.",
+                          ],
+                      })
     command = {"accept_plan": "accept_plan", "request_delivery_authority": "prepare_delivery",
                "reconcile_delivery": "verify_delivery", "verify_delivery": "verify_delivery"}.get(next_step)
     if command is None:

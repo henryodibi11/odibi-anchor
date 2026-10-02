@@ -414,6 +414,49 @@ def test_replan_retry_acknowledges_receipt_without_reauthorizing_old_task(runtim
                request_id="cannot-use-old-task", output_format="dict")
 
 
+def test_replanned_context_and_handoff_explain_recovery_without_upgrading_binding(runtime):
+    import json
+    from pathlib import Path
+
+    anchor, _, _, _ = runtime
+    original = anchor("context", output_format="dict")["workflow"]["binding"]
+    state = implement(runtime)
+    revised = advance(anchor, "replan", plan={**state["plan"], "goal": "Revised report"}, reason="new fact")
+    packet = anchor("context", output_format="dict")["workflow"]
+    assert packet["binding"] == original
+    assert packet["binding_status"] == "stale_plan"
+    assert packet["status"] == "recovery_required"
+    assert packet["next_step"] == "close_task_then_reenroll"
+    assert packet["state"] == revised
+    assert packet["completed"] is False and packet["delivery_verified"] is False
+    assert packet["next_operation"]["args"] == ["status"]
+    assert packet["recovery"]["workflow_id"] == revised["workflow_id"]
+    assert packet["recovery"]["rebind_upgrades_plan"] is False
+    handoff = anchor("snapshot", mode="handoff", output_format="dict")
+    assert handoff["workflow"] == packet
+    assert json.loads(Path(handoff["artifact_path"]).read_text())["workflow"] == packet
+    with pytest.raises(RuntimeError, match=r"plan changed|Plan changed"):
+        anchor("workflow", "implemented", expected_generation=revised["generation"],
+               request_id="old-task", output_format="dict")
+
+
+@pytest.mark.parametrize("change", ["missing", "different"])
+def test_negative_readback_never_proves_unknown_delivery_terminated(approved_runtime, change):
+    anchor, home, _, _ = approved_runtime
+    blocked = advance(anchor, "block", reason="Lost remote response", blocker_kind="outcome_unknown")
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    if change == "missing":
+        artifact.unlink()
+    else:
+        artifact.write_bytes(b"Other result\n")
+    with pytest.raises(RuntimeError):
+        advance(anchor, "verify_delivery")
+    retained = anchor("workflow", output_format="dict")["state"]
+    assert retained == blocked
+    assert retained["completed"] is False
+    assert retained["blocker"]["kind"] == "outcome_unknown"
+
+
 def test_context_exposes_exact_workflow_separately_from_task_completion(runtime):
     anchor, _, _, draft = runtime
     context = anchor("context", output_format="dict")
