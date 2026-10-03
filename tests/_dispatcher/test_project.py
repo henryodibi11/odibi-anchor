@@ -104,7 +104,7 @@ def test_existing_project_inherits_runtime_contract_without_record_rewrite(tmp_p
 
     status = project_action(tmp_path, "status", output_format="dict")
 
-    assert status["artifact_contract"] == artifact_contract()
+    assert status["artifact_contract"] == artifact_contract(artifact_root=str(descriptor.parent))
     assert status["capture_standards"]["version"] == "1.1"
     assert status["capture_standards"]["scope"] == "all_tasks_and_managed_projects"
     assert descriptor.read_bytes() == before

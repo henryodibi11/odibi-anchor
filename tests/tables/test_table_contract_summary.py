@@ -552,8 +552,9 @@ def test_spark_engine_matches_pandas_contract(spark_session) -> None:
         {"asset_id": "A3", "region": "PJM", "capacity_mw": 300.25, "event_date": "2026-05-03"},
         {"asset_id": "A1", "region": "CAISO", "capacity_mw": 410.0, "event_date": "2026-05-04"},
     ]
-    pdf = pd.DataFrame(data)
-    sdf = spark_session.createDataFrame(data)
+    columns = ["asset_id", "region", "capacity_mw", "event_date"]
+    pdf = pd.DataFrame(data, columns=columns)
+    sdf = spark_session.createDataFrame(data).select(*columns)
 
     pandas_ctx = table_contract_summary(
         pdf, subject="t", candidate_key_columns=["asset_id"], engine="pandas"

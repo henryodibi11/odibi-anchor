@@ -562,7 +562,7 @@ def init(
         result = _planning.task_execution_context(task_args[0] if task_args else "", **injected)
         if isinstance(result, dict):
             from odibi_anchor._dispatcher._project import artifact_contract
-            result["artifact_contract"] = artifact_contract()
+            result["artifact_contract"] = artifact_contract(artifact_root=_SESSION_STATE.artifact_root)
         return result
 
     def _task_rebind_action(*, task_window_id=None):
@@ -786,9 +786,10 @@ def init(
         _st = _parts.get("status") if isinstance(_parts.get("status"), dict) else {}
         _next = (_st.get("metrics") or {}).get("next_required_action")
         _summary = "Orientation: ran status + audit_history; task memory is deferred to acceptance."
-        _artifact_contract = artifact_contract()
+        _artifact_contract = artifact_contract(artifact_root=_SESSION_STATE.artifact_root)
         _managed_artifact_actions = [
-            {"artifact": item["path"], **item["managed_action"]}
+            {"artifact": item["path"], "absolute_path": item["absolute_path"],
+             "path_status": item["path_status"], **item["managed_action"]}
             for item in _artifact_contract["artifacts"]
             if item["managed_action"] is not None
         ]
@@ -829,6 +830,8 @@ def init(
                     f"- `{_artifact['path']}` — {_artifact['use_when']} "
                     f"Do not use for: {_artifact['do_not_use_for']}"
                 )
+                _lines.append(f"  Absolute path: `{_artifact['absolute_path']}` ({_artifact['path_status']})")
+            _lines.append("Relative `touched` paths always resolve against `target_root`, not `artifact_root`.")
             _lines.append("")
             _lines.append(_artifact_contract["activation"])
             _lines.append("")
