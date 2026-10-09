@@ -320,3 +320,31 @@ def test_only_requested_host_paths_are_probed(tmp_path, monkeypatch):
     result = validate_portfolio(portfolio, host_id="amp-host")
     assert result["selected_host"]["targets"][0]["exists"] is False
     assert "/remote/missing" not in visited
+
+
+def test_host_package_version_pin_round_trips_and_is_documented(tmp_path):
+    path = tmp_path / "anchor.toml"
+    portfolio = _portfolio(tmp_path)
+    portfolio["hosts"]["amp-host"]["package_version"] = "0.3.24"
+
+    write_portfolio(path, portfolio)
+    loaded = load_portfolio(path)
+    validation = validate_portfolio(loaded, host_id="amp-host")
+
+    assert loaded["hosts"]["amp-host"]["package_version"] == "0.3.24"
+    assert 'package_version = "0.3.24"' in path.read_text()
+    assert "hosts.amp-host.package_version" in {item["field"] for item in validation["configured"]}
+    assert "package_version" in portfolio_module.portfolio_schema()["hosts"]["optional"]
+    # Additive: a portfolio without the pin is unchanged and still valid.
+    assert "package_version" not in load_portfolio(write_portfolio(
+        tmp_path / "plain.toml", _portfolio(tmp_path)
+    )["path"])["hosts"]["amp-host"]
+
+
+@pytest.mark.parametrize("pin", ["latest", "0.3", "0.3.24rc1", "v0.3.24", "00.3.24", 324])
+def test_host_package_version_pin_rejects_inexact_values(tmp_path, pin):
+    portfolio = _portfolio(tmp_path)
+    portfolio["hosts"]["amp-host"]["package_version"] = pin
+
+    with pytest.raises(ValueError, match=r"hosts\.amp-host\.package_version must be an exact"):
+        validate_portfolio(portfolio)

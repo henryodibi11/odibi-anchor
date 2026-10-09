@@ -113,6 +113,12 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
         "config_path": config, "host_id": "local", "project_id": "alpha",
     }
     assert observed["launch"]["project_root"] == str(target)
+    timings = result["startup_packet"].pop("timings")
+    assert [entry["phase"] for entry in timings["phases"]] == [
+        "portfolio_load", "host_guidance", "local_state_identity",
+        "runtime_preparation", "orient",
+    ]
+    assert {entry["outcome"] for entry in timings["phases"]} == {"ok"}
     assert result["startup_packet"] == {
         "kind": "managed_startup_packet", "status": "ready", "project_id": "alpha",
         "host_id": "local", "target_root": str(target), "artifact_root": str(artifact),
@@ -1595,3 +1601,316 @@ def test_legacy_import_detects_file_to_directory_snapshot_drift(tmp_path, monkey
         apply_legacy_import(plan)
 
     assert not (destination / "workspace").exists()
+
+
+def _isolated_anchor_environment(monkeypatch) -> dict[str, str]:
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("ANCHOR_")
+    }
+    monkeypatch.setattr(startup_module.os, "environ", environment)
+    return environment
+
+
+def _local_portfolio(instruction: Path, target: Path, state: Path, durable: Path) -> dict:
+    return {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(state),
+            "instruction_root": str(instruction), "durable_root": str(durable),
+        }},
+        "projects": {"alpha": {"targets": {"local": str(target)}}},
+        "personas": {},
+    }
+
+
+def test_managed_bootstrap_times_every_phase_including_restore(tmp_path, monkeypatch):
+    from odibi_anchor import durability
+
+    instruction, target, durable = tmp_path / "instructions", tmp_path / "target", tmp_path / "durable"
+    first_state, second_state = tmp_path / "state-a", tmp_path / "state-b"
+    for directory in (instruction, target, durable):
+        directory.mkdir()
+    environment = _isolated_anchor_environment(monkeypatch)
+    first_config, second_config = tmp_path / "first.toml", tmp_path / "second.toml"
+    write_portfolio(first_config, _local_portfolio(instruction, target, first_state, durable))
+    first = bootstrap_managed_project(
+        config_path=first_config, project_id="alpha", instruction_root=instruction
+    )
+    durability.snapshot_state(
+        source_db=first_state / ".agent_memory.db",
+        source_artifacts=first_state / "workspace" / "projects",
+        durable_root=durable, authority_id="owner",
+    )
+    for name in [name for name in environment if name.startswith("ANCHOR_")]:
+        environment.pop(name)
+    write_portfolio(second_config, _local_portfolio(instruction, target, second_state, durable))
+
+    second = bootstrap_managed_project(
+        config_path=second_config, project_id="alpha", instruction_root=instruction
+    )
+
+    # No snapshot existed yet: restore raised, preparation handled it, startup succeeded.
+    first_restore = first["startup_packet"]["timings"]["phases"][3]["sub_phases"][0]
+    assert (first_restore["phase"], first_restore["outcome"]) == ("restore", "raised")
+    assert first["startup_packet"]["restore"]["status"] == "not_applicable"
+    assert first["startup_packet"]["status"] == second["startup_packet"]["status"] == "ready"
+    assert second["startup_packet"]["restore"]["action"] == "created"
+    timings = second["startup_packet"]["timings"]
+    json.dumps(timings)
+    phases = {entry["phase"]: entry for entry in timings["phases"]}
+    assert list(phases) == [
+        "portfolio_load", "host_guidance", "local_state_identity", "runtime_preparation",
+        "route_binding", "repository_provider", "init", "orient",
+    ]
+    assert {entry["outcome"] for entry in timings["phases"]} == {"ok"}
+    assert [
+        (entry["phase"], entry["outcome"]) for entry in phases["host_guidance"]["sub_phases"]
+    ] == [("package_resources", "ok"), ("read", "ok"), ("verify", "ok"),
+          ("publish", "not_required")]
+    assert [
+        (entry["phase"], entry["outcome"]) for entry in phases["runtime_preparation"]["sub_phases"]
+    ] == [("restore", "ok")]
+    assert all(
+        isinstance(entry["elapsed_ms"], float) and entry["elapsed_ms"] >= 0
+        for entry in timings["phases"]
+    )
+    attributed = sum(entry["elapsed_ms"] for entry in timings["phases"])
+    assert timings["total_elapsed_ms"] >= attributed
+    assert timings["unattributed_ms"] == pytest.approx(timings["total_elapsed_ms"] - attributed, abs=0.01)
+
+
+def test_managed_bootstrap_failure_keeps_error_and_attaches_timings(tmp_path, monkeypatch):
+    from odibi_anchor.host_setup import HostSetupError
+
+    instruction, target = tmp_path / "instructions", tmp_path / "target"
+    instruction.mkdir()
+    target.mkdir()
+    config = tmp_path / "anchor.toml"
+    write_portfolio(config, _local_portfolio(instruction, target, tmp_path / "state", tmp_path))
+    failure = HostSetupError("modified managed file: AGENTS.md")
+
+    def failing_setup(root, adapter):
+        raise failure
+
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", failing_setup)
+    _isolated_anchor_environment(monkeypatch)
+
+    with pytest.raises(HostSetupError) as raised:
+        bootstrap_managed_project(config_path=config, project_id="alpha", instruction_root=instruction)
+
+    assert raised.value is failure
+    phases = cast(Any, raised.value).bootstrap_timings["phases"]
+    assert [(entry["phase"], entry["outcome"]) for entry in phases] == [
+        ("portfolio_load", "ok"), ("host_guidance", "raised"),
+    ]
+    assert phases[1]["error_type"] == "HostSetupError"
+
+
+def _databricks_launcher(tmp_path, monkeypatch, *, installed: str = "0.3.24") -> tuple[Path, Path]:
+    repository = Path(__file__).resolve().parents[1]
+    host = tmp_path / "host"
+    launcher = host / ".assistant" / "agent_bootstrap.py"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
+    monkeypatch.setattr("importlib.metadata.version", lambda _name: installed)
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "serverless")
+    for name in (
+        "ANCHOR_SOURCE_CHECKOUT", "ANCHOR_PACKAGE_VERSION", "ANCHOR_PORTFOLIO_CONFIG",
+        "ANCHOR_PROJECT_ID", "ANCHOR_HOME", "ANCHOR_VERSION_CHECK_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return host.resolve(), launcher
+
+
+def _record_package_index_calls(monkeypatch) -> list[tuple]:
+    calls: list[tuple] = []
+
+    def urlopen(*args, **kwargs):
+        calls.append(args)
+        raise OSError("package index must not be called")
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "pins, expected, source",
+    [
+        ({"init": "0.3.30", "env": "0.3.31", "portfolio": "0.3.32"}, "0.3.30",
+         "ANCHOR_PACKAGE_VERSION init global"),
+        ({"env": "0.3.31", "portfolio": "0.3.32"}, "0.3.31",
+         "ANCHOR_PACKAGE_VERSION environment variable"),
+        ({"portfolio": "0.3.32"}, "0.3.32", "portfolio {config} hosts.databricks-work.package_version"),
+    ],
+)
+def test_assistant_launcher_pin_skips_package_index_with_exact_install(
+    tmp_path, monkeypatch, pins, expected, source
+):
+    host, launcher = _databricks_launcher(tmp_path, monkeypatch)
+    calls = _record_package_index_calls(monkeypatch)
+    config = host / ".odibi-anchor" / "anchor.toml"
+    if "portfolio" in pins:
+        write_portfolio(config, {
+            "schema_version": 1,
+            "authority": {"id": "owner", "trust_domain": "work"},
+            "hosts": {"databricks-work": {
+                "adapter": "databricks", "local_state_root": "/tmp/anchor-state",
+                "instruction_root": str(host), "durable_root": "/Volumes/c/s/anchor",
+                "package_version": pins["portfolio"],
+            }},
+            "projects": {}, "personas": {},
+        })
+    if "env" in pins:
+        monkeypatch.setenv("ANCHOR_PACKAGE_VERSION", pins["env"])
+    init_globals = {"ANCHOR_PROJECT_ID": "alpha"}
+    if "init" in pins:
+        init_globals["ANCHOR_PACKAGE_VERSION"] = pins["init"]
+
+    with pytest.raises(RuntimeError) as raised:
+        runpy.run_path(str(launcher), init_globals=init_globals)
+
+    assert calls == []
+    assert str(raised.value) == (
+        f"Odibi Anchor requires the pinned release {expected} in this Python process "
+        f"({source.format(config=config)}). Run "
+        f'`%pip install "odibi-anchor[databricks]=={expected}"`, then '
+        "`dbutils.library.restartPython()` and rerun this launcher. "
+        f"Pinned: {expected}; installed: 0.3.24."
+    )
+    error = cast(Any, raised.value)
+    assert error.error_code == "package_version_mismatch"
+    assert error.copy_ready == f'%pip install "odibi-anchor[databricks]=={expected}"'
+
+
+@pytest.mark.parametrize("pin", ["latest", "0.3", "0.3.24rc1", "0.3.23"])
+def test_assistant_launcher_refuses_malformed_or_unsupported_pins(tmp_path, monkeypatch, pin):
+    _host, launcher = _databricks_launcher(tmp_path, monkeypatch)
+    calls = _record_package_index_calls(monkeypatch)
+
+    with pytest.raises(RuntimeError) as raised:
+        runpy.run_path(
+            str(launcher), init_globals={"ANCHOR_PROJECT_ID": "alpha", "ANCHOR_PACKAGE_VERSION": pin}
+        )
+
+    assert cast(Any, raised.value).error_code == "package_version_pin_invalid"
+    assert calls == []
+
+
+def test_assistant_launcher_matching_pin_prepends_launcher_phase_timings(tmp_path, monkeypatch):
+    import odibi_anchor
+
+    host, launcher = _databricks_launcher(tmp_path, monkeypatch)
+    calls = _record_package_index_calls(monkeypatch)
+    monkeypatch.setattr(odibi_anchor, "__version__", "0.3.24")
+    config = host / ".odibi-anchor" / "anchor.toml"
+    config.parent.mkdir()
+    config.write_text("managed by test\n", encoding="utf-8")
+    packet = {
+        "kind": "managed_startup_packet", "status": "ready", "project_id": "alpha",
+        "timings": {"phases": [{"phase": "portfolio_load", "elapsed_ms": 1.0, "outcome": "ok"}]},
+    }
+    monkeypatch.setattr(odibi_anchor, "bootstrap_managed_project", lambda **_kwargs: {
+        "anchor": lambda *_args, **_kwargs: {}, "root": str(tmp_path), "manifest": None,
+        "orientation": {"kind": "orientation"}, "startup_packet": packet,
+        "preparation": {"environment": {"ANCHOR_HOME": str(tmp_path / "state")}},
+    })
+
+    namespace = runpy.run_path(
+        str(launcher),
+        init_globals={"ANCHOR_PROJECT_ID": "alpha", "ANCHOR_PACKAGE_VERSION": "0.3.24"},
+    )
+
+    timings = namespace["STARTUP_PACKET"]["timings"]
+    assert [(entry["phase"], entry.get("scope")) for entry in timings["phases"]] == [
+        ("portfolio_discovery", "launcher"), ("version_check", "launcher"),
+        ("package_import", "launcher"), ("portfolio_load", None),
+    ]
+    version_check = timings["phases"][1]
+    assert {key: version_check[key] for key in ("outcome", "policy", "required", "installed")} == {
+        "outcome": "ok", "policy": "pinned", "required": "0.3.24", "installed": "0.3.24",
+    }
+    assert timings["launcher_elapsed_ms"] >= 0
+    assert calls == []
+
+
+def test_assistant_launcher_package_index_timeout_is_structured(tmp_path, monkeypatch):
+    import urllib.error
+
+    _host, launcher = _databricks_launcher(tmp_path, monkeypatch)
+
+    def timed_out(*_args, **_kwargs):
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr("urllib.request.urlopen", timed_out)
+    monkeypatch.setenv("ANCHOR_VERSION_CHECK_TIMEOUT_SECONDS", "2")
+
+    with pytest.raises(TimeoutError) as raised:
+        runpy.run_path(str(launcher), init_globals={"ANCHOR_PROJECT_ID": "alpha"})
+
+    error = cast(Any, raised.value)
+    assert error.error_code == "bootstrap_phase_timeout"
+    assert {key: error.context[key] for key in ("phase", "layer", "item", "limit_seconds")} == {
+        "phase": "version_check", "layer": "pypi",
+        "item": "https://pypi.org/pypi/odibi-anchor/json", "limit_seconds": 2.0,
+    }
+    assert error.next_operation["environment"] == {"ANCHOR_VERSION_CHECK_TIMEOUT_SECONDS": "4"}
+
+
+def test_assistant_launcher_missing_portfolio_lists_every_searched_path(tmp_path, monkeypatch):
+    repository = Path(__file__).resolve().parents[1]
+    host = tmp_path / "host"
+    launcher = host / ".assistant" / "agent_bootstrap.py"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(repository / ".assistant" / "agent_bootstrap.py", launcher)
+    for name in ("DATABRICKS_RUNTIME_VERSION", "ANCHOR_HOME", "ANCHOR_SOURCE_CHECKOUT",
+                 "ANCHOR_PROJECT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    explicit = tmp_path / "elsewhere" / "anchor.toml"
+    monkeypatch.setenv("ANCHOR_PORTFOLIO_CONFIG", str(explicit))
+    default = host.resolve() / ".odibi-anchor" / "anchor.toml"
+    default.parent.mkdir()
+    default.write_text("present, but lower precedence than the environment\n")
+
+    with pytest.raises(RuntimeError) as raised:
+        runpy.run_path(str(launcher), init_globals={"ANCHOR_PROJECT_ID": "alpha"})
+
+    error = cast(Any, raised.value)
+    assert error.error_code == "managed_portfolio_not_found"
+    assert error.context["searched_paths"] == [
+        {"precedence": 1, "source": "ANCHOR_PORTFOLIO_CONFIG init global",
+         "path": None, "status": "unset"},
+        {"precedence": 2, "source": "ANCHOR_PORTFOLIO_CONFIG environment variable",
+         "path": str(explicit), "exists": False, "status": "selected_missing"},
+        {"precedence": 3,
+         "source": "instruction-root default (<launcher>/../.odibi-anchor/anchor.toml)",
+         "path": str(default), "exists": True, "status": "not_consulted_lower_precedence"},
+    ]
+    message = str(error)
+    assert message.index(str(explicit)) < message.index(str(default))
+    assert "ANCHOR_PORTFOLIO_CONFIG init global or environment variable" in message
+    assert '"ANCHOR_PORTFOLIO_CONFIG"' in error.copy_ready.replace("'", '"')
+
+
+def test_bootstrap_benchmark_reports_each_fresh_process_run(tmp_path):
+    launcher = tmp_path / ".assistant" / "agent_bootstrap.py"
+    launcher.parent.mkdir()
+    launcher.write_text(
+        "STARTUP_PACKET = {'status': 'ready', 'project_id': ANCHOR_PROJECT_ID,\n"
+        "    'restore': {'status': 'not_applicable'}, 'timings': {'phases': [\n"
+        "        {'phase': 'host_guidance', 'elapsed_ms': 2.5, 'outcome': 'ok',\n"
+        "         'sub_phases': [{'phase': 'read', 'elapsed_ms': 1.5, 'outcome': 'ok'}]}]}}\n",
+        encoding="utf-8",
+    )
+    benchmark = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "scripts" / "bootstrap_benchmark.py")
+    )
+
+    report = benchmark["run_benchmark"](launcher=str(launcher), project_id="alpha", runs=2)
+
+    assert [(run["run"], run["ok"], run["classification"]) for run in report["runs"]] == [
+        (1, True, "warm_state"), (2, True, "warm_state"),
+    ]
+    assert report["runs"][0]["packet"]["project_id"] == "alpha"
+    assert report["phase_summary"]["host_guidance"]["count"] == 2
+    assert report["phase_summary"]["host_guidance.read"]["median_ms"] == 1.5

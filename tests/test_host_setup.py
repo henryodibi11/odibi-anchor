@@ -7,10 +7,12 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 import odibi_anchor.host_setup as module
+from odibi_anchor._bootstrap_phases import BootstrapPhaseTimeout, phase, recording
 from odibi_anchor.host_setup import HostSetupError, setup_host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +24,30 @@ def _resources(tmp_path: Path) -> Path:
     shutil.copy2(ROOT / ".assistant_instructions.md", root / ".assistant_instructions.md")
     shutil.copy2(ROOT / "agent_bootstrap.py", root / "agent_bootstrap.py")
     return root
+
+
+def _fake_databricks_sdk(workspace, configs: list | None = None):
+    """Fake the SDK modules host setup imports; record each explicit client config."""
+
+    def workspace_client(*, config):
+        if configs is not None:
+            configs.append(config)
+        return SimpleNamespace(workspace=workspace)
+
+    modules = {
+        "databricks.sdk": SimpleNamespace(WorkspaceClient=workspace_client),
+        "databricks.sdk.config": SimpleNamespace(Config=lambda **kwargs: kwargs),
+        "databricks.sdk.service.workspace": SimpleNamespace(
+            ImportFormat=SimpleNamespace(AUTO="AUTO")
+        ),
+    }
+
+    def import_module(name: str):
+        if name not in modules:
+            pytest.fail(f"unexpected import: {name}")
+        return modules[name]
+
+    return import_module
 
 
 def test_fresh_install_and_idempotence(tmp_path, monkeypatch):
@@ -435,13 +461,7 @@ def test_databricks_staging_residue_uses_workspace_api(monkeypatch):
         "exists",
         lambda path: True if path == staging else original_exists(path),
     )
-    monkeypatch.setattr(
-        module.importlib,
-        "import_module",
-        lambda name: SimpleNamespace(WorkspaceClient=lambda: SimpleNamespace(workspace=workspace))
-        if name == "databricks.sdk"
-        else pytest.fail(f"unexpected import: {name}"),
-    )
+    monkeypatch.setattr(module.importlib, "import_module", _fake_databricks_sdk(workspace))
 
     module._cleanup_staging(staging, "databricks")
 
@@ -461,11 +481,7 @@ def test_databricks_staging_cleanup_failure_is_reported(monkeypatch):
 
     monkeypatch.setattr(module.shutil, "rmtree", failed_rmtree)
     monkeypatch.setattr(Path, "exists", lambda path: path == staging)
-    monkeypatch.setattr(
-        module.importlib,
-        "import_module",
-        lambda _name: SimpleNamespace(WorkspaceClient=lambda: SimpleNamespace(workspace=workspace)),
-    )
+    monkeypatch.setattr(module.importlib, "import_module", _fake_databricks_sdk(workspace))
 
     with pytest.raises(HostSetupError, match="Workspace staging cleanup failed"):
         module._cleanup_staging(staging, "databricks")
@@ -531,23 +547,32 @@ class FakeWorkspaceFiles:
         raise WorkspaceNotFound(path)
 
 
+class SlowWorkspaceFiles(FakeWorkspaceFiles):
+    """Workspace API fake with injected per-path latency and failure modes."""
+
+    def __init__(self, root: str) -> None:
+        super().__init__(root)
+        self.latency: dict[str, float] = {}
+        self.hang: str | None = None
+        self.transport_timeout: str | None = None
+        self.release = threading.Event()
+
+    def download(self, path: str):
+        if path == self.hang:
+            self.release.wait(30)
+        if path == self.transport_timeout:
+            raise TimeoutError("Timed out after 0:01:00")
+        time.sleep(self.latency.get(path, 0.0))
+        return super().download(path)
+
+
 def _workspace_setup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Path, FakeWorkspaceFiles]:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configs: list | None = None,
+) -> tuple[Path, SlowWorkspaceFiles]:
     resources = _resources(tmp_path)
     monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
-    workspace = FakeWorkspaceFiles("/Users/test@example.invalid/anchor-host")
-
-    def import_module(name: str):
-        if name == "databricks.sdk":
-            return SimpleNamespace(
-                WorkspaceClient=lambda: SimpleNamespace(workspace=workspace)
-            )
-        if name == "databricks.sdk.service.workspace":
-            return SimpleNamespace(ImportFormat=SimpleNamespace(AUTO="AUTO"))
-        pytest.fail(f"unexpected import: {name}")
-
-    monkeypatch.setattr(module.importlib, "import_module", import_module)
+    workspace = SlowWorkspaceFiles("/Users/test@example.invalid/anchor-host")
+    monkeypatch.setattr(module.importlib, "import_module", _fake_databricks_sdk(workspace, configs))
     return resources, workspace
 
 
@@ -705,3 +730,94 @@ def test_interrupt_immediately_after_backup_move_cannot_delete_original(
 
     assert managed.read_bytes() == original
     assert not list(target.glob(".anchor-host-stage-*"))
+
+
+def test_databricks_workspace_client_is_explicitly_bounded_and_reused(tmp_path, monkeypatch):
+    configs: list = []
+    _workspace_setup(tmp_path, monkeypatch, configs)
+    monkeypatch.setenv("ANCHOR_WORKSPACE_API_TIMEOUT_SECONDS", "7")
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+
+    setup_host(target, adapter="databricks")
+    setup_host(target, adapter="databricks")
+
+    assert configs == [{"http_timeout_seconds": 7, "retry_timeout_seconds": 14}]
+
+
+@pytest.mark.parametrize("failure", ["hanging_read", "transport_timeout"])
+def test_databricks_workspace_read_timeout_is_structured_and_fail_closed(
+    tmp_path, monkeypatch, failure
+):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    setup_host(target, adapter="databricks")
+    stalled = "/Users/test@example.invalid/anchor-host/.assistant/README.md"
+    for path in workspace.files:
+        workspace.latency[path] = 0.005
+    setattr(workspace, "hang" if failure == "hanging_read" else "transport_timeout", stalled)
+    monkeypatch.setenv("ANCHOR_WORKSPACE_API_TIMEOUT_SECONDS", "0.1")
+    before = dict(workspace.files)
+    writes_before = sum(operation == "upload" for operation, _path in workspace.calls)
+
+    started = time.perf_counter()
+    try:
+        with recording() as recorder, pytest.raises(BootstrapPhaseTimeout) as raised, phase("host_guidance"):
+            setup_host(target, adapter="databricks")
+    finally:
+        workspace.release.set()
+    elapsed = time.perf_counter() - started
+
+    error: Any = raised.value
+    assert error.error_code == "bootstrap_phase_timeout"
+    assert error.context["phase"] == "host_guidance"
+    assert error.context["layer"] == "workspace_api"
+    assert error.context["item"] == stalled
+    assert error.context["setting"] == "ANCHOR_WORKSPACE_API_TIMEOUT_SECONDS"
+    if failure == "hanging_read":
+        assert error.context["sub_phase"] == "read"
+        assert error.context["limit_seconds"] == pytest.approx(0.3)
+        assert error.context["elapsed_ms"] >= 300
+        assert elapsed < 5
+    assert "ANCHOR_WORKSPACE_API_TIMEOUT_SECONDS" in error.copy_ready
+    assert workspace.files == before
+    assert sum(operation == "upload" for operation, _path in workspace.calls) == writes_before
+    [host_phase] = recorder.summary()["phases"]
+    assert host_phase["outcome"] == "timeout"
+    assert [(entry["phase"], entry["outcome"]) for entry in host_phase["sub_phases"]] == [
+        ("package_resources", "ok"), ("read", "timeout"),
+    ]
+
+
+def test_databricks_guidance_timings_report_sub_phases_and_slowest_files(tmp_path, monkeypatch):
+    resources, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    setup_host(target, adapter="databricks")
+    slow = ".assistant/README.md"
+    (resources / slow).write_text("updated guidance for a timed upgrade\n")
+    workspace.latency[f"/Users/test@example.invalid/anchor-host/{slow}"] = 0.05
+
+    with recording() as recorder, phase("host_guidance"):
+        upgraded = setup_host(target, adapter="databricks")
+    with recording() as repeated_recorder, phase("host_guidance"):
+        repeated = setup_host(target, adapter="databricks")
+
+    assert upgraded["status"] == "upgraded"
+    assert repeated == setup_host(target, adapter="databricks")
+    [host_phase] = recorder.summary()["phases"]
+    assert [(entry["phase"], entry["outcome"]) for entry in host_phase["sub_phases"]] == [
+        ("package_resources", "ok"), ("read", "ok"), ("verify", "ok"), ("publish", "ok"),
+    ]
+    read = host_phase["sub_phases"][1]
+    assert read["layer"] == "workspace_api"
+    assert read["file_count"] == upgraded["verified_file_count"] + 1
+    slowest = read["slowest_files"]
+    assert len(slowest) == 5
+    assert slowest[0]["path"] == slow
+    assert slowest[0]["elapsed_ms"] >= 50
+    # Reconciliation reads the previously published bytes before upgrading them.
+    assert slowest[0]["bytes"] == len((ROOT / slow).read_bytes())
+    [repeated_phase] = repeated_recorder.summary()["phases"]
+    assert repeated_phase["sub_phases"][-1] == {
+        "phase": "publish", "elapsed_ms": 0.0, "outcome": "not_required",
+        "reason": "managed files unchanged",
+    }

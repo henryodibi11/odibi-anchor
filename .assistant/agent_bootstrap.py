@@ -12,6 +12,7 @@ import json
 import os
 import re
 import runpy
+import time
 import urllib.request
 from collections.abc import Mapping
 from importlib import metadata
@@ -37,25 +38,134 @@ def _validated_checkout(raw: object, *, source: str) -> Path:
     return checkout.resolve(strict=True)
 
 
+_LAUNCHER_STARTED = time.perf_counter()
+_LAUNCHER_PHASES: list[dict[str, object]] = []
+_PYPI_URL = "https://pypi.org/pypi/odibi-anchor/json"
+_VERSION_CHECK_TIMEOUT_ENV = "ANCHOR_VERSION_CHECK_TIMEOUT_SECONDS"
+_STABLE_RELEASE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+# Older managed launchers ignore pins and demand the latest release, so pinning one
+# would make the next bootstrap refuse to start after host guidance is downgraded.
+_MINIMUM_PINNABLE_RELEASE = (0, 3, 24)
+
 try:
     _launcher = Path(__file__).resolve(strict=True)
 except (OSError, TypeError) as exc:
     raise RuntimeError("Odibi Anchor launcher __file__ is invalid") from exc
 
 
+def _record_launcher_phase(name: str, started: float, outcome: str, **details: object) -> None:
+    _LAUNCHER_PHASES.append({
+        "phase": name,
+        "scope": "launcher",
+        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        "outcome": outcome,
+        **details,
+    })
+
+
+def _structured(
+    exc: BaseException,
+    *,
+    error_code: str,
+    context: Mapping[str, object],
+    next_operations: tuple[Mapping[str, object], ...] = (),
+) -> BaseException:
+    """Attach the odibi_anchor._recovery.attach_recovery fields before the package import.
+
+    The version check runs before importing a possibly mismatched package, so this
+    mirrors that contract exactly instead of importing it.
+    """
+    operations = [dict(operation) for operation in next_operations]
+    exc.error_code = error_code  # type: ignore[attr-defined]
+    exc.context = dict(context)  # type: ignore[attr-defined]
+    exc.next_operations = operations  # type: ignore[attr-defined]
+    if operations:
+        exc.next_operation = operations[0]  # type: ignore[attr-defined]
+        for field in ("copy_ready", "requires_owner", "retry_safety"):
+            if field in operations[0]:
+                setattr(exc, field, operations[0][field])
+    return exc
+
+
+def _launcher_call(project_id: str | None, **extra: str) -> str:
+    init_globals = {"ANCHOR_PROJECT_ID": project_id or "<project-id>", **extra}
+    return f"runpy.run_path({str(_launcher)!r}, init_globals={init_globals!r})"
+
+
+def _version_check_timeout() -> float:
+    raw = os.environ.get(_VERSION_CHECK_TIMEOUT_ENV)
+    if raw is None:
+        return 5.0
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = float("nan")
+    if not 0 < seconds <= 600:
+        raise RuntimeError(
+            f"{_VERSION_CHECK_TIMEOUT_ENV} must be a number of seconds greater than 0 and at "
+            f"most 600; got {raw!r}"
+        )
+    return seconds
+
+
 def _latest_stable_release() -> str:
     """Resolve the newest non-yanked stable release from the public package index."""
     request = urllib.request.Request(
-        "https://pypi.org/pypi/odibi-anchor/json",
+        _PYPI_URL,
         headers={"Accept": "application/json", "User-Agent": "odibi-anchor-managed-launcher"},
     )
+    timeout = _version_check_timeout()
+    started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.load(response)
     except Exception as exc:
+        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+            elapsed = round((time.perf_counter() - started) * 1000.0, 3)
+            larger = f"{min(600.0, 2 * timeout):g}"
+            raise _structured(
+                TimeoutError(
+                    f"bootstrap phase version_check timed out after {elapsed:.0f} ms at the pypi "
+                    f"layer while accessing {_PYPI_URL} (limit {timeout:g} s). Classification: "
+                    "the latest-stable lookup exceeded its bounded deadline; startup was refused "
+                    "rather than assuming a version. Retry with a larger "
+                    f"{_VERSION_CHECK_TIMEOUT_ENV}, or set an exact ANCHOR_PACKAGE_VERSION pin, "
+                    "which skips the package index."
+                ),
+                error_code="bootstrap_phase_timeout",
+                context={
+                    "phase": "version_check", "sub_phase": None, "layer": "pypi",
+                    "item": _PYPI_URL, "elapsed_ms": elapsed, "limit_seconds": timeout,
+                    "setting": _VERSION_CHECK_TIMEOUT_ENV,
+                },
+                next_operations=(
+                    {
+                        "operation": "rerun_launcher_with_larger_timeout",
+                        "environment": {_VERSION_CHECK_TIMEOUT_ENV: larger},
+                        "copy_ready": (
+                            f'os.environ["{_VERSION_CHECK_TIMEOUT_ENV}"] = "{larger}"  '
+                            "# then rerun the launcher"
+                        ),
+                        "reason": "Retry the idempotent package-index lookup with a larger deadline.",
+                        "requires_owner": False,
+                        "retry_safety": "idempotent",
+                    },
+                    {
+                        "operation": "rerun_launcher_with_version_pin",
+                        "copy_ready": _launcher_call(
+                            globals().get("ANCHOR_PROJECT_ID") or os.environ.get("ANCHOR_PROJECT_ID"),
+                            ANCHOR_PACKAGE_VERSION="<exact-version>",
+                        ),
+                        "reason": "An exact pin skips the package index; choosing it is a version-policy decision.",
+                        "requires_owner": True,
+                        "retry_safety": "idempotent",
+                    },
+                ),
+            ) from exc
         raise RuntimeError(
             "cannot verify the latest stable odibi-anchor release from PyPI; "
-            "retry when package-index access is available"
+            "retry when package-index access is available, or set an exact "
+            "ANCHOR_PACKAGE_VERSION pin, which skips the package index"
         ) from exc
     releases = payload.get("releases") if isinstance(payload, dict) else None
     if not isinstance(releases, dict):
@@ -83,6 +193,110 @@ def _requested_project_id() -> str | None:
         raise RuntimeError("ANCHOR_PROJECT_ID init global conflicts with the environment")
     return explicit or environment
 
+
+def _validated_pin(raw: object, source: str) -> str:
+    if not isinstance(raw, str) or _STABLE_RELEASE.fullmatch(raw) is None:
+        raise _structured(
+            RuntimeError(
+                f"{source} must be an exact stable odibi-anchor release such as 0.3.24; "
+                f"got {raw!r}"
+            ),
+            error_code="package_version_pin_invalid",
+            context={"source": source, "value": repr(raw)},
+        )
+    if tuple(int(part) for part in raw.split(".")) < _MINIMUM_PINNABLE_RELEASE:
+        minimum = ".".join(str(part) for part in _MINIMUM_PINNABLE_RELEASE)
+        raise _structured(
+            RuntimeError(
+                f"{source} pins {raw}, but pins below {minimum} are unsupported: older managed "
+                "launchers ignore pins and require the latest stable release, so the next "
+                "bootstrap would refuse to start"
+            ),
+            error_code="package_version_pin_invalid",
+            context={"source": source, "value": raw, "minimum_pinnable": minimum},
+        )
+    return raw
+
+
+def _portfolio_pin(config_path: Path, instruction_root: Path) -> tuple[str, str] | None:
+    """Read hosts.<id>.package_version for the one host matching this launcher."""
+    if not config_path.is_file():
+        return None
+    try:
+        import tomllib
+
+        document = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _structured(
+            RuntimeError(
+                f"cannot read the managed portfolio {config_path} to resolve its package "
+                f"version policy: {type(exc).__name__}: {exc}"
+            ),
+            error_code="managed_portfolio_unreadable",
+            context={"config_path": str(config_path), "error_type": type(exc).__name__},
+        ) from exc
+    hosts = document.get("hosts")
+    if not isinstance(hosts, dict):
+        return None
+    matches = []
+    for host_id, settings in hosts.items():
+        configured = settings.get("instruction_root") if isinstance(settings, dict) else None
+        if isinstance(configured, str) and Path(configured).resolve() == instruction_root:
+            matches.append((host_id, settings))
+    # Zero or several matches are refused later with exact host diagnostics.
+    if len(matches) != 1 or "package_version" not in matches[0][1]:
+        return None
+    host_id, settings = matches[0]
+    source = f"portfolio {config_path} hosts.{host_id}.package_version"
+    return _validated_pin(settings["package_version"], source), source
+
+
+def _package_version_policy(config_path: Path, instruction_root: Path) -> dict[str, str]:
+    """Precedence: init global, then environment, then portfolio host field, then latest."""
+    if "ANCHOR_PACKAGE_VERSION" in globals():
+        source = "ANCHOR_PACKAGE_VERSION init global"
+        return {"policy": "pinned", "source": source,
+                "required": _validated_pin(globals()["ANCHOR_PACKAGE_VERSION"], source)}
+    if "ANCHOR_PACKAGE_VERSION" in os.environ:
+        source = "ANCHOR_PACKAGE_VERSION environment variable"
+        return {"policy": "pinned", "source": source,
+                "required": _validated_pin(os.environ["ANCHOR_PACKAGE_VERSION"], source)}
+    pinned = _portfolio_pin(config_path, instruction_root)
+    if pinned is not None:
+        return {"policy": "pinned", "source": pinned[1], "required": pinned[0]}
+    return {"policy": "latest_stable", "source": "default"}
+
+
+def _portfolio_search(instruction_root: Path) -> tuple[Path, list[dict[str, object]]]:
+    """Apply the unchanged precedence and describe every candidate in that order."""
+    default = instruction_root / ".odibi-anchor" / "anchor.toml"
+    candidates: list[tuple[str, object, bool]] = [
+        ("ANCHOR_PORTFOLIO_CONFIG init global", globals().get("ANCHOR_PORTFOLIO_CONFIG"),
+         "ANCHOR_PORTFOLIO_CONFIG" in globals()),
+        ("ANCHOR_PORTFOLIO_CONFIG environment variable", os.environ.get("ANCHOR_PORTFOLIO_CONFIG"),
+         "ANCHOR_PORTFOLIO_CONFIG" in os.environ),
+        ("instruction-root default (<launcher>/../.odibi-anchor/anchor.toml)", str(default), True),
+    ]
+    selected: Path | None = None
+    searched: list[dict[str, object]] = []
+    for precedence, (source, raw, provided) in enumerate(candidates, start=1):
+        entry: dict[str, object] = {"precedence": precedence, "source": source}
+        if not provided:
+            entry.update(path=None, status="unset")
+        else:
+            path = Path(os.fspath(raw))  # type: ignore[arg-type]
+            exists = path.is_file()
+            entry.update(path=str(path), exists=exists)
+            if selected is None:
+                selected = path
+                entry["status"] = "selected" if exists else "selected_missing"
+            else:
+                entry["status"] = "not_consulted_lower_precedence"
+        searched.append(entry)
+    assert selected is not None
+    return selected, searched
+
+
 if "ANCHOR_SOURCE_CHECKOUT" in globals():
     _checkout = _validated_checkout(
         globals()["ANCHOR_SOURCE_CHECKOUT"], source="ANCHOR_SOURCE_CHECKOUT init global"
@@ -108,21 +322,86 @@ if _checkout is None:
     _is_databricks = _launcher.as_posix().startswith("/Workspace/") or bool(
         os.environ.get("DATABRICKS_RUNTIME_VERSION")
     )
+    _phase_started = time.perf_counter()
+    _config_path, _portfolio_searched = _portfolio_search(_instruction_root)
+    _record_launcher_phase(
+        "portfolio_discovery", _phase_started, "ok" if _config_path.is_file() else "not_found",
+        config_path=str(_config_path),
+    )
+    _phase_started = time.perf_counter()
     if _is_databricks:
-        _latest = _latest_stable_release()
         try:
-            _installed = metadata.version("odibi-anchor")
-        except metadata.PackageNotFoundError:
-            _installed = None
-        if _installed != _latest:
-            raise RuntimeError(
-                "Odibi Anchor requires the latest stable release in this Python process. Run "
-                f'`%pip install "odibi-anchor[databricks]=={_latest}"`, then '
-                "`dbutils.library.restartPython()` and rerun this launcher. "
-                f"Resolved latest stable: {_latest}; installed: {_installed or 'missing'}."
+            _policy = _package_version_policy(_config_path, _instruction_root)
+            try:
+                _installed = metadata.version("odibi-anchor")
+            except metadata.PackageNotFoundError:
+                _installed = None
+            if _policy["policy"] == "pinned":
+                _pinned = _policy["required"]
+                if _installed != _pinned:
+                    raise _structured(
+                        RuntimeError(
+                            f"Odibi Anchor requires the pinned release {_pinned} in this Python "
+                            f"process ({_policy['source']}). Run "
+                            f'`%pip install "odibi-anchor[databricks]=={_pinned}"`, then '
+                            "`dbutils.library.restartPython()` and rerun this launcher. "
+                            f"Pinned: {_pinned}; installed: {_installed or 'missing'}."
+                        ),
+                        error_code="package_version_mismatch",
+                        context={**_policy, "installed": _installed},
+                        next_operations=({
+                            "operation": "install_package",
+                            "copy_ready": f'%pip install "odibi-anchor[databricks]=={_pinned}"',
+                            "then": "dbutils.library.restartPython()",
+                            "reason": "Install the pinned release, restart Python, and rerun.",
+                            "requires_owner": False,
+                            "retry_safety": "idempotent",
+                        },),
+                    )
+            else:
+                _latest = _latest_stable_release()
+                _policy["required"] = _latest
+                if _installed != _latest:
+                    raise _structured(
+                        RuntimeError(
+                            "Odibi Anchor requires the latest stable release in this Python "
+                            "process. Run "
+                            f'`%pip install "odibi-anchor[databricks]=={_latest}"`, then '
+                            "`dbutils.library.restartPython()` and rerun this launcher. "
+                            f"Resolved latest stable: {_latest}; installed: {_installed or 'missing'}."
+                        ),
+                        error_code="package_version_mismatch",
+                        context={**_policy, "installed": _installed},
+                        next_operations=({
+                            "operation": "install_package",
+                            "copy_ready": f'%pip install "odibi-anchor[databricks]=={_latest}"',
+                            "then": "dbutils.library.restartPython()",
+                            "reason": "Install the latest stable release, restart Python, and rerun.",
+                            "requires_owner": False,
+                            "retry_safety": "idempotent",
+                        },),
+                    )
+        except BaseException as _version_error:
+            _record_launcher_phase(
+                "version_check", _phase_started,
+                "timeout" if getattr(_version_error, "error_code", None) == "bootstrap_phase_timeout"
+                else "raised",
+                error_type=type(_version_error).__name__,
             )
+            raise
+        _record_launcher_phase(
+            "version_check", _phase_started, "ok", installed=_installed, **_policy
+        )
+    else:
+        _record_launcher_phase(
+            "version_check", _phase_started, "not_applicable",
+            reason="the managed version policy applies to Databricks launchers",
+        )
 
+    _phase_started = time.perf_counter()
     from odibi_anchor import __version__ as _runtime_version
+
+    _record_launcher_phase("package_import", _phase_started, "ok")
 
     try:
         _distribution_version = metadata.version("odibi-anchor")
@@ -134,14 +413,6 @@ if _checkout is None:
         )
 
     _project_id = _requested_project_id()
-    _config = globals().get(
-        "ANCHOR_PORTFOLIO_CONFIG",
-        os.environ.get(
-            "ANCHOR_PORTFOLIO_CONFIG",
-            str(_instruction_root / ".odibi-anchor" / "anchor.toml"),
-        ),
-    )
-    _config_path = Path(os.fspath(_config))
     if _config_path.is_file():
         if _project_id is None:
             raise RuntimeError(
@@ -161,6 +432,12 @@ if _checkout is None:
         MANIFEST = _managed["manifest"]
         ORIENTATION = _managed["orientation"]
         STARTUP_PACKET = _managed["startup_packet"]
+        _timings = STARTUP_PACKET.get("timings") if isinstance(STARTUP_PACKET, dict) else None
+        if isinstance(_timings, dict) and isinstance(_timings.get("phases"), list):
+            _timings["phases"][:0] = _LAUNCHER_PHASES
+            _timings["launcher_elapsed_ms"] = round(
+                (time.perf_counter() - _LAUNCHER_STARTED) * 1000.0, 3
+            )
         BOOTSTRAP = {
             "success": True,
             "kind": "agent_bootstrap",
@@ -176,9 +453,38 @@ if _checkout is None:
 
         _home = os.environ.get("ANCHOR_HOME")
         if not _home:
-            raise RuntimeError(
-                f"managed portfolio is missing at {_config_path}; installed fallback requires "
-                "one explicit ANCHOR_HOME"
+            from odibi_anchor._recovery import attach_recovery
+
+            _searched_text = "; ".join(
+                f"{entry['precedence']}. {entry['source']}: "
+                + (f"{entry['path']} ({entry['status']})" if entry["path"] else "unset")
+                for entry in _portfolio_searched
+            )
+            raise attach_recovery(
+                RuntimeError(
+                    f"managed portfolio is missing at {_config_path}; installed fallback requires "
+                    f"one explicit ANCHOR_HOME. Searched in precedence order: {_searched_text}. "
+                    "Classification: no portfolio exists at the selected path. Supported "
+                    "correction: rerun this launcher with the exact absolute portfolio path as "
+                    "the ANCHOR_PORTFOLIO_CONFIG init global or environment variable. Do not "
+                    "copy, move, or hand-edit the portfolio TOML."
+                ),
+                error_code="managed_portfolio_not_found",
+                context={
+                    "selected_path": str(_config_path),
+                    "searched_paths": _portfolio_searched,
+                    "instruction_root": str(_instruction_root),
+                    "launcher": str(_launcher),
+                },
+                next_operations=({
+                    "operation": "rerun_launcher_with_portfolio",
+                    "copy_ready": _launcher_call(
+                        _project_id, ANCHOR_PORTFOLIO_CONFIG="<absolute path to anchor.toml>"
+                    ),
+                    "reason": "Select the exact existing portfolio explicitly.",
+                    "requires_owner": True,
+                    "retry_safety": "idempotent",
+                },),
             )
         _target = os.environ.get("ANCHOR_PROJECT_ROOT") or str(_instruction_root)
         anchor = launch(

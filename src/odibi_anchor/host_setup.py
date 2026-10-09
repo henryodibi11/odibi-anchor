@@ -8,10 +8,26 @@ import os
 import shutil
 import stat
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import time
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, TypeVar
 
+from odibi_anchor._bootstrap_phases import (
+    BootstrapPhaseTimeout,
+    databricks_workspace_client,
+    elapsed_ms,
+    is_timeout,
+    phase,
+    phase_timeout,
+    record_phase,
+    slowest,
+    workspace_timeout_policy,
+)
+
+_T = TypeVar("_T")
+_PHASE = "host_guidance"
 _MANIFEST = ".odibi-anchor-host-guidance.json"
 _MANIFEST_VERSION = 1
 _ADAPTER_FILES = {
@@ -153,8 +169,7 @@ def _cleanup_staging(staging: Path, adapter: str) -> None:
         detail = ", ".join(failures) if failures else "staging path remains"
         raise HostSetupError(f"host guidance published but staging cleanup failed: {detail}")
     try:
-        sdk = importlib.import_module("databricks.sdk")
-        client = sdk.WorkspaceClient()
+        client = databricks_workspace_client()
         client.workspace.delete(path=raw_path.removeprefix("/Workspace"), recursive=True)
     except Exception as exc:
         raise HostSetupError(
@@ -299,16 +314,50 @@ def _workspace_missing(exc: BaseException) -> bool:
     )
 
 
+def _timed_out(exc: BaseException) -> bool:
+    """Classify an SDK/transport failure, including explicitly wrapped causes, as a timeout.
+
+    ``__context__`` is ignored: a retried-then-failed call may carry an unrelated
+    earlier timeout there. Transport wrappers store the timeout as cause or argument.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if is_timeout(current):
+            return True
+        pending.extend(
+            item for item in (current.__cause__, *current.args) if isinstance(item, BaseException)
+        )
+    return False
+
+
+def _workspace_timeout(path: str, started: float) -> BootstrapPhaseTimeout:
+    policy = workspace_timeout_policy()
+    return phase_timeout(
+        phase_name=_PHASE, layer="workspace_api", elapsed=elapsed_ms(started),
+        limit_seconds=policy["retry_timeout_seconds"], item=path, setting=policy["setting"],
+    )
+
+
 def _workspace_read(workspace: Any, path: str) -> bytes | None:
+    started = time.perf_counter()
     try:
         stream = workspace.download(path)
     except Exception as exc:
         if _workspace_missing(exc):
             return None
+        if _timed_out(exc):
+            raise _workspace_timeout(path, started) from exc
         raise HostSetupError(f"Workspace guidance path is inaccessible: {path}") from exc
     try:
         content = stream.read()
     except Exception as exc:
+        if _timed_out(exc):
+            raise _workspace_timeout(path, started) from exc
         raise HostSetupError(f"Workspace guidance path is unreadable: {path}") from exc
     finally:
         close = getattr(stream, "close", None)
@@ -319,20 +368,82 @@ def _workspace_read(workspace: Any, path: str) -> bytes | None:
     return content
 
 
+def _run_bounded(
+    calls: list[tuple[str, Callable[[], _T]]], *, sub_phase: str,
+    policy: dict[str, Any] | None = None,
+) -> list[_T]:
+    """Run Workspace calls concurrently; refuse any call that outlives its deadline.
+
+    Each call's deadline starts when a worker begins it. Results keep input order and
+    the first failure in input order is raised, as ``executor.map`` did. A hung worker
+    cannot be killed, so a timeout returns without waiting for it.
+    """
+    resolved = workspace_timeout_policy() if policy is None else policy
+    deadline = float(resolved["item_deadline_seconds"])
+    started: dict[int, float] = {}
+
+    def run(index: int, call: Callable[[], _T]) -> _T:
+        started[index] = time.perf_counter()
+        return call()
+
+    executor = ThreadPoolExecutor(
+        max_workers=min(_DATABRICKS_READ_WORKERS, len(calls)),
+        thread_name_prefix="anchor-guidance",
+    )
+    timed_out = False
+    try:
+        futures: dict[Future[_T], int] = {
+            executor.submit(run, index, call): index for index, (_item, call) in enumerate(calls)
+        }
+        pending = set(futures)
+        while pending:
+            _done, pending = wait(
+                pending, timeout=min(0.25, deadline / 4), return_when=FIRST_COMPLETED
+            )
+            now = time.perf_counter()
+            for future in pending:
+                index = futures[future]
+                begun = started.get(index)
+                if begun is not None and now - begun > deadline:
+                    timed_out = True
+                    raise phase_timeout(
+                        phase_name=_PHASE, sub_phase=sub_phase, layer="workspace_api",
+                        elapsed=(now - begun) * 1000.0, limit_seconds=deadline,
+                        item=calls[index][0], setting=resolved["setting"],
+                    )
+        return [future.result() for future in futures]
+    finally:
+        executor.shutdown(wait=not timed_out, cancel_futures=True)
+
+
 def _workspace_read_many(
-    workspace: Any, target: Path, relative_paths: list[str],
+    workspace: Any, target: Path, relative_paths: list[str], *,
+    policy: dict[str, Any] | None = None,
+    observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, bytes | None]:
     """Read complete Workspace files concurrently while preserving input order."""
     ordered = list(dict.fromkeys(relative_paths))
     if not ordered:
         return {}
 
-    def read(relative: str) -> bytes | None:
-        return _workspace_read(workspace, _workspace_api_path(target, relative))
+    def reader(relative: str) -> Callable[[], bytes | None]:
+        def read() -> bytes | None:
+            started = time.perf_counter()
+            content = _workspace_read(workspace, _workspace_api_path(target, relative))
+            if observations is not None:
+                observations.append({
+                    "path": relative,
+                    "elapsed_ms": elapsed_ms(started),
+                    "bytes": None if content is None else len(content),
+                })
+            return content
 
-    workers = min(_DATABRICKS_READ_WORKERS, len(ordered))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anchor-guidance") as executor:
-        contents = list(executor.map(read, ordered))
+        return read
+
+    contents = _run_bounded(
+        [(_workspace_api_path(target, relative), reader(relative)) for relative in ordered],
+        sub_phase="read", policy=policy,
+    )
     return dict(zip(ordered, contents, strict=True))
 
 
@@ -366,131 +477,157 @@ def _setup_databricks_workspace(
     target: Path,
     desired: dict[str, bytes],
 ) -> dict[str, Any]:
+    policy = workspace_timeout_policy()
     try:
-        sdk = importlib.import_module("databricks.sdk")
         workspace_types = importlib.import_module("databricks.sdk.service.workspace")
-        workspace = sdk.WorkspaceClient().workspace
+        workspace = databricks_workspace_client(policy).workspace
         import_format = workspace_types.ImportFormat.AUTO
     except Exception as exc:
         raise HostSetupError("Databricks Workspace host setup requires an authenticated SDK") from exc
 
-    target_path = _workspace_api_path(target)
-    try:
-        target_status = workspace.get_status(target_path)
-    except Exception as exc:
-        raise HostSetupError(f"Databricks Workspace target is inaccessible: {target_path}") from exc
-    raw_object_type = getattr(target_status, "object_type", None)
-    object_type = str(getattr(raw_object_type, "value", raw_object_type)).upper()
-    if object_type not in {"DIRECTORY", "REPO"}:
-        raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
-
-    manifest_path = _workspace_api_path(target, _MANIFEST)
-    manifest_content = _workspace_read(workspace, manifest_path)
-    manifest = None if manifest_content is None else _parse_manifest(manifest_content)
-    if manifest is not None and manifest["adapter"] != "databricks":
-        raise HostSetupError(
-            "host guidance manifest adapter mismatch: "
-            f"managed={manifest['adapter']}, requested=databricks"
-        )
-    previous: dict[str, str] = {} if manifest is None else manifest["files"]
-    compatible_unmanaged: list[str] = []
-    existing = _workspace_read_many(
-        workspace, target, sorted(set(previous) | set(desired)),
-    )
-    legacy_managed: list[str] = []
-    if manifest is None:
-        desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
-            desired, existing
-        )
-    elif _CUSTOM_INSTRUCTIONS not in previous:
-        custom = existing.get(_CUSTOM_INSTRUCTIONS)
-        if (
-            custom is not None
-            and b"# Odibi Anchor operating contract" in custom
-            and b"agent_bootstrap.py" in custom
-        ):
-            desired.pop(_CUSTOM_INSTRUCTIONS)
-            compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
-    for relative in sorted(set(previous) | set(desired)):
-        content = existing.get(relative)
-        expected = previous.get(relative)
-        if content is not None:
-            actual = _sha256(content)
-            if expected is None:
-                if relative in desired and actual == _sha256(desired[relative]):
-                    continue
-                raise HostSetupError(f"unmanaged destination collision: {relative}")
-            if actual != expected:
-                raise HostSetupError(
-                    f"modified managed file: {relative} (expected {expected}, actual {actual})"
-                )
-        elif expected is not None:
-            raise HostSetupError(
-                f"modified managed file: {relative} (expected {expected}, actual missing)"
+    with phase("read", layer="workspace_api") as read_phase:
+        target_path = _workspace_api_path(target)
+        status_started = time.perf_counter()
+        try:
+            [target_status] = _run_bounded(
+                [(target_path, lambda: workspace.get_status(target_path))],
+                sub_phase="read", policy=policy,
             )
+        except BootstrapPhaseTimeout:
+            raise
+        except Exception as exc:
+            if _timed_out(exc):
+                raise _workspace_timeout(target_path, status_started) from exc
+            raise HostSetupError(
+                f"Databricks Workspace target is inaccessible: {target_path}"
+            ) from exc
+        raw_object_type = getattr(target_status, "object_type", None)
+        object_type = str(getattr(raw_object_type, "value", raw_object_type)).upper()
+        if object_type not in {"DIRECTORY", "REPO"}:
+            raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
 
-    hashes = {relative: _sha256(content) for relative, content in desired.items()}
-    manifest_bytes = (json.dumps(
-        {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": hashes},
-        indent=2, sort_keys=True,
-    ) + "\n").encode()
+        manifest_path = _workspace_api_path(target, _MANIFEST)
+        [manifest_content] = _run_bounded(
+            [(manifest_path, lambda: _workspace_read(workspace, manifest_path))],
+            sub_phase="read", policy=policy,
+        )
+        manifest = None if manifest_content is None else _parse_manifest(manifest_content)
+        if manifest is not None and manifest["adapter"] != "databricks":
+            raise HostSetupError(
+                "host guidance manifest adapter mismatch: "
+                f"managed={manifest['adapter']}, requested=databricks"
+            )
+        previous: dict[str, str] = {} if manifest is None else manifest["files"]
+        compatible_unmanaged: list[str] = []
+        observations: list[dict[str, Any]] = []
+        existing = _workspace_read_many(
+            workspace, target, sorted(set(previous) | set(desired)),
+            policy=policy, observations=observations,
+        )
+        read_phase.update(
+            file_count=sum(item["bytes"] is not None for item in observations)
+            + (manifest_content is not None),
+            bytes=sum(item["bytes"] or 0 for item in observations) + len(manifest_content or b""),
+            slowest_files=slowest(observations),
+            timeout_policy=policy,
+        )
+    with phase("verify"):
+        legacy_managed: list[str] = []
+        if manifest is None:
+            desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
+                desired, existing
+            )
+        elif _CUSTOM_INSTRUCTIONS not in previous:
+            custom = existing.get(_CUSTOM_INSTRUCTIONS)
+            if (
+                custom is not None
+                and b"# Odibi Anchor operating contract" in custom
+                and b"agent_bootstrap.py" in custom
+            ):
+                desired.pop(_CUSTOM_INSTRUCTIONS)
+                compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
+        for relative in sorted(set(previous) | set(desired)):
+            content = existing.get(relative)
+            expected = previous.get(relative)
+            if content is not None:
+                actual = _sha256(content)
+                if expected is None:
+                    if relative in desired and actual == _sha256(desired[relative]):
+                        continue
+                    raise HostSetupError(f"unmanaged destination collision: {relative}")
+                if actual != expected:
+                    raise HostSetupError(
+                        f"modified managed file: {relative} (expected {expected}, actual {actual})"
+                    )
+            elif expected is not None:
+                raise HostSetupError(
+                    f"modified managed file: {relative} (expected {expected}, actual missing)"
+                )
+
+        hashes = {relative: _sha256(content) for relative, content in desired.items()}
+        manifest_bytes = (json.dumps(
+            {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": hashes},
+            indent=2, sort_keys=True,
+        ) + "\n").encode()
     if manifest is not None and previous == hashes:
         # The reads above already verified every managed file against the prior
         # manifest. Re-reading the same publication doubles Workspace API traffic
         # without adding drift evidence; post-mutation verification remains below.
+        record_phase("publish", outcome="not_required", reason="managed files unchanged")
         return _result(
             target, "databricks", "unchanged", hashes, compatible_unmanaged,
             legacy_managed,
         )
 
-    before = {**existing, _MANIFEST: manifest_content}
-    mutation_order = [*desired, *sorted(set(previous) - set(desired)), _MANIFEST]
-    mutated: list[str] = []
-    try:
-        for relative, content in desired.items():
-            if existing.get(relative) == content:
-                continue
-            mutated.append(relative)
-            _workspace_write(
-                workspace, _workspace_api_path(target, relative), content, import_format
-            )
-        for relative in sorted(set(previous) - set(desired)):
-            mutated.append(relative)
-            _workspace_delete(workspace, _workspace_api_path(target, relative))
-        mutated.append(_MANIFEST)
-        _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
-        _verify_workspace_publication(workspace, target, desired, manifest_bytes)
-    except BaseException as publication_error:
-        rollback_errors: list[str] = []
-        for relative in reversed(dict.fromkeys(mutated)):
-            path = _workspace_api_path(target, relative)
-            original = before.get(relative)
-            try:
-                if original is None:
-                    _workspace_delete(workspace, path)
-                else:
-                    _workspace_write(workspace, path, original, import_format)
-            except BaseException:
-                rollback_errors.append(relative)
-        for relative in dict.fromkeys(mutation_order):
-            try:
-                if _workspace_read(workspace, _workspace_api_path(target, relative)) != before.get(
-                    relative
-                ):
+    with phase("publish", layer="workspace_api"):
+        before = {**existing, _MANIFEST: manifest_content}
+        mutation_order = [*desired, *sorted(set(previous) - set(desired)), _MANIFEST]
+        mutated: list[str] = []
+        try:
+            for relative, content in desired.items():
+                if existing.get(relative) == content:
+                    continue
+                mutated.append(relative)
+                _workspace_write(
+                    workspace, _workspace_api_path(target, relative), content, import_format
+                )
+            for relative in sorted(set(previous) - set(desired)):
+                mutated.append(relative)
+                _workspace_delete(workspace, _workspace_api_path(target, relative))
+            mutated.append(_MANIFEST)
+            _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
+            _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+        except BaseException as publication_error:
+            rollback_errors: list[str] = []
+            for relative in reversed(dict.fromkeys(mutated)):
+                path = _workspace_api_path(target, relative)
+                original = before.get(relative)
+                try:
+                    if original is None:
+                        _workspace_delete(workspace, path)
+                    else:
+                        _workspace_write(workspace, path, original, import_format)
+                except BaseException:
                     rollback_errors.append(relative)
-            except BaseException:
-                rollback_errors.append(relative)
-        if rollback_errors:
-            failed = ", ".join(sorted(set(rollback_errors)))
-            raise HostSetupError(
-                "Databricks Workspace host guidance publication and rollback failed for: "
-                f"{failed}"
-            ) from publication_error
-        if isinstance(publication_error, Exception):
-            raise HostSetupError(
-                "Databricks Workspace host guidance publication failed; original state restored"
-            ) from publication_error
-        raise
+            for relative in dict.fromkeys(mutation_order):
+                try:
+                    if _workspace_read(
+                        workspace, _workspace_api_path(target, relative)
+                    ) != before.get(relative):
+                        rollback_errors.append(relative)
+                except BaseException:
+                    rollback_errors.append(relative)
+            if rollback_errors:
+                failed = ", ".join(sorted(set(rollback_errors)))
+                raise HostSetupError(
+                    "Databricks Workspace host guidance publication and rollback failed for: "
+                    f"{failed}"
+                ) from publication_error
+            if isinstance(publication_error, Exception):
+                raise HostSetupError(
+                    "Databricks Workspace host guidance publication failed; original state restored"
+                ) from publication_error
+            raise
 
     status = "upgraded" if manifest is not None or legacy_managed else "installed"
     return _result(
@@ -512,147 +649,156 @@ def setup_host(
         _databricks_target_root(target_root) if adapter == "databricks" else None
     )
     target = workspace_target or _target_root(target_root)
-    desired = _desired_files(adapter)
+    with phase("package_resources", layer="filesystem"):
+        desired = _desired_files(adapter)
     if workspace_target is not None:
         return _setup_databricks_workspace(target, desired)
-    manifest = _load_manifest(target)
-    if manifest is not None and manifest["adapter"] != adapter:
-        raise HostSetupError(
-            f"host guidance manifest adapter mismatch: managed={manifest['adapter']}, requested={adapter}"
+    with phase("read", layer="filesystem") as read_phase:
+        manifest = _load_manifest(target)
+        if manifest is not None and manifest["adapter"] != adapter:
+            raise HostSetupError(
+                f"host guidance manifest adapter mismatch: managed={manifest['adapter']}, requested={adapter}"
+            )
+        previous: dict[str, str] = {} if manifest is None else manifest["files"]
+        compatible_unmanaged: list[str] = []
+        existing = {
+            relative: (
+                _regular_bytes(_destination(target, relative), f"destination {relative}")
+                if _destination(target, relative).exists()
+                or _destination(target, relative).is_symlink()
+                else None
+            )
+            for relative in desired
+        }
+        read_phase.update(
+            file_count=sum(content is not None for content in existing.values()),
+            bytes=sum(len(content) for content in existing.values() if content is not None),
         )
-    previous: dict[str, str] = {} if manifest is None else manifest["files"]
-    compatible_unmanaged: list[str] = []
-    existing = {
-        relative: (
-            _regular_bytes(_destination(target, relative), f"destination {relative}")
-            if _destination(target, relative).exists()
-            or _destination(target, relative).is_symlink()
-            else None
-        )
-        for relative in desired
-    }
-    legacy_managed: list[str] = []
-    if manifest is None:
-        desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
-            desired, existing
-        )
-    elif _CUSTOM_INSTRUCTIONS not in previous:
-        custom = existing.get(_CUSTOM_INSTRUCTIONS)
-        if (
-            custom is not None
-            and b"# Odibi Anchor operating contract" in custom
-            and b"agent_bootstrap.py" in custom
-        ):
-            desired.pop(_CUSTOM_INSTRUCTIONS)
-            compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
-    host_file = _ADAPTER_FILES[adapter]
-    host_destination = target / host_file
-    if host_file not in previous and host_file in desired and host_destination.exists():
-        existing_host = _regular_bytes(host_destination, f"destination {host_file}")
-        if (
-            host_file in {"AGENTS.md", "CLAUDE.md"}
-            and b".assistant_instructions.md" in existing_host
-        ):
-            desired.pop(host_file)
-            compatible_unmanaged.append(host_file)
+    with phase("verify"):
+        legacy_managed: list[str] = []
+        if manifest is None:
+            desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
+                desired, existing
+            )
+        elif _CUSTOM_INSTRUCTIONS not in previous:
+            custom = existing.get(_CUSTOM_INSTRUCTIONS)
+            if (
+                custom is not None
+                and b"# Odibi Anchor operating contract" in custom
+                and b"agent_bootstrap.py" in custom
+            ):
+                desired.pop(_CUSTOM_INSTRUCTIONS)
+                compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
+        host_file = _ADAPTER_FILES[adapter]
+        host_destination = target / host_file
+        if host_file not in previous and host_file in desired and host_destination.exists():
+            existing_host = _regular_bytes(host_destination, f"destination {host_file}")
+            if (
+                host_file in {"AGENTS.md", "CLAUDE.md"}
+                and b".assistant_instructions.md" in existing_host
+            ):
+                desired.pop(host_file)
+                compatible_unmanaged.append(host_file)
 
-    for relative in sorted(set(previous) | set(desired)):
-        destination = _destination(target, relative)
-        expected = previous.get(relative)
-        if destination.exists() or destination.is_symlink():
-            actual = _sha256(_regular_bytes(destination, f"destination {relative}"))
-            if expected is None:
-                if relative in desired and actual == _sha256(desired[relative]):
-                    continue
-                raise HostSetupError(f"unmanaged destination collision: {relative}")
-            if actual != expected:
-                raise HostSetupError(
-                    f"modified managed file: {relative} (expected {expected}, actual {actual})"
-                )
-        elif expected is not None:
-            raise HostSetupError(f"modified managed file: {relative} (expected {expected}, actual missing)")
+        for relative in sorted(set(previous) | set(desired)):
+            destination = _destination(target, relative)
+            expected = previous.get(relative)
+            if destination.exists() or destination.is_symlink():
+                actual = _sha256(_regular_bytes(destination, f"destination {relative}"))
+                if expected is None:
+                    if relative in desired and actual == _sha256(desired[relative]):
+                        continue
+                    raise HostSetupError(f"unmanaged destination collision: {relative}")
+                if actual != expected:
+                    raise HostSetupError(
+                        f"modified managed file: {relative} (expected {expected}, actual {actual})"
+                    )
+            elif expected is not None:
+                raise HostSetupError(f"modified managed file: {relative} (expected {expected}, actual missing)")
 
-    hashes = {relative: _sha256(content) for relative, content in desired.items()}
-    manifest_bytes = (json.dumps(
-        {"version": _MANIFEST_VERSION, "adapter": adapter, "files": hashes},
-        indent=2, sort_keys=True,
-    ) + "\n").encode()
+        hashes = {relative: _sha256(content) for relative, content in desired.items()}
+        manifest_bytes = (json.dumps(
+            {"version": _MANIFEST_VERSION, "adapter": adapter, "files": hashes},
+            indent=2, sort_keys=True,
+        ) + "\n").encode()
     unchanged = manifest is not None and previous == hashes
     if unchanged:
+        record_phase("publish", outcome="not_required", reason="managed files unchanged")
         return _result(
             target, adapter, "unchanged", hashes, compatible_unmanaged, legacy_managed,
         )
 
-    staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
-    backup = staging / "backup"
-    published: list[tuple[Path, Path | None]] = []
-    preserve_staging = False
-    try:
-        for relative, content in desired.items():
-            staged = staging / "new" / relative
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(content)
-        staged_manifest = staging / "new" / _MANIFEST
-        staged_manifest.write_bytes(manifest_bytes)
-        for relative in sorted(set(previous) - set(desired)):
-            destination = _destination(target, relative)
-            saved = backup / relative
-            saved.parent.mkdir(parents=True, exist_ok=True)
-            preserve_staging = True
-            os.replace(destination, saved)
-            published.append((destination, saved))
-        for relative in [*desired, _MANIFEST]:
-            destination = _destination(target, relative)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            saved: Path | None = None
-            if destination.exists():
+    with phase("publish", layer="filesystem"):
+        staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
+        backup = staging / "backup"
+        published: list[tuple[Path, Path | None]] = []
+        preserve_staging = False
+        try:
+            for relative, content in desired.items():
+                staged = staging / "new" / relative
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(content)
+            staged_manifest = staging / "new" / _MANIFEST
+            staged_manifest.write_bytes(manifest_bytes)
+            for relative in sorted(set(previous) - set(desired)):
+                destination = _destination(target, relative)
                 saved = backup / relative
                 saved.parent.mkdir(parents=True, exist_ok=True)
                 preserve_staging = True
                 os.replace(destination, saved)
-            published.append((destination, saved))
-            os.replace(staging / "new" / relative, destination)
-        _verify_publication(target, desired, manifest_bytes)
-        preserve_staging = False
-    except BaseException as publication_error:
-        preserve_staging = True
-        tracked_backups = {
-            saved for _destination_path, saved in published if saved is not None
-        }
-        if backup.is_dir():
-            for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
-                if saved not in tracked_backups:
-                    published.append(
-                        (_destination(target, saved.relative_to(backup).as_posix()), saved)
-                    )
-        rollback_errors: list[str] = []
-        for destination, saved in reversed(published):
-            try:
-                destination.unlink(missing_ok=True)
-                if saved is not None and saved.exists():
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(saved, destination)
-            except BaseException as exc:
-                rollback_errors.append(f"{destination}: {type(exc).__name__}")
-        remaining_backups = (
-            sorted(path for path in backup.rglob("*") if path.is_file())
-            if backup.is_dir()
-            else []
-        )
-        if remaining_backups:
-            rollback_errors.append(
-                f"{len(remaining_backups)} recovery backup(s) remain"
+                published.append((destination, saved))
+            for relative in [*desired, _MANIFEST]:
+                destination = _destination(target, relative)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                saved: Path | None = None
+                if destination.exists():
+                    saved = backup / relative
+                    saved.parent.mkdir(parents=True, exist_ok=True)
+                    preserve_staging = True
+                    os.replace(destination, saved)
+                published.append((destination, saved))
+                os.replace(staging / "new" / relative, destination)
+            _verify_publication(target, desired, manifest_bytes)
+            preserve_staging = False
+        except BaseException as publication_error:
+            preserve_staging = True
+            tracked_backups = {
+                saved for _destination_path, saved in published if saved is not None
+            }
+            if backup.is_dir():
+                for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
+                    if saved not in tracked_backups:
+                        published.append(
+                            (_destination(target, saved.relative_to(backup).as_posix()), saved)
+                        )
+            rollback_errors: list[str] = []
+            for destination, saved in reversed(published):
+                try:
+                    destination.unlink(missing_ok=True)
+                    if saved is not None and saved.exists():
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(saved, destination)
+                except BaseException as exc:
+                    rollback_errors.append(f"{destination}: {type(exc).__name__}")
+            remaining_backups = (
+                sorted(path for path in backup.rglob("*") if path.is_file())
+                if backup.is_dir()
+                else []
             )
-        if rollback_errors:
-            raise HostSetupError(
-                "host setup publication and rollback failed; backups preserved at "
-                f"{staging}: {', '.join(rollback_errors)}"
-            ) from publication_error
-        preserve_staging = False
-        raise
-    finally:
-        if not preserve_staging:
-            _cleanup_staging(staging, adapter)
+            if remaining_backups:
+                rollback_errors.append(
+                    f"{len(remaining_backups)} recovery backup(s) remain"
+                )
+            if rollback_errors:
+                raise HostSetupError(
+                    "host setup publication and rollback failed; backups preserved at "
+                    f"{staging}: {', '.join(rollback_errors)}"
+                ) from publication_error
+            preserve_staging = False
+            raise
+        finally:
+            if not preserve_staging:
+                _cleanup_staging(staging, adapter)
     status = "upgraded" if manifest is not None or legacy_managed else "installed"
     return _result(target, adapter, status, hashes, compatible_unmanaged, legacy_managed)
 
