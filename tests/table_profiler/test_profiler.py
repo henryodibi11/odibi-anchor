@@ -983,8 +983,8 @@ class TestTableClassificationRunnerUps:
     def _make_fact_with_timestamp_df() -> pd.DataFrame:
         """FACT table with a timestamp column providing SNAPSHOT competing evidence.
 
-        1100 rows: snapshot_date (TIMESTAMP, low cardinality), site_id (FK),
-        capacity_mw (MEASURE, non-unique repeating values).
+        1100 rows: snapshot_date (TIMESTAMP, low cardinality), store_id (FK),
+        order_total (MEASURE, non-unique repeating values).
 
         Expected winner: FACT (measure_count=1, fk_count=1 → confidence=0.80).
         Expected runner_up: SNAPSHOT (temporal column present → 0.72).
@@ -993,8 +993,8 @@ class TestTableClassificationRunnerUps:
         dates = [(datetime(2025, 1, 1) + timedelta(days=i // 50)) for i in range(1100)]
         return pd.DataFrame({
             "snapshot_date": dates,
-            "site_id":       [i % 10 for i in range(1100)],
-            "capacity_mw":   [float(i % 5) * 50 for i in range(1100)],
+            "store_id":      [i % 10 for i in range(1100)],
+            "order_total":   [float(i % 5) * 50 for i in range(1100)],
         })
 
     @staticmethod
@@ -1221,9 +1221,9 @@ class TestRunnerUpsInFindings:
     These tests close that gap.
 
     Fixture: 1100 rows (bypasses LOOKUP short-circuit at row_count <= 1000)
-    with snapshot_date/TIMESTAMP + site_id/FK + capacity_mw/MEASURE.
+    with snapshot_date/TIMESTAMP + store_id/FK + order_total/MEASURE.
       - Table: FACT(0.80) with SNAPSHOT runner_up → "Classification alternatives:" in findings
-      - Column: site_id FK with PARTITION runner_up → "role alternatives:" in findings
+      - Column: store_id FK with PARTITION runner_up → "role alternatives:" in findings
     """
 
     @staticmethod
@@ -1231,15 +1231,15 @@ class TestRunnerUpsInFindings:
         """1100-row DataFrame with FACT winner and meaningful runner_ups on both levels.
 
         Table runner_up: SNAPSHOT (temporal column present → 0.72).
-        Column runner_up: PARTITION on site_id (low-cardinality integer → 0.82).
+        Column runner_up: PARTITION on store_id (low-cardinality integer → 0.82).
         """
         return pd.DataFrame({
             "snapshot_date": [
                 (pd.Timestamp("2025-01-01") + pd.Timedelta(days=i // 50))
                 for i in range(1100)
             ],
-            "site_id":     [i % 10 for i in range(1100)],
-            "capacity_mw": [float(i % 5) * 50 for i in range(1100)],
+            "store_id":    [i % 10 for i in range(1100)],
+            "order_total": [float(i % 5) * 50 for i in range(1100)],
         })
 
     def test_classification_runner_up_appears_in_findings(self) -> None:
@@ -1267,7 +1267,7 @@ class TestRunnerUpsInFindings:
         _collect_ambiguity_findings (called from _build_findings) iterates column
         profiles and appends "Column <name> — role alternatives: ..." when
         role_inference.runner_ups is non-empty.
-        Populated by Phase 4 (_score_partition → PARTITION at 0.82 for site_id FK).
+        Populated by Phase 4 (_score_partition → PARTITION at 0.82 for store_id FK).
         """
         df = self._make_fact_with_competing_signals_df()
         result = profile_table(df, "t")
@@ -1317,7 +1317,7 @@ class TestFreetextNamePattern:
         not just 'notes'.
         """
         N = 200
-        return pd.DataFrame({"description": ["Solar plant in TX"] * N})
+        return pd.DataFrame({"description": ["Desk lamp in TX"] * N})
 
     def test_notes_column_classifies_as_freetext(self) -> None:
         """'notes' col with avg_length=21 → FREETEXT via _FREETEXT_NAME_RE.
@@ -1370,7 +1370,7 @@ class TestRisksAndActionsStressTest:
         is the established convention (also used by numeric_outlier_df).
 
     Fixture layout:
-        _make_outlier_df       — turbine_id (SK) + capacity_mw (varied + 5 extremes)
+        _make_outlier_df       — product_id (SK) + order_total (varied + 5 extremes)
         _make_format_error_df  — invoice_id (SK) + invoice_date (3 mixed formats) + amount_usd
         _make_combined_df      — invoice_id (SK) + invoice_date (mixed) + amount_usd (varied + extremes)
     """
@@ -1379,15 +1379,15 @@ class TestRisksAndActionsStressTest:
     def _make_outlier_df() -> pd.DataFrame:
         """100-row DataFrame with 5 IQR-detectable numeric outliers.
 
-        capacity_mw: [10.0]*50 + [12.0]*25 + [14.0]*20  (varied baseline, IQR > 0)
+        order_total: [10.0]*50 + [12.0]*25 + [14.0]*20  (varied baseline, IQR > 0)
                    + [250.0]*5  (extremes — 17× the upper fence)
         outlier_pct = 5.0%  >  _OUTLIER_MIN_PCT (1%).
         """
         baseline = [10.0] * 50 + [12.0] * 25 + [14.0] * 20
         extreme  = [250.0] * 5
         return pd.DataFrame({
-            "turbine_id":  list(range(100)),
-            "capacity_mw": baseline + extreme,
+            "product_id":  list(range(100)),
+            "order_total": baseline + extreme,
         })
 
     @staticmethod
@@ -1494,8 +1494,8 @@ class TestRisksAndActionsStressTest:
 class TestNearUniqueNaturalKey:
     """Tests for step 8b: near-unique CODE semantic columns → NATURAL_KEY.
 
-    The fix targets business-assigned alphanumeric codes (e.g. "PJM-AG2-073",
-    "MISO-J3087") that have semantic_type=CODE and a very high but not perfect
+    The fix targets business-assigned alphanumeric codes (e.g. "SKU-AG2-073",
+    "SKU-J3087") that have semantic_type=CODE and a very high but not perfect
     distinct_pct.  Snapshot duplication or minor rekeying depresses distinct_pct
     slightly below 1.0 without changing the column's role as a natural key.
 
@@ -1504,7 +1504,7 @@ class TestNearUniqueNaturalKey:
         AND distinct_pct >= _NEAR_UNIQUE_NK_THRESHOLD (0.90)
         AND null_pct < _NK_MAX_NULL_PCT (0.05)
 
-    Fixtures use market-prefixed codes in the format "<MARKET>-<NNNN>" which
+    Fixtures use category-prefixed SKU codes in the format "<CATEGORY>-<NNNN>" which
     trigger semantic_type=CODE via _CODE_RE.  Both fixtures have 1,000 rows to
     avoid the LOOKUP short-circuit (≤1,000 rows AND ≤5 cols).
     """
@@ -1513,19 +1513,19 @@ class TestNearUniqueNaturalKey:
     def _make_near_unique_code_df() -> pd.DataFrame:
         """1,000-row DataFrame with a near-unique code column (distinct_pct = 0.950).
 
-        950 unique market-prefixed codes + 50 duplicates drawn from the first 50.
+        950 unique category-prefixed codes + 50 duplicates drawn from the first 50.
         seed=0 gives distinct_pct=0.950, null_pct=0.0, semantic_type=CODE.
         Expected role: NATURAL_KEY (0.78), counter_signal 'not_strictly_unique'.
         """
         random.seed(0)
-        markets = ["PJM", "MISO", "SPP", "ERCOT", "CAISO"]
-        base  = [f"{random.choice(markets)}-{i:04d}" for i in range(950)]
+        categories = ["APP", "ELEC", "GROC", "TOY", "HOME"]
+        base  = [f"{random.choice(categories)}-{i:04d}" for i in range(950)]
         dupes = random.choices(base[:50], k=50)
         values = (base + dupes)[:1000]
         random.shuffle(values)
         return pd.DataFrame({
-            "interconnection_ref": values,
-            "capacity_mw":         [100.0] * 1000,
+            "sku_ref":             values,
+            "order_total":         [100.0] * 1000,
         })
 
     @staticmethod
@@ -1537,14 +1537,14 @@ class TestNearUniqueNaturalKey:
         Expected role: NOT NATURAL_KEY (falls through to UNKNOWN at step 8b threshold).
         """
         random.seed(1)
-        markets = ["PJM", "MISO", "SPP", "ERCOT", "CAISO"]
-        base  = [f"{random.choice(markets)}-{i:04d}" for i in range(800)]
+        categories = ["APP", "ELEC", "GROC", "TOY", "HOME"]
+        base  = [f"{random.choice(categories)}-{i:04d}" for i in range(800)]
         dupes = random.choices(base[:100], k=200)
         values = (base + dupes)[:1000]
         random.shuffle(values)
         return pd.DataFrame({
-            "interconnection_ref": values,
-            "capacity_mw":         [100.0] * 1000,
+            "sku_ref":             values,
+            "order_total":         [100.0] * 1000,
         })
 
     # ── Happy path ────────────────────────────────────────────────────────────
@@ -1556,7 +1556,7 @@ class TestNearUniqueNaturalKey:
         and 'not_strictly_unique' counter_signal on the Inference object.
         """
         result = profile_table(self._make_near_unique_code_df(), "t")
-        col    = next(c for c in result.columns if c.name == "interconnection_ref")
+        col    = next(c for c in result.columns if c.name == "sku_ref")
         ri     = col.role_inference
         assert ri is not None, "role_inference must not be None"
 
@@ -1582,7 +1582,7 @@ class TestNearUniqueNaturalKey:
         rather than receiving an inflated role assignment.
         """
         result = profile_table(self._make_below_threshold_code_df(), "t")
-        col    = next(c for c in result.columns if c.name == "interconnection_ref")
+        col    = next(c for c in result.columns if c.name == "sku_ref")
 
         assert col.role.value != "natural_key", (
             f"Expected role != natural_key for "
@@ -1612,7 +1612,7 @@ class TestConstantIntegerPartition:
     Fixture design
     --------------
     All fixtures use 1,000 rows and 2 columns.  The column under test is paired
-    with a dummy `capacity_mw` float column to give profile_table something to
+    with a dummy `order_total` float column to give profile_table something to
     work with.  The column names (snapshot_year, snapshot_month, load_batch) are
     illustrative but the assertions target the behavioral path
     (evidence contains 'bounded_value_range_suggests_partition').
@@ -1627,7 +1627,7 @@ class TestConstantIntegerPartition:
         """
         return pd.DataFrame({
             "snapshot_year": [2026] * 1000,
-            "capacity_mw":   [100.0] * 1000,
+            "order_total":   [100.0] * 1000,
         })
 
     @staticmethod
@@ -1639,7 +1639,7 @@ class TestConstantIntegerPartition:
         """
         return pd.DataFrame({
             "snapshot_month": [5] * 1000,
-            "capacity_mw":    [100.0] * 1000,
+            "order_total":    [100.0] * 1000,
         })
 
     @staticmethod
@@ -1651,7 +1651,7 @@ class TestConstantIntegerPartition:
         """
         return pd.DataFrame({
             "load_batch":  [500] * 1000,
-            "capacity_mw": [100.0] * 1000,
+            "order_total": [100.0] * 1000,
         })
 
     # ── Constant year ─────────────────────────────────────────────────────────
@@ -1725,7 +1725,7 @@ class TestDateStringTimestamp:
     inside the alternation group, but the outer ``(?:^|_)`` separator already
     consumes the preceding underscore.  The effective requirement was therefore
     ``__date`` (double underscore), which never matches real column names like
-    ``queue_date``, ``start_date``, or ``in_service_date``.
+    ``order_date``, ``start_date``, or ``ship_date``.
 
     Fix: tokens changed to ``date``, ``time``, ``at``, ``ts``, ``dt`` — the
     outer separator now correctly handles the word boundary.
@@ -1740,7 +1740,7 @@ class TestDateStringTimestamp:
     Fixture design
     --------------
     All date fixtures use 1,000 rows of mixed ISO + US slash dates, which is
-    the same pattern seen in the dogfood table (queue_positions).  Mixed dates
+    the same pattern seen in a spreadsheet-sourced orders table.  Mixed dates
     ensure semantic_type=DATE_STRING is detected by the semantic typer.
     A non-temporal column (batch_count) guards against false positives.
     """
@@ -1750,14 +1750,14 @@ class TestDateStringTimestamp:
 
     @classmethod
     def _make_date_suffix_df(cls) -> pd.DataFrame:
-        """1,000 rows: queue_date column with mixed date strings.
+        """1,000 rows: order_date column with mixed date strings.
 
         Column name ends in '_date' → now matches _TIMESTAMP_NAME_RE after fix.
         Combined with semantic_type=DATE_STRING → TIMESTAMP(0.90) via name+semantic path.
         """
         return pd.DataFrame({
-            "queue_date":  cls._DATES,
-            "capacity_mw": [100.0] * 1000,
+            "order_date":  cls._DATES,
+            "order_total": [100.0] * 1000,
         })
 
     @classmethod
@@ -1769,7 +1769,7 @@ class TestDateStringTimestamp:
         """
         return pd.DataFrame({
             "expiry":      cls._DATES,
-            "capacity_mw": [100.0] * 1000,
+            "order_total": [100.0] * 1000,
         })
 
     @classmethod
@@ -1780,7 +1780,7 @@ class TestDateStringTimestamp:
         """
         return pd.DataFrame({
             "batch_count": list(range(1, 6)) * 200,   # 5 distinct integers
-            "capacity_mw": [100.0] * 1000,
+            "order_total": [100.0] * 1000,
         })
 
     # ── Tests ─────────────────────────────────────────────────────────────────
@@ -1789,12 +1789,12 @@ class TestDateStringTimestamp:
         """A '_date'-suffixed string column with date values → TIMESTAMP(0.90).
 
         Verifies that fixing the _TIMESTAMP_NAME_RE regex (removing the spurious
-        leading '_' from the '_date' token) allows 'queue_date' to match the
+        leading '_' from the '_date' token) allows 'order_date' to match the
         temporal name pattern.  Combined with semantic_type=DATE_STRING, the
         name+semantic path in step 2 fires at confidence 0.90.
         """
         result = profile_table(self._make_date_suffix_df(), "t")
-        col    = next(c for c in result.columns if c.name == "queue_date")
+        col    = next(c for c in result.columns if c.name == "order_date")
         ri     = col.role_inference
         assert ri is not None
 

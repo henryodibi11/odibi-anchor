@@ -39,11 +39,11 @@ Save **decision points**, not routine actions. If it wouldn't save a future sess
 | Type | ❌ Bad | ✅ Good |
 |---|---|---|
 | `gotcha` | "fixed the bug" | "BUG: candidate fetch mutated authority telemetry. Fix: record only final surfaced IDs and confirm explicitly." |
-| `failure_pattern` | "test passed" | "ERROR: `KeyError: 'project_id'` in `silver_queue.py:45` — caused by upstream schema change (PJM renamed column to `proj_id`). Do NOT add try/except, fix the column mapping in bronze→silver" |
+| `failure_pattern` | "test passed" | "ERROR: `KeyError: 'order_id'` in `silver_orders.py:45` — caused by upstream schema change (the web storefront renamed column to `ord_id`). Do NOT add try/except, fix the column mapping in bronze→silver" |
 | `decision` | "updated the file" | "Chose `local_checkpoint` over `cache` for transform pipeline because 12-step chain exceeded lineage limit. Rejected `none` — rollback needed for QA. Trade-off: slower checkpoint but truncated lineage" |
 | `convention` | "use good names" | "All transformer functions must accept `df` as first param and return `DataFrame` — df-in/df-out contract. No side effects (no writes, no state mutation)" |
-| `pattern` | "used a window function" | "Dedup pattern for ISO queue data: `ROW_NUMBER() OVER (PARTITION BY project_id, queue_date ORDER BY file_modified_at DESC, _row_hash)` — tiebreaker `_row_hash` prevents non-deterministic ordering" |
-| `discovery` | "learned something" | "Delta table `analytics_dev.bronze.queue_pjm` has OPTIMIZE ZORDER on `project_id` — point lookups are fast but full scans bypass the index. Use filter pushdown on `project_id` for 10x speedup" |
+| `pattern` | "used a window function" | "Dedup pattern for multi-file order extracts: `ROW_NUMBER() OVER (PARTITION BY order_id, line_number ORDER BY file_modified_at DESC, _row_hash)` — tiebreaker `_row_hash` prevents non-deterministic ordering" |
+| `discovery` | "learned something" | "Delta table `example_catalog.bronze.orders_web` has OPTIMIZE ZORDER on `order_id` — point lookups are fast but full scans bypass the index. Use filter pushdown on `order_id` for 10x speedup" |
 | `preference` | "user likes X" | "User prefers concise planning context for bounded single-file fixes" |
 
 ### Content Must Include

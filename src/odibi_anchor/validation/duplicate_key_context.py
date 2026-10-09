@@ -13,15 +13,15 @@ Example:
     from odibi_anchor.validation.duplicate_key_context import duplicate_key_context
 
     df = pd.DataFrame({
-        "project_id": ["A", "A", "B"],
+        "order_id": ["A", "A", "B"],
         "snapshot_date": ["2026-01-01", "2026-01-01", "2026-01-01"],
-        "mw": [10, 12, 20],
+        "qty": [10, 12, 20],
     })
 
     context = duplicate_key_context(
         df,
-        keys=["project_id", "snapshot_date"],
-        subject="project_snapshot",
+        keys=["order_id", "snapshot_date"],
+        subject="order_snapshot",
     )
 
     print(context["summary"])

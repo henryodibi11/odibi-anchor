@@ -211,8 +211,8 @@ For data pipelines:
 
 ## Business Rules
 
-1. [Rule: e.g., "Dedup on project_id + queue_date, keep latest by file_modified_at"]
-2. [Rule: e.g., "Exclude projects with status = 'Withdrawn'"]
+1. [Rule: e.g., "Dedup on order_id + line_number, keep latest by file_modified_at"]
+2. [Rule: e.g., "Exclude orders with status = 'Cancelled'"]
 
 ## Key Decisions
 

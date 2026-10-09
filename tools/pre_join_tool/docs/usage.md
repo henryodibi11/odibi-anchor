@@ -45,11 +45,11 @@ ctx = anchor("pre_join", orders_df, customers_df, keys=["customer_id"])
 # Different key names (asymmetric)
 ctx = anchor("pre_join", fact_df, dim_df,
          left_keys=["cust_id"], right_keys=["customer_id"],
-         left_subject="fact_queue", right_subject="dim_customer")
+         left_subject="fact_orders", right_subject="dim_customer")
 
 # Multi-column composite key
 ctx = anchor("pre_join", left_df, right_df,
-         keys=["project_id", "period"])
+         keys=["store_id", "period"])
 
 # Markdown report
 report = anchor("pre_join", df1, df2, keys=["id"], output_format="markdown")
@@ -130,7 +130,7 @@ else:
 
 ```python
 # "My join produced 5M rows but I expected 1M"
-ctx = anchor("pre_join", fact_df, dim_df, keys=["project_id"],
+ctx = anchor("pre_join", fact_df, dim_df, keys=["customer_id"],
          left_subject="fact", right_subject="dim")
 print(ctx["metrics"]["cardinality"])      # "many:many" -- that's the problem
 print(ctx["samples"]["max_fanout_keys"])  # Shows which keys have most dups
@@ -139,10 +139,10 @@ print(ctx["samples"]["max_fanout_keys"])  # Shows which keys have most dups
 ### Pattern 3: Asymmetric keys with meaningful names
 
 ```python
-ctx = anchor("pre_join", queue_df, project_dim_df,
-         left_keys=["proj_id"], right_keys=["project_id"],
-         left_subject="interconnection_queue",
-         right_subject="project_dimension")
+ctx = anchor("pre_join", orders_df, customer_dim_df,
+         left_keys=["cust_id"], right_keys=["customer_id"],
+         left_subject="fact_orders",
+         right_subject="customer_dimension")
 
 # Check if key format differences explain low overlap
 if not ctx["metrics"]["format_compatible"]:

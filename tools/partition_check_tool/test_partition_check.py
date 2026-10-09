@@ -59,7 +59,7 @@ def _make_files(sizes_mb: list[float], partition_values: dict | None = None) -> 
 def _make_partitioned_files(partition_data: dict[str, list[float]]) -> list[dict]:
     """Create files across multiple partitions.
 
-    partition_data: {"market=PJM": [10, 20, 30], "market=MISO": [5, 5]}
+    partition_data: {"region=NORTH": [10, 20, 30], "region=SOUTH": [5, 5]}
     """
     files = []
     for part_str, sizes_mb in partition_data.items():
@@ -87,12 +87,12 @@ def _make_partitioned_files(partition_data: dict[str, list[float]]) -> list[dict
 
 class TestExtractPartitionValues:
     def test_single_partition(self):
-        path = "dbfs:/table/market=PJM/part-00000.parquet"
-        assert _extract_partition_values(path) == {"market": "PJM"}
+        path = "dbfs:/table/region=NORTH/part-00000.parquet"
+        assert _extract_partition_values(path) == {"region": "NORTH"}
 
     def test_multiple_partitions(self):
-        path = "dbfs:/table/market=PJM/year=2024/part-00000.parquet"
-        assert _extract_partition_values(path) == {"market": "PJM", "year": "2024"}
+        path = "dbfs:/table/region=NORTH/year=2024/part-00000.parquet"
+        assert _extract_partition_values(path) == {"region": "NORTH", "year": "2024"}
 
     def test_no_partitions(self):
         path = "dbfs:/table/part-00000.parquet"
@@ -186,9 +186,9 @@ class TestComputeFileSizeStats:
 class TestCheckPartitionSkew:
     def test_balanced_partitions(self):
         files = _make_partitioned_files({
-            "market=PJM": [100, 100, 100],
-            "market=MISO": [100, 100, 100],
-            "market=ERCOT": [100, 100, 100],
+            "region=NORTH": [100, 100, 100],
+            "region=SOUTH": [100, 100, 100],
+            "region=EAST": [100, 100, 100],
         })
         result = _check_partition_skew(files, 10.0)
         assert result["skewed"] is False
@@ -197,15 +197,15 @@ class TestCheckPartitionSkew:
 
     def test_skewed_partitions(self):
         files = _make_partitioned_files({
-            "market=PJM": [500, 500, 500],    # 1500MB
-            "market=MISO": [10, 10],           # 20MB
+            "region=NORTH": [500, 500, 500],    # 1500MB
+            "region=SOUTH": [10, 10],           # 20MB
         })
         result = _check_partition_skew(files, 10.0)
         assert result["skewed"] is True
         assert result["skew_ratio"] == 75.0  # 1500/20
         assert result["partition_count"] == 2
-        assert result["largest_partition"]["values"] == {"market": "PJM"}
-        assert result["smallest_partition"]["values"] == {"market": "MISO"}
+        assert result["largest_partition"]["values"] == {"region": "NORTH"}
+        assert result["smallest_partition"]["values"] == {"region": "SOUTH"}
 
     def test_single_partition(self):
         files = _make_files([100, 200, 300], partition_values={"year": "2024"})
@@ -226,8 +226,8 @@ class TestCheckPartitionSkew:
 
     def test_custom_threshold(self):
         files = _make_partitioned_files({
-            "market=PJM": [100],     # 100MB
-            "market=MISO": [15],     # 15MB
+            "region=NORTH": [100],     # 100MB
+            "region=SOUTH": [15],     # 15MB
         })
         # Ratio is 6.67x — not skewed at 10x threshold
         result = _check_partition_skew(files, 10.0)
@@ -246,20 +246,20 @@ class TestCheckPartitionSkew:
 class TestCheckEmptyPartitions:
     def test_no_empty(self):
         files = _make_partitioned_files({
-            "market=PJM": [100],
-            "market=MISO": [50],
+            "region=NORTH": [100],
+            "region=SOUTH": [50],
         })
         result = _check_empty_partitions(files)
         assert result["empty_count"] == 0
 
     def test_with_empty(self):
         files = _make_partitioned_files({
-            "market=PJM": [100],
-            "market=MISO": [0],  # 0 bytes = empty
+            "region=NORTH": [100],
+            "region=SOUTH": [0],  # 0 bytes = empty
         })
         result = _check_empty_partitions(files)
         assert result["empty_count"] == 1
-        assert result["empty_partitions"][0]["values"] == {"market": "MISO"}
+        assert result["empty_partitions"][0]["values"] == {"region": "SOUTH"}
 
     def test_empty_input(self):
         result = _check_empty_partitions([])
@@ -340,11 +340,11 @@ class TestBuildFindings:
 
 class TestFormatPartitionValues:
     def test_single(self):
-        assert _format_partition_values({"market": "PJM"}) == "market=PJM"
+        assert _format_partition_values({"region": "NORTH"}) == "region=NORTH"
 
     def test_multiple(self):
-        result = _format_partition_values({"market": "PJM", "year": "2024"})
-        assert "market=PJM" in result
+        result = _format_partition_values({"region": "NORTH", "year": "2024"})
+        assert "region=NORTH" in result
         assert "year=2024" in result
 
     def test_empty(self):
@@ -364,7 +364,7 @@ class TestValidateDeltaTable:
             "format": "delta",
             "numFiles": 100,
             "sizeInBytes": 1024 * 1024 * 500,
-            "partitionColumns": ["market"],
+            "partitionColumns": ["region"],
             "location": "dbfs:/table",
         }
         mock_spark.sql.return_value.collect.return_value = [mock_row]
@@ -469,12 +469,12 @@ class TestPartitionCheckContext:
             "format": "delta",
             "numFiles": 100,
             "sizeInBytes": 500 * 1024 * 1024,
-            "partitionColumns": ["market"],
+            "partitionColumns": ["region"],
             "location": "dbfs:/table",
         }
         # 80 small files + 20 large
-        small = _make_files([5] * 80, {"market": "PJM"})
-        large = _make_files([200] * 20, {"market": "PJM"})
+        small = _make_files([5] * 80, {"region": "NORTH"})
+        large = _make_files([200] * 20, {"region": "NORTH"})
         mock_collect.return_value = small + large
 
         mock_spark = MagicMock()
@@ -499,12 +499,12 @@ class TestPartitionCheckContext:
             "format": "delta",
             "numFiles": 50,
             "sizeInBytes": 2000 * 1024 * 1024,
-            "partitionColumns": ["market"],
+            "partitionColumns": ["region"],
             "location": "dbfs:/table",
         }
         mock_collect.return_value = _make_partitioned_files({
-            "market=PJM": [500, 500, 500],     # 1500MB
-            "market=MISO": [10],                # 10MB — 150x skew
+            "region=NORTH": [500, 500, 500],     # 1500MB
+            "region=SOUTH": [10],                # 10MB — 150x skew
         })
 
         mock_spark = MagicMock()

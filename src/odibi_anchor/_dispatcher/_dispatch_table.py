@@ -516,12 +516,12 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("spec", "done", "FEATURE_NAME")  # mark complete',
     ],
     "problem":      [
-        'anchor("problem", "create", title="Choose a queue scaling strategy")',
+        'anchor("problem", "create", title="Choose an export scaling strategy")',
         'anchor("problem", "update", "PRB-2026-0001", hypothesis={"hypothesis": "Workers are undersized"})',
         'anchor("problem", "resume", "PRB-2026-0001")',
     ],
     "work_item":    [
-        'anchor("work_item", "create", title="Ship queue scaling", outcome="Reduce processing delay")',
+        'anchor("work_item", "create", title="Ship export scaling", outcome="Reduce processing delay")',
         'anchor("work_item", "preview", "WI-2026-0001", provider="asana", operations=["create_tasks"])',
         'anchor("work_item", "approve", "WI-2026-0001", provider="asana", operations=["create_tasks"], expected_fingerprint="sha256:...", approver="...", source="explicit user message")',
     ],
@@ -581,7 +581,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "status":       'anchor("status")  # zero-param health dashboard',
     "audit_history": 'anchor("audit_history")  # past gate audit results',
     "config":       'anchor("config")  # view/edit anti-pattern suppress settings',
-    "project":      'anchor("project", "create", name="queue-automation")  # list/create/use/status managed projects',
+    "project":      'anchor("project", "create", name="order-analytics")  # list/create/use/status managed projects',
     "skills":       'anchor("skills")  # list registered skills',
     "references":   'anchor("references", "search", "altair selection")  # search/load offline sections',
     "tools":        'anchor("tools")  # list registered tools',

@@ -146,12 +146,12 @@ anchor("profile_table", df, subject="source_name")
 | Formula columns | Inspected `formula_cells` plus raw cell values | Read with `data_only=True` for cached values when available |
 | Percentage columns (0.15 vs 15%) | microscope shows values 0-1 | Decide: multiply by 100 or keep as decimal |
 
-## Lesson from CRM Dogfooding
+## Lesson from Order-Export Dogfooding
 
-Real-world Excel from CRM systems (6454 rows × 55 columns) revealed:
-- **4742 unicode mismatches** in `Interconnection Entity` — zero-width spaces invisible to humans
-- **664 null_to_value changes** in `Requested COD Year` — nulls filled in new version
-- **3 whitespace mismatches** in `Generic Queue Status` — trailing spaces
+A weekly Excel order export (6454 rows × 55 columns) revealed:
+- **4742 unicode mismatches** in `Carrier Name` — zero-width spaces invisible to humans
+- **664 null_to_value changes** in `Requested Delivery Year` — nulls filled in new version
+- **3 whitespace mismatches** in `Order Status` — trailing spaces
 
 These are NOT data errors — they're coercion artifacts. When onboarding a refresh of existing
 data, ALWAYS run `anchor("diff")` → `anchor("coerce_check")` before assuming changes are real.

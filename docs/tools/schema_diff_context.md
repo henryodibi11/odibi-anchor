@@ -110,20 +110,20 @@ import pandas as pd
 from odibi_anchor.tables import schema_diff_context
 
 old_df = pd.DataFrame({
-    "asset_id": [1, 2],
-    "mw": pd.Series([100.0, 110.0], dtype="float64"),
+    "order_id": [1, 2],
+    "order_total": pd.Series([100.0, 110.0], dtype="float64"),
 })
 
 new_df = pd.DataFrame({
-    "asset_id": ["1", "2"],
-    "mw": pd.Series([100.0, 110.0], dtype="float64"),
-    "market": ["ERCOT", "PJM"],
+    "order_id": ["1", "2"],
+    "order_total": pd.Series([100.0, 110.0], dtype="float64"),
+    "region": ["NORTH", "SOUTH"],
 })
 
 ctx = schema_diff_context(
     old_df, new_df,
-    old_subject="asset_capacity_baseline",
-    new_subject="asset_capacity_current",
+    old_subject="orders_baseline",
+    new_subject="orders_current",
 )
 print(ctx["summary"])
 print(f"Breaking: {ctx['metrics']['is_breaking_change']}")
@@ -187,7 +187,7 @@ reclassifying the added/removed lists:
 
 ```python
 ctx["likely_renames"]
-# [{"old_column": "assetId", "new_column": "asset_id",
+# [{"old_column": "orderId", "new_column": "order_id",
 #   "confidence": "high", "reason": "naming_convention_change",
 #   "dtype_match": True}]
 ```

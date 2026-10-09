@@ -14,7 +14,7 @@
 
 ## When to Use
 
-- You have two snapshots of the same table (today vs yesterday, source vs CRM, staging vs prod) and need to know what changed
+- You have two snapshots of the same table (today vs yesterday, source vs OMS extract, staging vs prod) and need to know what changed
 - A pipeline loaded new data and you want to verify what was added, updated, or removed before writing downstream
 - You need a MERGE INTO statement scoped to only the rows and columns that actually changed
 - You ran `anchor("schema_diff")` and schemas match — now you want the row-level story
@@ -56,17 +56,17 @@ ctx = anchor("diff", old_df, new_df, keys=["id"], compare_columns=["status", "am
 
 ### Label the diff subject
 ```python
-ctx = anchor("diff", yesterday_df, today_df, keys=["Application ID"],
+ctx = anchor("diff", yesterday_df, today_df, keys=["Order ID"],
          subject="gold_new: 2026-06-04 vs 2026-06-11")
 ```
 
-### Weekly queue pull comparison (real-world pattern)
+### Weekly order extract comparison (common pattern)
 ```python
-cols = ["Application ID", "Interconnection Size (MW)", "Generic Queue Status"]
-previous_df = spark.table("analytics_dev.data_engineering.queue_2026_06_04").select(*cols).toPandas()
-current_df  = spark.table("analytics_dev.data_engineering.queue_2026_06_11").select(*cols).toPandas()
+cols = ["Order ID", "Order Total (USD)", "Order Status"]
+previous_df = spark.table("example_catalog.silver.orders_2026_06_04").select(*cols).toPandas()
+current_df  = spark.table("example_catalog.silver.orders_2026_06_11").select(*cols).toPandas()
 
-ctx = anchor("diff", previous_df, current_df, keys=["Application ID"])
+ctx = anchor("diff", previous_df, current_df, keys=["Order ID"])
 ```
 
 ---
@@ -116,7 +116,7 @@ ctx["samples"]["changed_rows"]  # rows present in both with diffs (includes befo
 ```python
 ctx["findings"]               # what the diff discovered
 ctx["risks"]                  # anomalies worth investigating
-ctx["suggested_next_actions"] # e.g. "run coerce_check on Generic Queue Status"
+ctx["suggested_next_actions"] # e.g. "run coerce_check on Order Status"
 ```
 
 ---

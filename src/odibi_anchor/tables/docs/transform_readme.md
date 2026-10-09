@@ -35,10 +35,10 @@ This covers three actions that form a single workflow:
 
 ```python
 # Step 1: get a profile
-profile_ctx = anchor("profile_table", df, subject="queue_bronze")
+profile_ctx = anchor("profile_table", df, subject="orders_bronze")
 
 # Step 2: generate the transform plan
-plan = anchor("transform", profile_ctx, subject="queue_bronze")
+plan = anchor("transform", profile_ctx, subject="orders_bronze")
 # Review plan["steps"] and plan["code_pandas"] before proceeding
 
 # Step 3: apply it
@@ -184,7 +184,7 @@ sys.path.append("/Workspace/Users/user@example.com/odibi_anchor/src")
 from odibi_anchor.tables.transform_plan_context import transform_plan_context
 from odibi_anchor.tables.apply_transform_context import apply_transform_context
 
-plan = transform_plan_context(profile, subject="queue_bronze")
+plan = transform_plan_context(profile, subject="orders_bronze")
 result = apply_transform_context(df, plan)
 clean_df = result["df"]
 ```

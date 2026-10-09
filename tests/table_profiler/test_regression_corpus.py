@@ -1,7 +1,7 @@
 """Regression tests for dogfooding-discovered fixes.
 
 Each test class covers a specific fix discovered during corpus profiling of
-analytics_dev.data_engineering_bronze.queue_* tables. These tests are designed to
+example_catalog.bronze.orders_* tables. These tests are designed to
 FAIL if the corresponding fix code is reverted.
 
 Fixes covered:
@@ -242,21 +242,21 @@ class TestHashIdentifier:
 class TestEnumSensitivity:
     """Very low cardinality columns are detected as ENUM even when skewed.
 
-    Regression for: Service column (2 distinct: ERIS/NRIS) not detected as ENUM
+    Regression for: Shipping_Method column (2 distinct: STANDARD/EXPRESS) not detected as ENUM
     because old floor was max(2, sample_size*0.05) which could be <2 for small samples.
     """
 
     def test_two_distinct_values_is_enum(self):
         """2 distinct values in 200 samples -> ENUM."""
-        values = ["ERIS"] * 180 + ["NRIS"] * 20
-        result = infer_semantic_type(values, "service_type")
+        values = ["STANDARD"] * 180 + ["EXPRESS"] * 20
+        result = infer_semantic_type(values, "shipping_method")
         assert result.value == SemanticType.ENUM
         assert result.confidence >= 0.80
 
     def test_five_distinct_values_is_enum(self):
         """5 distinct values in 500 samples -> ENUM."""
-        values = ["Active"] * 200 + ["Withdrawn"] * 150 + ["Suspended"] * 80 + ["Operating"] * 50 + ["Cancelled"] * 20
-        result = infer_semantic_type(values, "project_phase")
+        values = ["Open"] * 200 + ["Cancelled"] * 150 + ["On Hold"] * 80 + ["Delivered"] * 50 + ["Returned"] * 20
+        result = infer_semantic_type(values, "order_status")
         assert result.value == SemanticType.ENUM
 
     def test_eight_distinct_values_is_enum(self):
@@ -306,20 +306,20 @@ class TestSpreadsheetArtifact:
 class TestStateCodeNameHint:
     """STATE_CODE must not be inferred from ^[A-Z]{2}$ pattern alone.
 
-    Regression for: Type__Fuel column getting STATE_CODE because values like
-    'NG', 'SO', 'WI' matched the 2-letter uppercase regex.
+    Regression for: Type__Size column getting STATE_CODE because values like
+    'SM', 'MD', 'XL' matched the 2-letter uppercase regex.
     """
 
-    def test_fuel_codes_not_state_code(self):
-        """2-letter fuel codes without 'state' in name -> NOT STATE_CODE."""
-        values = ["NG", "SO", "WI", "BA", "NU"] * 20
-        result = infer_semantic_type(values, "type_fuel")
+    def test_size_codes_not_state_code(self):
+        """2-letter size codes without 'state' in name -> NOT STATE_CODE."""
+        values = ["SM", "MD", "LG", "XL", "XS"] * 20
+        result = infer_semantic_type(values, "type_size")
         assert result.value != SemanticType.STATE_CODE
 
-    def test_market_codes_not_state_code(self):
-        """2-letter market codes without 'state' in name -> NOT STATE_CODE."""
-        values = ["PJ", "NY", "SP", "MI", "ER"] * 20
-        result = infer_semantic_type(values, "market_region")
+    def test_region_codes_not_state_code(self):
+        """2-letter sales-region codes without 'state' in name -> NOT STATE_CODE."""
+        values = ["NO", "NE", "SO", "WE", "EA"] * 20
+        result = infer_semantic_type(values, "sales_region")
         assert result.value != SemanticType.STATE_CODE
 
     def test_state_column_still_detected(self):
@@ -338,8 +338,8 @@ class TestStateCodeNameHint:
 class TestStatsFallbackEnum:
     """Profiler assigns ENUM when sample is too small but stats show low cardinality.
 
-    Regression for: Service column with 2 distinct values but profiler sample
-    only containing 5 identical values (all 'ERIS'), causing UNKNOWN.
+    Regression for: Shipping_Method column with 2 distinct values but profiler
+    sample only containing 5 identical values (all 'STANDARD'), causing UNKNOWN.
     """
 
     def test_skewed_enum_detected_via_stats_fallback(self):

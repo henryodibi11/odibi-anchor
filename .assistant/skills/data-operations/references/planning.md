@@ -103,8 +103,8 @@ The grain is the level of detail in each row. This is the most important design 
 
 | Question | How to answer |
 |---|---|
-| What does one row represent? | e.g., "one project per queue date" or "one invoice line item" |
-| What columns define uniqueness? | The composite key (e.g., `project_id + queue_date`) |
+| What does one row represent? | e.g., "one order line per order" or "one invoice line item" |
+| What columns define uniqueness? | The composite key (e.g., `order_id + line_number`) |
 | Is the grain verified? | `df.groupBy(key_cols).count().where("count > 1").count()` = 0 |
 
 **Record as known_facts:**
@@ -121,9 +121,9 @@ Build the explicit mapping:
 
 | Source Column | Target Column | Transform | Notes |
 |---|---|---|---|
-| `raw_project_id` | `project_id` | TRIM, UPPER | Business key |
-| `capacity_mw` | `capacity_mw` | REGEXP_REPLACE(',','') → TRY_CAST(DOUBLE) | Has commas |
-| `queue_date` | `queue_date` | TRY_CAST(DATE) | Format: MM/DD/YYYY |
+| `raw_order_id` | `order_id` | TRIM, UPPER | Business key |
+| `order_total` | `order_total` | REGEXP_REPLACE(',','') → TRY_CAST(DECIMAL(12,2)) | Has commas |
+| `order_date` | `order_date` | TRY_CAST(DATE) | Format: MM/DD/YYYY |
 | (none) | `_extracted_at` | current_timestamp() | Audit column |
 | `legacy_status` | (drop) | — | Replaced by `status` |
 
@@ -205,15 +205,15 @@ After completing this checklist, you should have:
 
 ```python
 known_facts = [
-    "Source: analytics_dev.bronze.queue_pjm (45,000 rows, 22 columns, all STRING)",
-    "Target: analytics_dev.silver.queue_positions (will create, does not exist)",
-    "Grain: one row per (project_id, queue_date) — verified unique in source",
-    "Key columns: project_id (0% null), queue_date (0.2% null → filter)",
-    "Capacity: has commas ('1,234.5') — needs REGEXP_REPLACE before TRY_CAST",
+    "Source: example_catalog.bronze.orders_web (45,000 rows, 22 columns, all STRING)",
+    "Target: example_catalog.silver.order_lines (will create, does not exist)",
+    "Grain: one row per (order_id, line_number) — verified unique in source",
+    "Key columns: order_id (0% null), line_number (0% null); order_date 0.2% null → filter",
+    "Order total: has commas ('1,234.50') — needs REGEXP_REPLACE before TRY_CAST",
     "Dates: MM/DD/YYYY format — needs TRY_CAST with format",
     "15 columns to keep, 7 to drop (legacy/duplicate)",
-    "Null handling: COALESCE status to 'Unknown', filter null queue_date",
-    "Past learning: PJM renamed project_id to proj_id in ERAS-2025 batch",
+    "Null handling: COALESCE status to 'Unknown', filter null order_date",
+    "Past learning: the web storefront renamed order_id to ord_id in the 2025 platform-migration batch",
     "Data access: no project-specific abstraction is configured; use native Spark",
     "Persistence: initial load uses an approved overwrite after quality validation",
 ]
@@ -227,19 +227,19 @@ constraints = [
 ]
 
 acceptance_criteria = [
-    "Target has ~44,900 rows (source minus null queue_date minus duplicates)",
-    "Zero duplicate (project_id, queue_date) combinations in target",
-    "capacity_mw column is DOUBLE type with <1% null rate",
+    "Target has ~44,900 rows (source minus null order_date minus duplicates)",
+    "Zero duplicate (order_id, line_number) combinations in target",
+    "order_total column is DECIMAL(12,2) with <1% null rate",
     "All date columns are DATE type",
     "Pipeline re-run produces identical output",
 ]
 
-in_scope = ["Bronze → Silver transform for PJM queue data"]
-out_of_scope = ["Silver → Gold aggregation", "Other ISO sources"]
+in_scope = ["Bronze → Silver transform for web-storefront order data"]
+out_of_scope = ["Silver → Gold aggregation", "Other sales channels"]
 
 risks = [
-    "PJM may rename columns again — add column validation at bronze read",
-    "Commas in capacity may have other formats — sample first 1000 rows",
+    "The storefront may rename columns again — add column validation at bronze read",
+    "Commas in order totals may have other formats — sample first 1000 rows",
 ]
 ```
 

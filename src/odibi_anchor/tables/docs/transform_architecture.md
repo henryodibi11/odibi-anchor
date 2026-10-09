@@ -149,7 +149,7 @@ tables/
 ```python
 plan = {
     "kind":    "transform_plan_context",
-    "subject": "queue_bronze",
+    "subject": "orders_bronze",
     "summary": "6 transforms: 1 standardize, 3 null_clean, 2 cast",
     "metrics": {
         "total_steps":       6,
@@ -172,7 +172,7 @@ plan = {
 ```python
 result = {
     "kind":             "apply_transform_context",
-    "subject":          "queue_bronze",
+    "subject":          "orders_bronze",
     "summary":          "Applied 6 steps. 0 rows dropped.",
     "df":               <transformed DataFrame>,
     "df_before":        <original DataFrame>,
@@ -182,7 +182,7 @@ result = {
     "row_count_before": 44,
     "row_count_after":  44,
     "rows_dropped":     0,
-    "columns_renamed":  {"Interconnection Size (MW)": "interconnection_size_mw"},
+    "columns_renamed":  {"Order Total (USD)": "order_total_usd"},
     "step_audit":       [{...}],
     "checkpoints_evicted": [],
     "metrics":          {...},

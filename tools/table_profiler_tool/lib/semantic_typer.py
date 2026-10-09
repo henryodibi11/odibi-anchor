@@ -116,8 +116,8 @@ _AMBIGUOUS_TYPES: set[SemanticType] = {
 
 # Types that must NEVER be inferred from pattern alone — a column-name hint
 # is required.  Their regex patterns are too generic (2-3 uppercase letters)
-# and frequently false-positive on energy-market acronyms (DEC, SPP, PJM…),
-# fuel codes, and other short-code domains.
+# and frequently false-positive on business acronyms (sales channels, warehouse
+# codes, carrier names…), size codes, and other short-code domains.
 _REQUIRE_NAME_HINT: set[SemanticType] = {
     SemanticType.COUNTRY_CODE,
     SemanticType.STATE_CODE,

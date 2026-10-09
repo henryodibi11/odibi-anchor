@@ -17,8 +17,8 @@ def _create(tmp_path: Path, **changes):
     return problem_action(
         tmp_path,
         "create",
-        title="Reduce queue processing delays",
-        project_id="queue-automation",
+        title="Reduce order export delays",
+        project_id="order-analytics",
         output_format="dict",
         **changes,
     )
@@ -27,7 +27,7 @@ def _create(tmp_path: Path, **changes):
 def test_create_writes_all_seven_stages_to_one_markdown_file(tmp_path: Path) -> None:
     result = _create(
         tmp_path,
-        definition="Queue jobs exceed the agreed processing window.",
+        definition="Order export jobs exceed the agreed processing window.",
         decision_needed="Decide which bottleneck to address first.",
     )
 
@@ -35,7 +35,7 @@ def test_create_writes_all_seven_stages_to_one_markdown_file(tmp_path: Path) -> 
     text = path.read_text(encoding="utf-8")
 
     assert result["created"] is True
-    assert result["project_id"] == "queue-automation"
+    assert result["project_id"] == "order-analytics"
     assert path.parent == tmp_path / "problems"
     for stage in range(1, 8):
         assert f"## {stage}." in text
@@ -192,12 +192,12 @@ def test_link_multiple_specs_without_duplicates(tmp_path: Path) -> None:
         tmp_path,
         "link_spec",
         problem_id,
-        spec="QUEUE_METRICS",
+        spec="EXPORT_METRICS",
         recommendation_revision=2,
         output_format="dict",
     )
 
-    assert result["linked_specs"] == ["WORKER_RESIZE", "QUEUE_METRICS"]
+    assert result["linked_specs"] == ["WORKER_RESIZE", "EXPORT_METRICS"]
 
 
 def test_inconclusive_problem_can_close_without_recommendation(tmp_path: Path) -> None:
@@ -354,8 +354,8 @@ def test_markdown_output_is_compact_and_human_readable(tmp_path: Path) -> None:
     created = problem_action(
         tmp_path,
         "create",
-        title="Choose a queue design",
-        project_id="queue",
+        title="Choose an export design",
+        project_id="exports",
         output_format="markdown",
     )
     assert "# PRB-" in created

@@ -217,7 +217,7 @@ def evaluate_pr_readiness(
     snapshot: RepositorySnapshot, config: Mapping[str, Any], *,
     attestations: tuple[EvidenceEntry, ...] = (), intended_pr_paths: tuple[str, ...] = (),
 ) -> PRReadinessResult:
-    """Evaluate deterministic EAAI checks only over changed Python source and symbols."""
+    """Evaluate deterministic PR-readiness checks only over changed Python source and symbols."""
     _validate_config(config)
     fresh, stale = validate_repository_snapshot(snapshot)
     checks = [_check("snapshot.fresh", "pass" if fresh else "fail", "Snapshot matches local state.", stale=stale)]

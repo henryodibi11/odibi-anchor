@@ -25,10 +25,10 @@ The grain is the most important design decision. Everything else follows from it
 
 | Good grain definition | Bad grain definition |
 |---|---|
-| "One row per project per queue date" | "One row per project" (which version?) |
+| "One row per order line per order" | "One row per order" (what about multi-line orders?) |
 | "One row per invoice line item" | "One row per invoice" (what about multi-line?) |
-| "One row per project (current state only)" | "One row per thing" (what thing?) |
-| "One row per project per snapshot month" | "All the project data" (not a grain) |
+| "One row per product (current state only)" | "One row per thing" (what thing?) |
+| "One row per product per snapshot month" | "All the product data" (not a grain) |
 
 ### How to Choose Grain
 
@@ -39,7 +39,7 @@ anchor("profile_table", source_df, subject="catalog.schema.source")
 # 2. Check candidate key uniqueness
 from pyspark.sql import functions as F
 
-candidate_keys = ["project_id", "queue_date"]
+candidate_keys = ["order_id", "line_number"]
 dupes = source_df.groupBy(candidate_keys).agg(F.count("*").alias("cnt")).where("cnt > 1")
 print(f"Duplicate key combinations: {dupes.count()}")
 
@@ -89,7 +89,7 @@ TRY_CAST(NULLIF(TRIM(raw_col), '') AS DOUBLE) -- Safe: NULL instead of error
 | Timestamps | STRING | TIMESTAMP | Include timezone handling |
 | Whole numbers (counts) | STRING | INT or BIGINT | TRY_CAST, check for commas |
 | Decimal numbers (money) | STRING | DECIMAL(precision, scale) | NOT DOUBLE — precision matters |
-| Capacity/MW values | STRING | DOUBLE | OK for approximate values |
+| Weights/measurements | STRING | DOUBLE | OK for approximate values |
 | Yes/No flags | STRING | BOOLEAN | Map explicitly: "Y"→true, "N"→false |
 | JSON blobs | STRING | STRING | Parse with from_json() when needed |
 
@@ -117,11 +117,11 @@ TRY_CAST(NULLIF(TRIM(raw_col), '') AS DOUBLE) -- Safe: NULL instead of error
 
 | Table type | Key pattern | Example |
 |---|---|---|
-| Dimension (Type 1) | Natural business key | `project_id` |
-| Dimension (Type 2/SCD) | Natural key + version | `project_id + effective_from` |
+| Dimension (Type 1) | Natural business key | `product_id` |
+| Dimension (Type 2/SCD) | Natural key + version | `product_id + effective_from` |
 | Fact (transactional) | Transaction ID | `invoice_id + line_number` |
-| Fact (snapshot) | Entity + snapshot period | `project_id + snapshot_month` |
-| Bridge/junction | Composite of both sides | `project_id + queue_id` |
+| Fact (snapshot) | Entity + snapshot period | `product_id + snapshot_month` |
+| Bridge/junction | Composite of both sides | `product_id + promotion_id` |
 | Aggregate | Group key + period | `region + fiscal_quarter` |
 
 ### Foreign Key Relationships
@@ -129,9 +129,9 @@ TRY_CAST(NULLIF(TRIM(raw_col), '') AS DOUBLE) -- Safe: NULL instead of error
 Document how tables relate:
 
 ```
-dim_project (project_id) ←── fact_queue_position (project_id)
-dim_queue (queue_id) ←── fact_queue_position (queue_id)
-dim_date (date_key) ←── fact_queue_position (queue_date)
+dim_product (product_id) ←── fact_order_line (product_id)
+dim_customer (customer_id) ←── fact_order_line (customer_id)
+dim_date (date_key) ←── fact_order_line (order_date)
 ```
 
 ## Step 4: Plan Partitioning and Clustering
@@ -140,8 +140,8 @@ dim_date (date_key) ←── fact_queue_position (queue_date)
 
 | Strategy | When to use | Example |
 |---|---|---|
-| **Date partition** | Time-series data, incremental loads | `PARTITIONED BY (queue_date)` |
-| **Category partition** | Few distinct values, queries filter by it | `PARTITIONED BY (iso_region)` |
+| **Date partition** | Time-series data, incremental loads | `PARTITIONED BY (order_date)` |
+| **Category partition** | Few distinct values, queries filter by it | `PARTITIONED BY (sales_region)` |
 | **No partition** | Small table (<1GB), or queries scan everything | Default |
 
 **Rules:**
@@ -152,11 +152,11 @@ dim_date (date_key) ←── fact_queue_position (queue_date)
 ### Clustering / Z-ORDER (Delta)
 
 ```sql
--- Optimize for point lookups on project_id
-OPTIMIZE catalog.schema.table ZORDER BY (project_id)
+-- Optimize for point lookups on order_id
+OPTIMIZE catalog.schema.table ZORDER BY (order_id)
 
 -- Multi-column for range queries
-OPTIMIZE catalog.schema.table ZORDER BY (project_id, queue_date)
+OPTIMIZE catalog.schema.table ZORDER BY (customer_id, order_date)
 ```
 
 **When to Z-ORDER:**
@@ -178,11 +178,11 @@ OPTIMIZE catalog.schema.table ZORDER BY (project_id, queue_date)
 ### SCD Type 2 Schema Pattern
 
 ```sql
-CREATE TABLE dim_project (
-    project_id STRING NOT NULL,        -- Natural key
-    project_name STRING,
+CREATE TABLE dim_product (
+    product_id STRING NOT NULL,        -- Natural key
+    product_name STRING,
     status STRING,
-    capacity_mw DOUBLE,
+    unit_weight_kg DOUBLE,
     -- SCD2 tracking columns
     effective_from DATE NOT NULL,       -- When this version became active
     effective_to DATE,                  -- NULL = current version
@@ -211,15 +211,16 @@ USING DELTA
 
 | Column | Type | Nullable | Description | Source |
 |---|---|---|---|---|
-| project_id | STRING | NO | Business key | source.project_id |
-| queue_date | DATE | NO | Date entered queue | TRY_CAST(source.raw_date) |
-| capacity_mw | DOUBLE | YES | Nameplate capacity | TRY_CAST after comma removal |
+| order_id | STRING | NO | Business key | source.order_id |
+| product_id | STRING | NO | Ordered product | source.product_id |
+| order_date | DATE | NO | Date the order was placed | TRY_CAST(source.raw_date) |
+| order_total | DECIMAL(12,2) | YES | Order total in USD | TRY_CAST after comma removal |
 | _extracted_at | TIMESTAMP | NO | Ingestion timestamp | current_timestamp() |
 
 ## Relationships
 
-- FK: project_id → dim_project.project_id
-- FK: queue_date → dim_date.date_key
+- FK: product_id → dim_product.product_id
+- FK: order_date → dim_date.date_key
 
 ## Business Rules
 
@@ -237,8 +238,8 @@ USING DELTA
 
 ```python
 # Design schema before building pipeline
-anchor("task", "design silver schema for queue positions",
-    goal="define grain, keys, types, and partitioning for silver queue table",
+anchor("task", "design silver schema for order lines",
+    goal="define grain, keys, types, and partitioning for silver order-line table",
     mode="planning")
 
 # Profile source data to inform decisions
@@ -246,7 +247,7 @@ anchor("profile_table", source_df, subject="catalog.schema.source")
 anchor("profile_table", source_df, subject="catalog.schema.source", level="deep")
 
 # Verify key uniqueness
-anchor("quality", df, subject="catalog.schema.table", keys=["project_id", "queue_date"])
+anchor("quality", df, subject="catalog.schema.table", keys=["order_id", "line_number"])
 
 # After design is complete, persist the decision in the owning Spec/decision artifact.
 # Capture learning only if current evidence supports a reusable observation.

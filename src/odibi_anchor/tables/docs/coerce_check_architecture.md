@@ -104,14 +104,14 @@ ctx = {
         "category_totals": {"case": 10, "whitespace+case": 2, "genuine": 2},
     },
     "column_results": {
-        "Generic Queue Status": {
+        "Order Status": {
             "total_mismatches": 12,
             "categories":       {"case": 10, "whitespace+case": 2},
             "dominant_category": "case",
             "confidence":        0.833,
             "suggested_fix":    "UPPER()/LOWER() both sides before comparing",
         },
-        "Project Status": {
+        "Fulfillment Status": {
             "total_mismatches": 2,
             "categories":       {"genuine": 2},
             "dominant_category": "genuine",
@@ -120,8 +120,8 @@ ctx = {
         },
     },
     "samples": {
-        "Generic Queue Status": [
-            {"old": "Scoping", "new": "SCOPING", "category": "case"},
+        "Order Status": [
+            {"old": "Pending", "new": "PENDING", "category": "case"},
             {"old": "  Active  ", "new": "ACTIVE",  "category": "whitespace+case"},
         ],
     },

@@ -111,22 +111,22 @@ def handoff_context(
 
 ```python
 ctx = handoff_context(
-    "Build silver pipeline for queue positions",
+    "Build silver pipeline for order snapshots",
     state="in_progress",
     goal="Typed silver table with snapshot grain validated",
     decisions=[
-        "Grain is [application_id, snapshot_year, snapshot_month]",
+        "Grain is [order_id, snapshot_year, snapshot_month]",
         "Used SCD2 pattern for historical tracking",
     ],
     evidence_chain=[
         {"tool": "exploration_context", "status": "done",
-         "summary": "290K rows, grain verified unique"},
+         "summary": "186K rows, grain verified unique"},
         {"tool": "quality_gate_context", "status": "pass",
          "summary": "Write-safe, 0 blockers"},
     ],
     artifacts=[
-        {"path": "silver/queue_positions.py", "role": "source"},
-        {"path": "tests/test_queue_positions.py", "role": "test"},
+        {"path": "silver/order_snapshots.py", "role": "source"},
+        {"path": "tests/test_order_snapshots.py", "role": "test"},
     ],
     next_action="Run diff_tables_by_key against previous load",
     skip=["Source profiling", "Schema exploration"],

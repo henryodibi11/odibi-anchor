@@ -399,18 +399,18 @@ class TestPreMergeContext:
 
     def test_composite_keys(self):
         source = pd.DataFrame({
-            "project_id": [1, 1, 2],
-            "queue_date": ["2024-01-01", "2024-01-02", "2024-01-01"],
+            "order_id": [1, 1, 2],
+            "order_date": ["2024-01-01", "2024-01-02", "2024-01-01"],
             "value": [10, 20, 30],
         })
         target = pd.DataFrame({
-            "project_id": [1, 2],
-            "queue_date": ["2024-01-01", "2024-01-01"],
+            "order_id": [1, 2],
+            "order_date": ["2024-01-01", "2024-01-01"],
             "value": [100, 200],
         })
         result = pre_merge_context(
             source, target,
-            keys=["project_id", "queue_date"],
+            keys=["order_id", "order_date"],
             output_format="dict",
         )
         assert result["kind"] == "pre_merge"

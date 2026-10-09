@@ -27,12 +27,12 @@ anchor("trace", "paste full traceback here")
 ```
 
 **Record as known_facts:**
-- Exact error type and message (e.g., `KeyError: 'project_id'`)
+- Exact error type and message (e.g., `KeyError: 'order_id'`)
 - File and line number where it occurred
 - The full call chain (which function called which)
 
 **Rule:** Copy-paste the exact error. Do not paraphrase.
-"It threw a KeyError" is useless. `KeyError: 'project_id' at silver_queue.py:45` is actionable.
+"It threw a KeyError" is useless. `KeyError: 'order_id' at silver_orders.py:45` is actionable.
 
 ### 2. Check Known Error Patterns
 
@@ -110,7 +110,7 @@ The root cause is NOT "line 45 threw KeyError." The root cause is WHY the key is
 - Specific examples of wrong rows/values
 
 **Rule:** "The data looks wrong" is not specific enough.
-"Expected 1,234 rows, got 987. Missing rows have project_status='Withdrawn'." is actionable.
+"Expected 1,234 rows, got 987. Missing rows have order_status='Cancelled'." is actionable.
 
 ### 2. Isolate the Stage
 
@@ -150,17 +150,17 @@ After completing this checklist, you should have:
 
 ```python
 known_facts = [
-    "Error: KeyError: 'project_id' at src/silver_queue.py:45",
-    "Root cause: upstream bronze table renamed column from 'project_id' to 'proj_id'",
-    "Callers: pipeline_notebook calls process_queue() which calls the failing function",
+    "Error: KeyError: 'order_id' at src/silver_orders.py:45",
+    "Root cause: upstream bronze table renamed column from 'order_id' to 'ord_id'",
+    "Callers: pipeline_notebook calls process_orders() which calls the failing function",
     "Known pattern: similar rename happened with 'status' column on 2026-05-10",
-    "Fix: update column reference in silver_queue.py line 45",
-    "Also affected: silver_queue.py line 72 references same column",
+    "Fix: update column reference in silver_orders.py line 45",
+    "Also affected: silver_orders.py line 72 references same column",
 ]
 
 constraints = [
     "Fix root cause, not symptom — no try/except to catch KeyError",
-    "Check all column references in silver_queue.py, not just line 45",
+    "Check all column references in silver_orders.py, not just line 45",
     "Must verify with actual data, not just syntax check",
 ]
 

@@ -73,12 +73,12 @@ def basic_profile_ctx():
                     {"value": "Active", "count": 40, "pct": 0.4},
                     {"value": "Inactive", "count": 30, "pct": 0.3},
                     {"value": "Pending", "count": 20, "pct": 0.2},
-                    {"value": "Withdrawn", "count": 10, "pct": 0.1},
+                    {"value": "Cancelled", "count": 10, "pct": 0.1},
                 ],
                 "quality_flags": [],
             },
-            "capacity_mw": {
-                "name": "capacity_mw",
+            "order_total": {
+                "name": "order_total",
                 "null_pct": 0.0,
                 "distinct_count": 80,
                 "distinct_pct": 0.8,
@@ -210,7 +210,7 @@ class TestSuggestRulesContext:
         """exclude_columns removes specified columns from rules."""
         result = suggest_rules_context(
             profile_ctx=basic_profile_ctx,
-            exclude_columns=["status", "capacity_mw"],
+            exclude_columns=["status", "order_total"],
         )
         # These columns should not appear in any rule
         for rule in result["rules"]:
@@ -218,7 +218,7 @@ class TestSuggestRulesContext:
             if isinstance(cols, str):
                 cols = [cols]
             assert "status" not in cols
-            assert "capacity_mw" not in cols
+            assert "order_total" not in cols
 
     def test_include_types_filters(self, basic_profile_ctx):
         """include_types limits which rule types are generated."""
@@ -367,11 +367,11 @@ class TestInferAcceptedValues:
     def test_risk_for_wide_categoricals(self):
         """Columns with 10+ distinct values generate a risk warning."""
         profiles = {
-            "market": {
+            "region": {
                 "distinct_count": 15,
                 "inferred_type": "string",
                 "top_values": [
-                    {"value": f"M{i}", "count": 10, "pct": 0.067}
+                    {"value": f"R{i}", "count": 10, "pct": 0.067}
                     for i in range(15)
                 ],
             }
@@ -524,9 +524,9 @@ class TestStrictnessLevels:
         standard = suggest_rules_context(
             profile_ctx=basic_profile_ctx, strictness="standard", include_types=["range"]
         )
-        # Both should have range rules for capacity_mw
-        strict_rules = [r for r in strict["rules"] if r["column"] == "capacity_mw"]
-        standard_rules = [r for r in standard["rules"] if r["column"] == "capacity_mw"]
+        # Both should have range rules for order_total
+        strict_rules = [r for r in strict["rules"] if r["column"] == "order_total"]
+        standard_rules = [r for r in standard["rules"] if r["column"] == "order_total"]
         if strict_rules and standard_rules:
             assert strict_rules[0]["max"] <= standard_rules[0]["max"]
 

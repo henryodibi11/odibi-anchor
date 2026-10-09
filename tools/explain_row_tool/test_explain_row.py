@@ -42,10 +42,10 @@ from explain_row_tool.explain_row_impl import (
 def output_df():
     """Output DataFrame with mixed sources."""
     return pd.DataFrame({
-        "project_id": ["PROJ-001", "PROJ-002", "PROJ-003"],
-        "project_name": ["Solar Alpha", "Wind Beta", "Hydro Gamma"],
-        "capacity_mw": [150, 200, 9999],
-        "market": ["PJM", "ERCOT", "MISO"],
+        "order_id": ["ORD-001", "ORD-002", "ORD-003"],
+        "product_name": ["Desk Lamp", "Office Chair", "Bookshelf"],
+        "order_total": [150, 200, 9999],
+        "region": ["NORTH", "SOUTH", "EAST"],
         "status": ["Active", "Pending", "Active"],
         "_row_hash": ["abc", "def", "ghi"],
     })
@@ -53,30 +53,30 @@ def output_df():
 
 @pytest.fixture
 def source_a():
-    """Upstream source A — main project data."""
+    """Upstream source A — main order data."""
     return pd.DataFrame({
-        "project_id": ["PROJ-001", "PROJ-002", "PROJ-003"],
-        "project_name": ["Solar Alpha", "Wind Beta", "Hydro Gamma"],
-        "market": ["PJM", "ERCOT", "MISO"],
+        "order_id": ["ORD-001", "ORD-002", "ORD-003"],
+        "product_name": ["Desk Lamp", "Office Chair", "Bookshelf"],
+        "region": ["NORTH", "SOUTH", "EAST"],
         "status": [None, "Pending", None],
     })
 
 
 @pytest.fixture
 def source_b():
-    """Upstream source B — capacity data."""
+    """Upstream source B — order total data."""
     return pd.DataFrame({
-        "project_id": ["PROJ-001", "PROJ-002", "PROJ-003"],
-        "capacity_mw": [150, 200, 300],
+        "order_id": ["ORD-001", "ORD-002", "ORD-003"],
+        "order_total": [150, 200, 300],
     })
 
 
 @pytest.fixture
 def source_c():
-    """Upstream source C — alternate capacity with different value."""
+    """Upstream source C — alternate order total with different value."""
     return pd.DataFrame({
-        "project_id": ["PROJ-003"],
-        "capacity_mw": [300],
+        "order_id": ["ORD-003"],
+        "order_total": [300],
     })
 
 
@@ -162,13 +162,13 @@ class TestExtractRow:
     """Unit tests for row extraction."""
 
     def test_extract_existing_row(self, output_df):
-        row = _extract_row(output_df, ["project_id"], {"project_id": "PROJ-001"}, "pandas")
+        row = _extract_row(output_df, ["order_id"], {"order_id": "ORD-001"}, "pandas")
         assert row is not None
-        assert row["project_id"] == "PROJ-001"
-        assert row["capacity_mw"] == 150
+        assert row["order_id"] == "ORD-001"
+        assert row["order_total"] == 150
 
     def test_extract_missing_row(self, output_df):
-        row = _extract_row(output_df, ["project_id"], {"project_id": "NOPE"}, "pandas")
+        row = _extract_row(output_df, ["order_id"], {"order_id": "NOPE"}, "pandas")
         assert row is None
 
     def test_extract_missing_key_column(self, output_df):
@@ -197,51 +197,51 @@ class TestExplainRowBasic:
     def test_basic_single_upstream(self, output_df, source_a):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         assert result["kind"] == "explain_row"
-        assert "PROJ-001" in result["subject"]
+        assert "ORD-001" in result["subject"]
         assert result["metrics"]["output_columns"] == 6
-        assert result["metrics"]["columns_traced"] >= 3  # at least project_name, market, status
+        assert result["metrics"]["columns_traced"] >= 3  # at least product_name, region, status
 
     def test_multi_upstream(self, output_df, source_a, source_b):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a, "source_b": source_b},
         )
         assert result["metrics"]["upstream_sources_matched"] == 2
 
-        # capacity_mw should come from source_b
+        # order_total should come from source_b
         lineage = result["column_lineage"]
-        cap_col = next(c for c in lineage if c["column"] == "capacity_mw")
-        assert cap_col["origin"] == "source_b"
-        assert cap_col["match_type"] == "exact"
-        assert cap_col["output_value"] == 150
+        total_col = next(c for c in lineage if c["column"] == "order_total")
+        assert total_col["origin"] == "source_b"
+        assert total_col["match_type"] == "exact"
+        assert total_col["output_value"] == 150
 
     def test_transformed_value_detected(self, output_df, source_b):
-        # PROJ-003 has capacity_mw=9999 in output, 300 in source_b
+        # ORD-003 has order_total=9999 in output, 300 in source_b
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-003"},
+            keys=["order_id"],
+            values={"order_id": "ORD-003"},
             upstream={"source_b": source_b},
         )
         lineage = result["column_lineage"]
-        cap_col = next(c for c in lineage if c["column"] == "capacity_mw")
-        assert cap_col["match_type"] == "transformed"
-        assert cap_col["upstream_value"] == 300
-        assert cap_col["output_value"] == 9999
+        total_col = next(c for c in lineage if c["column"] == "order_total")
+        assert total_col["match_type"] == "transformed"
+        assert total_col["upstream_value"] == 300
+        assert total_col["output_value"] == 9999
 
     def test_null_filled_detected(self, output_df, source_a):
-        # PROJ-001: status="Active" in output, None in source_a
+        # ORD-001: status="Active" in output, None in source_a
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         lineage = result["column_lineage"]
@@ -252,8 +252,8 @@ class TestExplainRowBasic:
     def test_not_found_for_computed_column(self, output_df, source_a, source_b):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a, "source_b": source_b},
         )
         lineage = result["column_lineage"]
@@ -306,8 +306,8 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="Row not found"):
             explain_row_context(
                 output_df,
-                keys=["project_id"],
-                values={"project_id": "NONEXISTENT"},
+                keys=["order_id"],
+                values={"order_id": "NONEXISTENT"},
                 upstream={"source_a": source_a},
             )
 
@@ -316,7 +316,7 @@ class TestExplainRowErrors:
             explain_row_context(
                 output_df,
                 keys=None,
-                values={"project_id": "PROJ-001"},
+                values={"order_id": "ORD-001"},
                 upstream={"source_a": source_a},
             )
 
@@ -324,7 +324,7 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="values is required"):
             explain_row_context(
                 output_df,
-                keys=["project_id"],
+                keys=["order_id"],
                 values=None,
                 upstream={"source_a": source_a},
             )
@@ -333,8 +333,8 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="upstream is required"):
             explain_row_context(
                 output_df,
-                keys=["project_id"],
-                values={"project_id": "PROJ-001"},
+                keys=["order_id"],
+                values={"order_id": "ORD-001"},
                 upstream=None,
             )
 
@@ -342,8 +342,8 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="output_df is required"):
             explain_row_context(
                 None,
-                keys=["project_id"],
-                values={"project_id": "PROJ-001"},
+                keys=["order_id"],
+                values={"order_id": "ORD-001"},
                 upstream={"source_a": source_a},
             )
 
@@ -351,8 +351,8 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="output_format"):
             explain_row_context(
                 output_df,
-                keys=["project_id"],
-                values={"project_id": "PROJ-001"},
+                keys=["order_id"],
+                values={"order_id": "ORD-001"},
                 upstream={"source_a": source_a},
                 output_format="xml",
             )
@@ -361,8 +361,8 @@ class TestExplainRowErrors:
         with pytest.raises(ValueError, match="values dict is missing keys"):
             explain_row_context(
                 output_df,
-                keys=["project_id", "market"],
-                values={"project_id": "PROJ-001"},  # missing "market"
+                keys=["order_id", "region"],
+                values={"order_id": "ORD-001"},  # missing "region"
                 upstream={"source_a": source_a},
             )
 
@@ -378,8 +378,8 @@ class TestContractCompliance:
     def test_standard_keys_present(self, output_df, source_a):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         assert "kind" in result
@@ -396,8 +396,8 @@ class TestContractCompliance:
     def test_metrics_keys(self, output_df, source_a):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         m = result["metrics"]
@@ -413,8 +413,8 @@ class TestContractCompliance:
     def test_column_lineage_structure(self, output_df, source_a):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         for entry in result["column_lineage"]:
@@ -429,8 +429,8 @@ class TestContractCompliance:
     def test_samples_structure(self, output_df, source_a):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
         )
         assert "output_row" in result["samples"]
@@ -450,8 +450,8 @@ class TestMarkdownRendering:
     def test_markdown_output_format(self, output_df, source_a, source_b):
         result = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a, "source_b": source_b},
             output_format="markdown",
         )
@@ -464,8 +464,8 @@ class TestMarkdownRendering:
     def test_render_function_directly(self, output_df, source_a):
         ctx = explain_row_context(
             output_df,
-            keys=["project_id"],
-            values={"project_id": "PROJ-001"},
+            keys=["order_id"],
+            values={"order_id": "ORD-001"},
             upstream={"source_a": source_a},
             output_format="dict",
         )

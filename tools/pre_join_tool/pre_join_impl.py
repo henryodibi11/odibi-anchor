@@ -856,8 +856,8 @@ def pre_join_context(
     Example:
         >>> anchor("pre_join", orders_df, customers_df, keys=["customer_id"])
         >>> anchor("pre_join", fact_df, dim_df,
-        ...    left_keys=["proj_id"], right_keys=["project_id"],
-        ...    left_subject="fact_queue", right_subject="dim_project")
+        ...    left_keys=["cust_id"], right_keys=["customer_id"],
+        ...    left_subject="fact_orders", right_subject="dim_customer")
     """
     validate_output_format(output_format)
     # --- Resolve positional args ---

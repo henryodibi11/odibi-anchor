@@ -767,7 +767,6 @@ def test_active_debugging_calls_and_enforcement_language_match_runtime_contracts
     )
     for stale in (
         ">3 SKILL: hints", "source-type sub-skills", "language-specific sub-skills",
-        "/Workspace/Repos/eaai-common-resources/eaai-utilities",
         "Skills REQUIRED per mode", "before file-modifying actions proceed",
     ):
         assert stale not in references

@@ -71,9 +71,9 @@ class TestFixUnicode:
     """Test _fix_unicode function."""
 
     def test_strips_zero_width_space(self):
-        s = pd.Series(["PJM\u200b", "MISO\u200c"])
+        s = pd.Series(["NORTH\u200b", "SOUTH\u200c"])
         result = _fix_unicode(s)
-        assert result.tolist() == ["PJM", "MISO"]
+        assert result.tolist() == ["NORTH", "SOUTH"]
 
     def test_strips_bom(self):
         s = pd.Series(["\ufeffvalue", "normal"])
@@ -240,13 +240,13 @@ class TestCoerceFixContext:
             "id": [1, 2, 3, 4],
             "name": ["John", "Jane", "Bob", "Alice"],
             "status": ["ACTIVE", "CLOSED", "PENDING", "ACTIVE"],
-            "desc": ["Wind", "Solar", "Gas", "Hydro"],
+            "desc": ["Apparel", "Electronics", "Grocery", "Toys"],
         })
         new = pd.DataFrame({
             "id": [1, 2, 3, 4],
             "name": ["  John  ", "Jane  ", "  Bob", "Alice"],
             "status": ["active", "closed", "pending", "active"],
-            "desc": ["Solar", "Wind", "Nuclear", "Coal"],
+            "desc": ["Electronics", "Apparel", "Home", "Books"],
         })
         return old, new
 
@@ -436,11 +436,11 @@ class TestEndToEndWorkflow:
 
     def test_unicode_fix_end_to_end(self):
         """Unicode zero-width char fixes work end-to-end."""
-        old = pd.DataFrame({"id": [1, 2], "region": ["PJM", "MISO"]})
-        new = pd.DataFrame({"id": [1, 2], "region": ["PJM\u200b", "MISO\ufeff"]})
+        old = pd.DataFrame({"id": [1, 2], "region": ["NORTH", "SOUTH"]})
+        new = pd.DataFrame({"id": [1, 2], "region": ["NORTH\u200b", "SOUTH\ufeff"]})
 
         coerce_ctx = coercion_check_context(old, new, keys=["id"], columns=["region"])
         fix_result = coerce_fix_context(new, coerce_ctx)
         fixed_df = fix_result["df"]
 
-        assert fixed_df["region"].tolist() == ["PJM", "MISO"]
+        assert fixed_df["region"].tolist() == ["NORTH", "SOUTH"]

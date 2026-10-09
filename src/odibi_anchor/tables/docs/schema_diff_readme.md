@@ -55,15 +55,15 @@ ctx = anchor("schema_diff", old_df, new_df)
 ### With labels
 ```python
 ctx = anchor("schema_diff", old_df, new_df,
-         old_subject="queue_2026_06_04",
-         new_subject="queue_2026_06_11")
+         old_subject="orders_2026_06_04",
+         new_subject="orders_2026_06_11")
 ```
 
 ### Compare Unity Catalog tables
 ```python
 ctx = anchor("schema_diff",
-         "analytics_dev.data_engineering.gold_v1",
-         "analytics_dev.data_engineering.gold_v2",
+         "example_catalog.gold.gold_v1",
+         "example_catalog.gold.gold_v2",
          spark=spark)
 ```
 

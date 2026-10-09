@@ -536,7 +536,7 @@ def test_local_windows_owner_presence_activates_with_honest_receipt(tmp_path, mo
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
     monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: True)
-    monkeypatch.setattr("odibi_anchor.human_input_windows._windows_username", lambda: "Henry")
+    monkeypatch.setattr("odibi_anchor.human_input_windows._windows_username", lambda: "Alex")
     monkeypatch.setattr("odibi_anchor.human_input_windows._message_box", lambda *_args: 6)
 
     result = request_owner_promotion(
@@ -546,7 +546,7 @@ def test_local_windows_owner_presence_activates_with_honest_receipt(tmp_path, mo
 
     assert result["status"] == "recorded"
     assert result["receipt"]["transport"] == "local-windows-owner-presence"
-    assert result["receipt"]["owner_user_id"] == "windows-account:Henry"
+    assert result["receipt"]["owner_user_id"] == "windows-account:Alex"
     assert (
         result["receipt"]["owner_assurance"]
         == "interactive_local_windows_account_presence"
@@ -795,7 +795,7 @@ def test_local_owner_decline_timeout_or_invalid_ui_is_non_mutating(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
     monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: True)
-    monkeypatch.setattr("odibi_anchor.human_input_windows._windows_username", lambda: "Henry")
+    monkeypatch.setattr("odibi_anchor.human_input_windows._windows_username", lambda: "Alex")
     monkeypatch.setattr("odibi_anchor.human_input_windows.time.time", lambda: 0.0)
     monkeypatch.setattr(
         "odibi_anchor.human_input_windows._message_box", lambda *_args: dialog_result,

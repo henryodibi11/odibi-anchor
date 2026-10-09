@@ -26,15 +26,15 @@ diff_tables_by_key(
 The two DataFrames to compare. Both must use the same engine (both pandas or both Spark). Passing mixed types raises `ValueError`.
 
 ### `keys`
-Required. List of column names that uniquely identify a row — the business grain. All key columns must exist in both DataFrames. Use multi-column keys for compound grains: `keys=["iso", "queue_number"]`.
+Required. List of column names that uniquely identify a row — the business grain. All key columns must exist in both DataFrames. Use multi-column keys for compound grains: `keys=["region", "order_number"]`.
 
 ### `compare_columns`
 Optional. Restricts comparison to the listed non-key columns. When omitted, all common non-key columns are compared. Use when:
-- You only care about specific fields changing (e.g. status and MW, not timestamps)
+- You only care about specific fields changing (e.g. status and order total, not timestamps)
 - One DataFrame has extra columns the other doesn't and you want to ignore them
 
 ### `subject`
-Optional display label. Appears in the output header and summary. Good practice: `"queue_gold: 2026-06-04 vs 2026-06-11"`.
+Optional display label. Appears in the output header and summary. Good practice: `"orders_gold: 2026-06-04 vs 2026-06-11"`.
 
 ### `engine`
 - `"auto"` (default) — detected from `old_df` type
@@ -89,7 +89,7 @@ Controls how many example rows appear in each sample section (`added_rows`, `rem
 
 ```python
 {
-    "column":           "Generic Queue Status",
+    "column":           "Order Status",
     "changed_key_count": 3,     # rows where this column changed
     "null_to_value":     1,     # was null, now has value
     "value_to_null":     0,     # had value, now null
@@ -110,12 +110,12 @@ ctx["samples"]["changed_rows"]  # list[dict] — each row has before/after per c
 `changed_rows` example entry:
 ```python
 {
-    "Application ID": "27INR0557",
-    "_changed_columns": ["Generic Queue Status", "Interconnection Size (MW)"],
-    "Generic Queue Status__before": "Scoping",
-    "Generic Queue Status__after":  "Facilities Study",
-    "Interconnection Size (MW)__before": 50.0,
-    "Interconnection Size (MW)__after":  1336.52,
+    "Order ID": "ORD-27557",
+    "_changed_columns": ["Order Status", "Order Total (USD)"],
+    "Order Status__before": "Pending",
+    "Order Status__after":  "Shipped",
+    "Order Total (USD)__before": 50.0,
+    "Order Total (USD)__after":  1336.52,
 }
 ```
 
@@ -148,11 +148,11 @@ if ctx["status"] == "ok" and ctx["merge_expr"]:
 ### Inspect a specific changed column
 ```python
 changed = [r for r in ctx["samples"]["changed_rows"]
-           if "Generic Queue Status" in r.get("_changed_columns", [])]
+           if "Order Status" in r.get("_changed_columns", [])]
 for row in changed:
-    print(row["Application ID"],
-          row["Generic Queue Status__before"], "→",
-          row["Generic Queue Status__after"])
+    print(row["Order ID"],
+          row["Order Status__before"], "→",
+          row["Order Status__after"])
 ```
 
 ---

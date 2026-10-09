@@ -45,11 +45,11 @@ _classify_value_match = getattr(_mod, "_classify_value_match", None)
 
 @pytest.fixture
 def source_df():
-    """Source DataFrame with project data."""
+    """Source DataFrame with order data."""
     return pd.DataFrame({
-        "project_id": ["P1", "P2", "P3", "P4", "P5"],
+        "order_id": ["P1", "P2", "P3", "P4", "P5"],
         "name": ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
-        "capacity_mw": [100, 200, 300, 400, 500],
+        "order_total": [100, 200, 300, 400, 500],
     })
 
 
@@ -57,8 +57,8 @@ def source_df():
 def dim_df():
     """Dimension DataFrame with overlapping keys."""
     return pd.DataFrame({
-        "project_id": ["P1", "P2", "P3", "P6", "P7"],
-        "market": ["PJM", "ERCOT", "MISO", "SPP", "CAISO"],
+        "order_id": ["P1", "P2", "P3", "P6", "P7"],
+        "region": ["NORTH", "SOUTH", "EAST", "WEST", "CENTRAL"],
         "state": ["TX", "TX", "IL", "OK", "CA"],
     })
 
@@ -67,8 +67,8 @@ def dim_df():
 def no_overlap_df():
     """DataFrame with zero key overlap with source_df."""
     return pd.DataFrame({
-        "project_id": ["X1", "X2", "X3"],
-        "market": ["PJM", "ERCOT", "MISO"],
+        "order_id": ["X1", "X2", "X3"],
+        "region": ["NORTH", "SOUTH", "EAST"],
     })
 
 
@@ -76,18 +76,18 @@ def no_overlap_df():
 def empty_result():
     """Empty result DataFrame."""
     return pd.DataFrame({
-        "project_id": pd.Series([], dtype="object"),
+        "order_id": pd.Series([], dtype="object"),
         "name": pd.Series([], dtype="object"),
-        "capacity_mw": pd.Series([], dtype="float64"),
-        "market": pd.Series([], dtype="object"),
+        "order_total": pd.Series([], dtype="float64"),
+        "region": pd.Series([], dtype="object"),
     })
 
 
 @pytest.fixture
 def type_mismatch_df():
-    """DataFrame with integer project_id (vs string in source)."""
+    """DataFrame with integer order_id (vs string in source)."""
     return pd.DataFrame({
-        "project_id": [1, 2, 3],
+        "order_id": [1, 2, 3],
         "cost": [1000, 2000, 3000],
     })
 
@@ -96,8 +96,8 @@ def type_mismatch_df():
 def all_null_df():
     """DataFrame with an all-NULL key column."""
     return pd.DataFrame({
-        "project_id": [None, None, None],
-        "market": ["PJM", "ERCOT", "MISO"],
+        "order_id": [None, None, None],
+        "region": ["NORTH", "SOUTH", "EAST"],
     })
 
 
@@ -154,7 +154,7 @@ class TestRowCountFunnel:
 class TestKeyOverlap:
     def test_partial_overlap(self, source_df, dim_df):
         result = _key_overlap_pandas(
-            source_df, dim_df, ["project_id"], "source", "dim", 10
+            source_df, dim_df, ["order_id"], "source", "dim", 10
         )
         assert result["distinct_a"] == 5
         assert result["distinct_b"] == 5
@@ -164,7 +164,7 @@ class TestKeyOverlap:
 
     def test_zero_overlap(self, source_df, no_overlap_df):
         result = _key_overlap_pandas(
-            source_df, no_overlap_df, ["project_id"], "source", "no_overlap", 10
+            source_df, no_overlap_df, ["order_id"], "source", "no_overlap", 10
         )
         assert result["overlap_count"] == 0
         assert result["overlap_pct"] == 0.0
@@ -199,7 +199,7 @@ class TestFilterBoundary:
     def test_filter_kills_all(self, source_df):
         result = _filter_boundary_analysis(
             {"source": source_df},
-            "capacity_mw > 9000",
+            "order_total > 9000",
             10,
         )
         assert result["per_upstream"]["source"]["all_fail"] is True
@@ -208,7 +208,7 @@ class TestFilterBoundary:
     def test_filter_passes_some(self, source_df):
         result = _filter_boundary_analysis(
             {"source": source_df},
-            "capacity_mw > 200",
+            "order_total > 200",
             10,
         )
         assert result["per_upstream"]["source"]["all_fail"] is False
@@ -217,7 +217,7 @@ class TestFilterBoundary:
     def test_filter_passes_all(self, source_df):
         result = _filter_boundary_analysis(
             {"source": source_df},
-            "capacity_mw > 0",
+            "order_total > 0",
             10,
         )
         assert result["per_upstream"]["source"]["passing"] == 5
@@ -251,8 +251,8 @@ class TestAllNullColumns:
 
     def test_all_null_key(self, all_null_df):
         result = _all_null_columns({"src": all_null_df})
-        assert "project_id" in result["src"]
-        assert "market" not in result["src"]
+        assert "order_id" in result["src"]
+        assert "region" not in result["src"]
 
     def test_mixed_nulls(self):
         df = pd.DataFrame({
@@ -279,17 +279,17 @@ class TestTypeMismatch:
     def test_string_vs_int(self, source_df, type_mismatch_df):
         result = _type_mismatch_detection(
             {"source": source_df, "costs": type_mismatch_df},
-            ["project_id"],
+            ["order_id"],
         )
         assert len(result) == 1
-        assert result[0]["key_column"] == "project_id"
+        assert result[0]["key_column"] == "order_id"
         assert "object" in result[0]["types_by_source"]["source"]
         assert "int" in result[0]["types_by_source"]["costs"]
 
     def test_same_types_no_mismatch(self, source_df, dim_df):
         result = _type_mismatch_detection(
             {"source": source_df, "dim": dim_df},
-            ["project_id"],
+            ["order_id"],
         )
         assert len(result) == 0
 
@@ -308,9 +308,9 @@ class TestTypeMismatch:
         other = pd.DataFrame({"other_id": [1, 2], "val": ["a", "b"]})
         result = _type_mismatch_detection(
             {"source": source_df, "other": other},
-            ["project_id"],
+            ["order_id"],
         )
-        # other doesn't have project_id, so only source has it — no mismatch
+        # other doesn't have order_id, so only source has it — no mismatch
         assert len(result) == 0
 
 
@@ -399,7 +399,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df, "dim": dim_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         # Standard contract keys
         assert result["kind"] == "diagnose_empty"
@@ -416,7 +416,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df, "no_overlap": no_overlap_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         assert result["metrics"]["dropout_cause"] == "zero_key_overlap"
         assert "zero_key_overlap" in result["metrics"]["dropout_cause"]
@@ -427,7 +427,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df, "costs": type_mismatch_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         assert result["metrics"]["dropout_cause"] == "key_type_mismatch"
         assert "type_mismatches" in result["samples"]
@@ -436,8 +436,8 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df},
-            keys=["project_id"],
-            filter_expr="capacity_mw > 9000",
+            keys=["order_id"],
+            filter_expr="order_total > 9000",
         )
         assert result["metrics"]["dropout_cause"] == "filter_kills_all"
 
@@ -445,7 +445,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"src": all_null_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         assert result["metrics"]["dropout_cause"] == "key_columns_all_null"
 
@@ -453,7 +453,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df, "no_overlap": no_overlap_df},
-            keys=["project_id"],
+            keys=["order_id"],
             output_format="markdown",
         )
         assert isinstance(result, str)
@@ -466,8 +466,8 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             empty_result,
             {"source": source_df},
-            keys=["project_id"],
-            filter_expr="capacity_mw > 9000",
+            keys=["order_id"],
+            filter_expr="order_total > 9000",
         )
         assert result["kind"] == "diagnose_empty"
         assert result["metrics"]["result_count"] == 0
@@ -488,7 +488,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         # Key overlap only runs with 2+ upstreams
         assert "key_overlaps" not in result["samples"]
@@ -513,7 +513,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=empty_result,
             upstreams={"source": source_df, "no_overlap": no_overlap_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         assert len(result["suggested_next_actions"]) > 0
         # Suggestions should be strings
@@ -534,7 +534,7 @@ class TestDiagnoseEmptyContext:
         result = diagnose_empty_context(
             result_df=source_df,  # 5 rows, not empty
             upstreams={"dim": dim_df},
-            keys=["project_id"],
+            keys=["order_id"],
         )
         assert result["metrics"]["result_count"] == 5
         assert result["kind"] == "diagnose_empty"

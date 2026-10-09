@@ -26,7 +26,7 @@ from .models import ColumnProfile, ColumnRole, CompetingHypothesis, Inference, S
 # Word-boundary note: the outer (?:^|_) group already captures the separator
 # before each token.  Do NOT add a leading _ to tokens like "date", "time",
 # "at", "ts", "dt" — doing so would require a double-underscore prefix
-# (e.g. "__date") which never appears in real column names like "queue_date".
+# (e.g. "__date") which never appears in real column names like "order_date".
 _TIMESTAMP_NAME_RE = re.compile(
     r"(?:^|_)(?:created|updated|modified|deleted|loaded|inserted|processed|"
     r"published|expired|started|ended|occurred|recorded|timestamp|at|ts|dt|"
@@ -64,7 +64,7 @@ _FLAG_NAME_RE = re.compile(
 # Measure / metric columns
 _MEASURE_NAME_RE = re.compile(
     r"(?:^|_)(?:amount|total|sum|count|qty|quantity|price|cost|revenue|"
-    r"fee|rate|ratio|score|weight|capacity|mw|kwh|mwh|volume|"
+    r"fee|rate|ratio|score|weight|capacity|volume|"
     r"balance|budget|profit|margin|avg|average|pct|percent)(?:$|_)",
     re.IGNORECASE,
 )
@@ -93,7 +93,7 @@ _TEMPORAL_TYPES = frozenset({
 })
 
 # Minimum distinct_pct for a near-unique CODE column to qualify as NATURAL_KEY.
-# Covers business-assigned alphanumeric keys (e.g. "PJM-AG2-073") where snapshot
+# Covers business-assigned alphanumeric keys (e.g. "SKU-AG2-073") where snapshot
 # duplication slightly depresses distinct_pct below 1.0 without changing semantics.
 _NEAR_UNIQUE_NK_THRESHOLD = 0.90
 # Maximum null_pct tolerated for a near-unique CODE → NATURAL_KEY classification.
@@ -277,7 +277,7 @@ def _classify_winner(profile: ColumnProfile) -> Inference:
         return _build(ColumnRole.IDENTIFIER, 0.85, evidence, counter_signals, profile)
 
     # --- 8b. Near-unique natural key (CODE semantic, not strictly unique) ---
-    # Covers business-assigned alphanumeric codes (e.g. "PJM-AG2-073") that are
+    # Covers business-assigned alphanumeric codes (e.g. "SKU-AG2-073") that are
     # natural keys for their domain but have a small number of duplicates (e.g.
     # caused by snapshot duplication).  Uses behavioral signals only — no column
     # name matching, per the generalized-heuristics convention.

@@ -31,11 +31,11 @@ anchor, ROOT, MANIFEST = init()
 
 # Compare current version vs. 1 version ago (default)
 ctx = anchor("delta_diff",
-         "analytics_dev.data_engineering_reference.guide_utility",
-         keys=["utility_raw"])
+         "example_catalog.reference.store_directory",
+         keys=["store_code_raw"])
 ```
 
-Replace `analytics_dev.data_engineering_reference.guide_utility` with your table.
+Replace `example_catalog.reference.store_directory` with your table.
 
 ---
 
@@ -136,8 +136,8 @@ from tools.delta_diff_tool.delta_diff_impl import delta_diff_context
 
 # Requires an active SparkSession — runs on Databricks only
 ctx = delta_diff_context(
-    "analytics_dev.data_engineering_reference.guide_utility",
-    keys=["utility_raw"],
+    "example_catalog.reference.store_directory",
+    keys=["store_code_raw"],
     old_version=4,
     new_version=5,
 )
@@ -149,7 +149,7 @@ ctx["metrics"]["changed_count"]
 # 1
 
 ctx["findings"][0]
-# "1 rows changed across 1 column(s) (utility_translated)"
+# "1 rows changed across 1 column(s) (store_name)"
 ```
 
 > **Note:** This tool imports from `odibi_anchor._utils` and requires an active Spark session. Both `src/` and root paths are required.

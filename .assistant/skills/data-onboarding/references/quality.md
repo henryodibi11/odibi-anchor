@@ -144,7 +144,7 @@ anchor("validate", cleaned_df, rules=[
     {"type": "unique", "columns": ["primary_key"]},
     {"type": "accepted_values", "column": "status",
      "values": ["Active", "Inactive", "Pending"]},
-    {"type": "range", "column": "capacity_mw", "min": 0, "max": 10000},
+    {"type": "range", "column": "order_total", "min": 0, "max": 10000},
     {"type": "expression", "expr": "start_date <= end_date",
      "description": "start before end"},
 ])
@@ -165,8 +165,8 @@ profile_ctx = anchor("profile_table", cleaned_df, subject="source_name", output_
 rules = [
     {"column": "id", "rule": "not_null"},
     {"column": "id", "rule": "unique"},
-    {"column": "status", "rule": "accepted_values", "values": ["Active", "Withdrawn", "Pending"]},
-    {"column": "mw_capacity", "rule": "range", "min": 0, "max": 5000},
+    {"column": "status", "rule": "accepted_values", "values": ["Open", "Cancelled", "Pending"]},
+    {"column": "order_total", "rule": "range", "min": 0, "max": 5000},
 ]
 
 # Validate with rules
@@ -194,12 +194,12 @@ Before running MERGE INTO on the target table, validate the cleaned data is merg
 ```python
 # Validate merge keys: no nulls, no duplicates (the #1 MERGE failure)
 anchor("validate", cleaned_df, rules=[
-    {"column": "project_id", "rule": "not_null"},
-    {"column": "queue_date", "rule": "not_null"},
+    {"column": "order_id", "rule": "not_null"},
+    {"column": "line_number", "rule": "not_null"},
 ])
 
 # Check for duplicate merge keys
-anchor("duplicate", cleaned_df, ["project_id", "queue_date"])
+anchor("duplicate", cleaned_df, ["order_id", "line_number"])
 
 # Compare schema against target
 anchor("schema_diff", cleaned_df, spark.table("catalog.schema.target_table"))
@@ -211,7 +211,7 @@ This catches:
 - Schema/type mismatches (string→int will fail at write time)
 
 **If validation shows issues** → fix before merging:
-- Duplicates: `cleaned_df.dropDuplicates(["project_id", "queue_date"])`
+- Duplicates: `cleaned_df.dropDuplicates(["order_id", "line_number"])`
 - NULL keys: filter or investigate why they're null
 - Type mismatch: `.withColumn("col", F.col("col").cast("target_type"))`
 
@@ -288,7 +288,7 @@ anchor("profile_table", "catalog.schema.target")
 # → If quality issues detected: follow suggested_next_actions
 
 # For small files / partition issues, use Delta OPTIMIZE directly:
-# OPTIMIZE catalog.schema.target ZORDER BY (project_id);
+# OPTIMIZE catalog.schema.target ZORDER BY (order_id);
 # VACUUM catalog.schema.target RETAIN 168 HOURS;
 ```
 

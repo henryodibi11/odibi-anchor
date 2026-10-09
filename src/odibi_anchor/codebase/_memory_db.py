@@ -63,11 +63,7 @@ def _resolve_default_db_path() -> str:
 _DEFAULT_DB_PATH = _resolve_default_db_path()
 
 _PROJECT_ROUTING: dict[str, str] = {
-    "eaai-common-resources/eaai-utilities": "eaai-utilities",
-    "data-engineering/queue-automation": "queue-automation",
     "odibi_anchor": "odibi_anchor",
-
-    "document_profiler": "document_profiler",
 }
 
 VALID_TYPES = frozenset({
@@ -779,8 +775,9 @@ def resolve_project(root: str | Path) -> str:
         root: Absolute path to the project root.
 
     Returns:
-        Short project name (e.g., "example-project", "queue-automation").
-        Falls back to the last path component if no routing match.
+        Short project name. A root containing a routed fragment such as
+        "odibi_anchor" maps to that name; otherwise the last path component is
+        used (e.g., "/Workspace/Repos/team/order-analytics" -> "order-analytics").
     """
     root_str = str(root)
     for path_fragment, project_name in _PROJECT_ROUTING.items():

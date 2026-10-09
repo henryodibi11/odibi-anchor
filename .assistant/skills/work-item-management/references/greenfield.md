@@ -62,7 +62,7 @@ This is the critical checkpoint. Do NOT proceed past this step without real-worl
 |---|---|---|
 | Low (uniform format, predictable structure) | 3-5 | JSON API responses, CSV with fixed schema |
 | Medium (multiple variants, some edge cases) | 10-20 | Excel files from different teams, config files |
-| High (many producers, inconsistent formatting) | 30-50+ | PDFs from different utilities, scraped HTML, legacy exports |
+| High (many producers, inconsistent formatting) | 30-50+ | PDFs from different suppliers, scraped HTML, legacy exports |
 
 **Ask the user:** "How many distinct patterns do you expect in production inputs?"
 Their answer determines the minimum corpus size.
@@ -241,8 +241,8 @@ After completing this checklist, you should have:
 
 ```python
 known_facts = [
-    "Problem: Extract tables from utility PDFs as DataFrames for bronze layer",
-    "Test corpus: /test_pdfs/ — 50 real PDFs from Dominion, FPL, GTC utilities",
+    "Problem: Extract tables from supplier invoice PDFs as DataFrames for bronze layer",
+    "Test corpus: /test_pdfs/ — 50 real invoice PDFs from three suppliers",
     "Explored: 6 research notebooks, tested all 50 inputs",
     "Library: PyMuPDF — benchmarked against pdfplumber, camelot, tabula-py",
     "  Winner because: rotated page handling, bold flags, 3-10x speed, serverless OK",

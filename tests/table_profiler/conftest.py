@@ -28,8 +28,8 @@ def dirty_excel_like_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "project_code": ["PRJ-001", "PRJ-001 ", " PRJ-002", None, "PRJ-003"],
-            "capacity_text": ["100.5MW", "200 MW", "N/A", "150", "See Note"],
-            "status": ["Active", "ACTIVE", "active", "Withdrawn", "TBD"],
+            "weight_text": ["100.5kg", "200 kg", "N/A", "150", "See Note"],
+            "status": ["Active", "ACTIVE", "active", "Cancelled", "TBD"],
             "entered_on": ["2024-01-15", "01/16/2024", "1/17/24", None, "2024-01-19"],
         }
     )

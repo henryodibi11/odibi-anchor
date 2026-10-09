@@ -42,13 +42,13 @@ def test_local_windows_transport_records_explicit_yes_or_no(monkeypatch, dialog_
     _, _, windows = _modules()
     displayed = []
     monkeypatch.setattr(windows, "_message_box", lambda message, timeout: displayed.append((message, timeout)) or dialog_result)
-    transport = windows.LocalWindowsOwnerTransport("windows-account:Henry")
+    transport = windows.LocalWindowsOwnerTransport("windows-account:Alex")
 
     reference = transport.deliver(_request())
     replies = transport.replies(reference)
 
     assert replies[0].text == response
-    assert replies[0].user_id == "windows-account:Henry"
+    assert replies[0].user_id == "windows-account:Alex"
     assert "keep exact evidence" in displayed[0][0]
     assert "personally approve" in displayed[0][0]
     assert 0 < displayed[0][1] <= 60_000
@@ -57,7 +57,7 @@ def test_local_windows_transport_records_explicit_yes_or_no(monkeypatch, dialog_
 def test_local_windows_transport_timeout_grants_no_reply(monkeypatch):
     _, _, windows = _modules()
     monkeypatch.setattr(windows, "_message_box", lambda *_args: 32_000)
-    transport = windows.LocalWindowsOwnerTransport("windows-account:Henry")
+    transport = windows.LocalWindowsOwnerTransport("windows-account:Alex")
 
     reference = transport.deliver(_request())
 
@@ -66,7 +66,7 @@ def test_local_windows_transport_timeout_grants_no_reply(monkeypatch):
 
 def test_local_windows_transport_rejects_unbound_or_unknown_requests():
     human_input, _, windows = _modules()
-    transport = windows.LocalWindowsOwnerTransport("windows-account:Henry")
+    transport = windows.LocalWindowsOwnerTransport("windows-account:Alex")
     request = _request()
     unbound = human_input.HumanInputRequest(**{**request.__dict__, "message": "Approve this"})
 
@@ -94,12 +94,12 @@ def test_owner_provider_uses_local_windows_presence_without_slack(monkeypatch):
     for name in ("ANCHOR_SLACK_BOT_TOKEN", "ANCHOR_SLACK_CHANNEL_ID", "ANCHOR_SLACK_USER_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(owner, "_is_windows", lambda: True)
-    monkeypatch.setattr(windows, "_windows_username", lambda: "Henry")
+    monkeypatch.setattr(windows, "_windows_username", lambda: "Alex")
 
     provider = owner.select_owner_approval_provider()
 
     assert provider.transport.name == "local-windows-owner-presence"
-    assert provider.expected_owner_id == "windows-account:Henry"
+    assert provider.expected_owner_id == "windows-account:Alex"
     assert provider.assurance == "interactive_local_windows_account_presence"
 
 

@@ -17,7 +17,7 @@ anchor portfolio validate --config /absolute/private/path/anchor.toml --host dat
 
 For Databricks, configure `local_state_root` as a stable user-specific local-compute base and
 `durable_root` on approved durable storage. On shared/serverless compute, use a base such as
-`/tmp/odibi-anchor-hodibi`, not a generic path. The managed preparation path derives the physical
+`/tmp/odibi-anchor-<user>`, not a generic path. The managed preparation path derives the physical
 runtime root from the effective UID and a non-reversible OS-account fingerprint without mutating
 the portfolio. This prevents a recycled numeric UID from reopening stale local state. It
 atomically migrates an accessible pre-0.3.20 base once; if the base belongs to a prior compute

@@ -27,14 +27,14 @@
 
 ```python
 # Step 1: diff finds which columns changed
-diff_ctx = anchor("diff", previous_df, current_df, keys=["Application ID"])
+diff_ctx = anchor("diff", previous_df, current_df, keys=["Order ID"])
 
 # Step 2: coerce_check explains why
 changed_cols = [c["column"] for c in diff_ctx["metrics"]["changed_column_counts"]
                 if c["value_changed"] > 0]
 
 coerce_ctx = anchor("coerce_check", previous_df, current_df,
-                keys=["Application ID"], columns=changed_cols)
+                keys=["Order ID"], columns=changed_cols)
 ```
 
 ---
@@ -49,7 +49,7 @@ ctx = anchor("coerce_check", old_df, new_df, keys=["id"])
 ### Scope to specific columns (recommended after diff)
 ```python
 ctx = anchor("coerce_check", old_df, new_df, keys=["id"],
-         columns=["Generic Queue Status", "Project Status"])
+         columns=["Order Status", "Fulfillment Status"])
 ```
 
 ### Markdown report
@@ -90,7 +90,7 @@ ctx["metrics"]["category_totals"]        # {"case": 12, "whitespace": 3, "genuin
 ### Per-column results
 
 ```python
-col = ctx["column_results"]["Generic Queue Status"]
+col = ctx["column_results"]["Order Status"]
 col["dominant_category"]  # "case"
 col["confidence"]         # 0.86
 col["suggested_fix"]      # "UPPER()/LOWER() both sides before comparing"
@@ -101,9 +101,9 @@ col["categories"]         # {"case": 12, "whitespace+case": 2}
 ### Sample pairs
 
 ```python
-for sample in ctx["samples"]["Generic Queue Status"]:
+for sample in ctx["samples"]["Order Status"]:
     print(sample["old"], "→", sample["new"], f"({sample['category']})")
-# "Scoping" → "SCOPING" (case)
+# "Pending" → "PENDING" (case)
 # "  Active  " → "ACTIVE" (whitespace+case)
 ```
 
@@ -146,8 +146,8 @@ sys.path.append("/Workspace/Users/user@example.com/odibi_anchor/src")
 
 from odibi_anchor.tables.coercion_classifier import coercion_check_context
 
-old_df = pd.DataFrame({"id": [1, 2], "status": ["Active", "  SCOPING  "]})
-new_df = pd.DataFrame({"id": [1, 2], "status": ["ACTIVE", "Scoping"]})
+old_df = pd.DataFrame({"id": [1, 2], "status": ["Active", "  PENDING  "]})
+new_df = pd.DataFrame({"id": [1, 2], "status": ["ACTIVE", "Pending"]})
 
 ctx = coercion_check_context(old_df, new_df, keys=["id"])
 print(ctx["summary"])

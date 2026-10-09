@@ -578,7 +578,7 @@ class TestReadOnlyCatalogs:
         manifest = {
             "project": {"name": "test-project"},
             "constraints": {
-                "read_only_catalogs": ["eaai_prod", "system"],
+                "read_only_catalogs": ["example_prod", "system"],
                 "forbidden_patterns": [],
                 "sensitive_columns": []
             }
@@ -594,7 +594,7 @@ class TestReadOnlyCatalogs:
                 "--- a/src/mylib/utils.py\n"
                 "+++ b/src/mylib/utils.py\n"
                 "@@ -1,2 +1,3 @@\n"
-                "+    df.write.saveAsTable('eaai_prod.schema.table')\n"
+                "+    df.write.saveAsTable('example_prod.schema.table')\n"
                 " def process():\n"
                 "     pass\n"
             ),
@@ -620,7 +620,7 @@ class TestReadOnlyCatalogs:
                 "--- a/src/mylib/utils.py\n"
                 "+++ b/src/mylib/utils.py\n"
                 "@@ -1,2 +1,3 @@\n"
-                "+    df = spark.table('eaai_prod.schema.table')\n"
+                "+    df = spark.table('example_prod.schema.table')\n"
                 " def process():\n"
                 "     pass\n"
             ),
@@ -646,7 +646,7 @@ class TestReadOnlyCatalogs:
                 "--- a/src/mylib/utils.py\n"
                 "+++ b/src/mylib/utils.py\n"
                 "@@ -1,2 +1,3 @@\n"
-                "+    df.write.saveAsTable('analytics_dev.schema.table')\n"
+                "+    df.write.saveAsTable('example_dev.schema.table')\n"
                 " def process():\n"
                 "     pass\n"
             ),

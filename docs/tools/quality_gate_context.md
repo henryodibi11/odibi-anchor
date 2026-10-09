@@ -131,7 +131,7 @@ result = quality_gate_context(
     df,
     keys=["id"],
     target_schema=target_schema,
-    subject="silver.energy.assets",
+    subject="silver.retail.stores",
 )
 ```
 
@@ -151,11 +151,11 @@ result = quality_gate_context(
 ```python
 result = quality_gate_context(
     silver_df,
-    keys=["asset_id", "date"],
+    keys=["store_id", "date"],
     df_name="silver_df",
 )
 # fix_all_expr uses "silver_df" not "df":
-# silver_df = silver_df.drop_duplicates(subset=['asset_id', 'date'])
+# silver_df = silver_df.drop_duplicates(subset=['store_id', 'date'])
 ```
 
 ### Markdown Output

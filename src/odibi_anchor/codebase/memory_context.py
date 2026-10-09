@@ -681,7 +681,7 @@ def _tokenize_text(text: str) -> set[str]:
     Splits on dots, backticks, parens, and all non-word characters.
     Returns lowercase token set. E.g.:
         "`importlib.reload()`" → {"importlib", "reload"}
-        "queue-automation"     → {"queue", "automation"}
+        "order-analytics"      → {"order", "analytics"}
     """
     return set(_TOKEN_RE.findall(text.lower()))
 

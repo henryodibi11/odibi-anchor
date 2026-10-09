@@ -13,14 +13,14 @@ Example:
     >>> import pandas as pd
     >>> from odibi_anchor.tables import table_contract_summary
     >>> df = pd.DataFrame({
-    ...     "asset_id": ["A1", "A2"],
+    ...     "store_id": ["S1", "S2"],
     ...     "updated_at": pd.to_datetime(["2026-05-01", "2026-05-02"]),
-    ...     "capacity_mw": [100.5, 250.0],
+    ...     "order_total": [100.5, 250.0],
     ... })
     >>> ctx = table_contract_summary(
     ...     df,
-    ...     subject="demo.assets",
-    ...     candidate_key_columns=["asset_id"],
+    ...     subject="demo.stores",
+    ...     candidate_key_columns=["store_id"],
     ...     reference_time="2026-05-07T00:00:00Z",
     ... )
     >>> ctx["kind"]
@@ -108,7 +108,7 @@ def table_contract_summary(
             checks) from the full table and profiles column detail from a capped
             sample (``spark_sample_size``), producing the same output contract.
         subject: Human-readable label for the table or DataFrame, such as
-            ``"catalog.schema.table"`` or ``"asset_measurements_df"``.
+            ``"catalog.schema.table"`` or ``"store_sales_df"``.
         candidate_key_columns: Optional columns expected to define the business
             grain. When provided, the function checks null-key and duplicate-key
             risk.

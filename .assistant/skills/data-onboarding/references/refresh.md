@@ -74,9 +74,9 @@ The `dominant_category` tells you what kind of "change" it really is:
 
 **If mostly representation issues → fix upstream, not in the data.**
 
-### CRM Dogfooding Lesson
+### Customer-Export Dogfooding Lesson
 
-Reference case: CRM contact refresh showed 4,742 "changes." Breakdown:
+Reference case: a customer contact refresh showed 4,742 "changes." Breakdown:
 - **4,742 unicode** mismatches (zero-width spaces in names)
 - **664 null_to_value** (newly populated fields)
 - **3 whitespace** differences

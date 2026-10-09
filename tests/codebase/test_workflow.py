@@ -74,7 +74,7 @@ def qualification(state):
 
 
 def approval(state):
-    return {**binding(state), "actor_kind": "human", "owner": "owner:henry",
+    return {**binding(state), "actor_kind": "human", "owner": "owner:alex",
             "authority_ref": "authenticated:challenge", "operation": "merge",
             "destination": state["plan"]["destination"]}
 

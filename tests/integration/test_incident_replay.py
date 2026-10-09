@@ -47,7 +47,7 @@ def test_fresh_compute_restores_route_and_continuity(replay, databricks):
     assert first["durable_checkpoint"]["action"] == "created"
     assert first["local_state"]["selection"] == "identity_isolated"
     snapshot = _closed_task_snapshot(created["anchor"], replay)
-    assert snapshot["manifest_path"].startswith(f"{DEFAULT_VOLUME}/anchor/henry/snapshots/")
+    assert snapshot["manifest_path"].startswith(f"{DEFAULT_VOLUME}/anchor/alex/snapshots/")
 
     replay.new_compute()
     assert databricks.runtime_roots() == []
@@ -251,7 +251,7 @@ def test_database_publication_failure_is_restore_incomplete(replay, databricks):
 
 
 def test_host_guidance_and_bootstrap_succeed_under_workspace_latency(replay, databricks):
-    workspace_root = "/Users/henry@example.invalid/anchor-host"
+    workspace_root = "/Users/alex@example.invalid/anchor-host"
     databricks.workspace.add_directory(workspace_root)
     databricks.set_latency(0.002)
     setup_host = importlib.import_module("odibi_anchor.host_setup").setup_host

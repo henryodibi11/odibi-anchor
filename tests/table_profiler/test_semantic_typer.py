@@ -265,9 +265,9 @@ class TestSpreadsheetArtifacts:
 class TestStateCodeRequiresNameHint:
     """STATE_CODE must not fire for generic short-code columns without a state hint."""
 
-    def test_type_fuel_not_state_code(self):
-        values = ["NG", "CO"] * 100
-        result = infer_semantic_type(values, "Type__Fuel")
+    def test_type_size_not_state_code(self):
+        values = ["SM", "MD"] * 100
+        result = infer_semantic_type(values, "Type__Size")
 
         assert result.value != SemanticType.STATE_CODE
         assert result.value == SemanticType.ENUM
@@ -276,24 +276,24 @@ class TestStateCodeRequiresNameHint:
 class TestCountryCodeRequiresNameHint:
     """B2 corpus fix: country_code must not fire without a geographic name hint."""
 
-    def test_market_column_not_country_code(self):
-        """Energy market codes (MISO, SPP, PJM) must not be classified as country_code."""
-        result = infer_semantic_type(["MISO", "SPP", "PJM", "ERCOT"] * 25, "market")
+    def test_channel_column_not_country_code(self):
+        """Sales channel codes (WEB, POS, EAST) must not be classified as country_code."""
+        result = infer_semantic_type(["EAST", "WEB", "POS", "NORTH"] * 25, "channel")
         assert result.value != SemanticType.COUNTRY_CODE, (
-            f"'market' col with ISO-like codes should not be country_code, got {result.value}"
+            f"'channel' col with ISO-like codes should not be country_code, got {result.value}"
         )
 
-    def test_opco_column_not_country_code(self):
-        """OPCO codes (DEC, DEP, DUK) must not be classified as country_code."""
-        result = infer_semantic_type(["DEC", "DEP", "DUK", "DEC"] * 25, "OPCO")
+    def test_warehouse_column_not_country_code(self):
+        """Warehouse codes (ATL, DFW, SEA) must not be classified as country_code."""
+        result = infer_semantic_type(["ATL", "DFW", "SEA", "ATL"] * 25, "WAREHOUSE")
         assert result.value != SemanticType.COUNTRY_CODE, (
-            f"'OPCO' column should not be country_code, got {result.value}"
+            f"'WAREHOUSE' column should not be country_code, got {result.value}"
         )
 
     def test_short_name_col_not_country_code(self):
-        """Utility short names (AEP, DTE, ATC) must not be classified as country_code."""
+        """Carrier short names (UPS, DHL, TNT) must not be classified as country_code."""
         result = infer_semantic_type(
-            ["AEP", "DTE", "ATC", "PPL", "AEP"] * 20, "Short Name"
+            ["UPS", "DHL", "TNT", "FDX", "UPS"] * 20, "Short Name"
         )
         assert result.value != SemanticType.COUNTRY_CODE, (
             f"'Short Name' col should not be country_code, got {result.value}"

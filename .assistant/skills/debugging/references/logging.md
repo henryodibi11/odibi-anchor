@@ -97,7 +97,7 @@ For scheduled pipelines that need centralized logging + error capture:
 
 ```python
 # ── Config ──────────────────────────────────────────────
-PIPELINE = "silver_queue_positions"
+PIPELINE = "silver_order_lines"
 start_time = time.time()
 
 try:
@@ -156,15 +156,15 @@ Use `anchor("log")` to record pipeline milestones during investigation sessions:
 
 ```python
 # Step 1: Log milestones during debugging/investigation
-result = anchor("log", "pipeline", "bronze_queue_pjm loaded 6454 rows")
+result = anchor("log", "pipeline", "bronze_orders_web loaded 6454 rows")
 result = anchor("log", "decision", "Switching to LEFT JOIN to preserve orphan rows")
-result = anchor("log", "quality", "12% nulls in mw_capacity — confirmed normal for early-stage projects")
+result = anchor("log", "quality", "12% nulls in gift_message — confirmed normal for orders without gift wrap")
 
 # Step 2: Review session log
 result = anchor("session_log")
 
 # Step 3: After adding logging code to a notebook
-result = anchor("touched", "notebooks/bronze_queue_pjm.py")
+result = anchor("touched", "notebooks/bronze_orders_web.py")
 result = anchor("preflight")
 result = anchor("gate")
 ```

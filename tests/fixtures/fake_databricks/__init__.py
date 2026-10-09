@@ -29,7 +29,7 @@ from tests.fixtures.fake_databricks import apis, crash
 
 DEFAULT_RUNTIME_VERSION = "15.4"
 DEFAULT_VOLUME = "/Volumes/main/anchor/state"
-DEFAULT_USER = "henry@example.invalid"
+DEFAULT_USER = "alex@example.invalid"
 
 
 @dataclass(frozen=True)
@@ -183,7 +183,7 @@ def write_databricks_portfolio(
     projects: dict[str, str],
     host_id: str = "databricks",
     durable_root: str | None = DEFAULT_VOLUME + "/anchor",
-    authority_id: str = "henry",
+    authority_id: str = "alex",
     retention: tuple[int, int] | None = None,
     expected_sha256: str | None = None,
 ) -> dict[str, Any]:

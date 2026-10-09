@@ -63,7 +63,7 @@ def test_compute_column_stats_handles_dirty_strings_and_nulls(dirty_excel_like_d
     assert status.is_unique is True
     assert status.min_length == 3
     assert status.max_length == 9
-    assert any(value in status.sample_values for value in ["Active", "Withdrawn", "TBD"])
+    assert any(value in status.sample_values for value in ["Active", "Cancelled", "TBD"])
 
     entered_on = by_name["entered_on"]
     assert entered_on.null_count == 1
@@ -90,30 +90,30 @@ def test_column_profiles_as_dicts_returns_json_friendly_shapes(clean_fact_df):
 
 
 def test_compute_column_stats_alphanumeric_string_no_numeric_stats():
-    """Regression: alphanumeric strings like '23INR0287' must not crash stats.
+    """Regression: alphanumeric strings like '23ORD0287' must not crash stats.
 
     In the Spark path, F.mean/F.stddev_samp/F.percentile_approx attempted an
     implicit CAST of string columns to DOUBLE, raising CAST_INVALID_INPUT for
-    values like '23INR0287'.  The pandas path uses pd.to_numeric(errors='coerce')
+    values like '23ORD0287'.  The pandas path uses pd.to_numeric(errors='coerce')
     which is already safe — this test documents the expected contract:
     string-typed columns must have mean/std/median=None regardless of content.
     """
     import pandas as pd
 
     df = pd.DataFrame({
-        "inr": ["23INR0287", "24INR0001", "25INR9999", "23INR0100"],
-        "mw": [10.0, 20.0, 30.0, 40.0],
+        "order_ref": ["23ORD0287", "24ORD0001", "25ORD9999", "23ORD0100"],
+        "qty": [10.0, 20.0, 30.0, 40.0],
     })
     profiles = compute_column_stats(df)
     by_name = {p.name: p for p in profiles}
 
-    inr = by_name["inr"]
-    assert inr.mean_value is None, "string col must not have mean_value"
-    assert inr.std_value is None, "string col must not have std_value"
-    assert inr.median_value is None, "string col must not have median_value"
-    assert inr.min_length is not None, "string col must have min_length"
-    assert inr.max_length is not None, "string col must have max_length"
+    order_ref = by_name["order_ref"]
+    assert order_ref.mean_value is None, "string col must not have mean_value"
+    assert order_ref.std_value is None, "string col must not have std_value"
+    assert order_ref.median_value is None, "string col must not have median_value"
+    assert order_ref.min_length is not None, "string col must have min_length"
+    assert order_ref.max_length is not None, "string col must have max_length"
 
-    mw = by_name["mw"]
-    assert mw.mean_value == 25.0, "numeric col must have mean_value"
-    assert mw.min_length is None, "numeric col must not have min_length"
+    qty = by_name["qty"]
+    assert qty.mean_value == 25.0, "numeric col must have mean_value"
+    assert qty.min_length is None, "numeric col must not have min_length"

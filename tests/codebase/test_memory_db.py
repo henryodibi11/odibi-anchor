@@ -48,7 +48,7 @@ def populated_db(db_path):
         {"project": "odibi", "type": "pattern", "content": "ReaderProvider.read_table() returns DataFrame with ingestion metadata columns", "tags": ["odibi", "io"]},
         {"project": "all", "type": "gotcha", "content": "Always use TRY_CAST instead of CAST on Excel-sourced columns", "tags": ["sql", "excel"]},
         {"project": "all", "type": "failure_pattern", "content": "ImportError on odibi.transformers — broken __init__.py chain, use _load() helper", "tags": ["import", "test"]},
-        {"project": "queue-automation", "type": "decision", "content": "Pipeline uses 5-cell structure: Config Read Transform Quality Persist", "tags": ["pipeline", "convention"]},
+        {"project": "order-analytics", "type": "decision", "content": "Pipeline uses 5-cell structure: Config Read Transform Quality Persist", "tags": ["pipeline", "convention"]},
         {"project": "odibi_anchor", "type": "convention", "content": "All anchor() tools default to markdown output format", "tags": ["anchor", "output"]},
     ]
     for e in entries:
@@ -155,22 +155,20 @@ class TestResolveProject:
     """Test project root to name mapping."""
 
     def test_odibi(self):
-        assert resolve_project("/Workspace/Users/user@example.com/data-engineering/odibi") == "odibi"
-
-    def test_queue_automation(self):
-        assert resolve_project("/Workspace/Users/user@example.com/data-engineering/queue-automation") == "queue-automation"
+        assert resolve_project("/Workspace/Users/user@example.com/projects/odibi") == "odibi"
 
     def test_odibi_anchor(self):
         assert resolve_project("/Workspace/Users/user@example.com/odibi_anchor") == "odibi_anchor"
 
-    def test_eaai_utilities(self):
-        assert resolve_project("/Workspace/Repos/eaai-common-resources/eaai-utilities") == "eaai-utilities"
+    def test_routed_fragment_matches_inside_deeper_paths_and_others_use_dirname(self):
+        assert resolve_project("/Workspace/Repos/team/odibi_anchor/src") == "odibi_anchor"
+        assert resolve_project("/Workspace/Repos/team/order-analytics/src") == "src"
 
     def test_unknown_fallback_to_dirname(self):
         assert resolve_project("/some/path/my-cool-project") == "my-cool-project"
 
     def test_path_object(self):
-                assert resolve_project(Path("/Workspace/Users/user@example.com/data-engineering/odibi")) == "odibi"
+                assert resolve_project(Path("/Workspace/Users/user@example.com/projects/odibi")) == "odibi"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +255,7 @@ class TestInsert:
             source="code review",
             confidence=0.9,
             status="confirmed",
-            evidence={"reviewed_by": "hodibi", "date": "2025-01-01"},
+            evidence={"reviewed_by": "reviewer", "date": "2025-01-01"},
         )
         assert result["action"] == "inserted"
 
@@ -271,7 +269,7 @@ class TestInsert:
         assert entry["source"] == "code review"
         assert entry["confidence"] == 0.5
         assert entry["status"] == "candidate"
-        assert entry["evidence"] == {"reviewed_by": "hodibi", "date": "2025-01-01"}
+        assert entry["evidence"] == {"reviewed_by": "reviewer", "date": "2025-01-01"}
 
     @pytest.mark.parametrize("requested_status", ["active", "confirmed"])
     def test_insert_cannot_assign_lifecycle_authority(self, db_path, requested_status):
@@ -392,7 +390,7 @@ class TestQueryProjectFiltering:
     def test_project_excludes_other_projects(self, populated_db):
         results = query_memories(populated_db, project="odibi")
         projects = {r["project"] for r in results}
-        assert "queue-automation" not in projects
+        assert "order-analytics" not in projects
         assert "odibi_anchor" not in projects
 
     def test_no_project_returns_all(self, populated_db):
@@ -402,8 +400,8 @@ class TestQueryProjectFiltering:
         assert len(projects) >= 3
 
     def test_cross_project_with_fts(self, populated_db):
-        # Search from queue-automation should still find 'all' entries
-        results = query_memories(populated_db, project="queue-automation", query="TRY_CAST")
+        # Search from order-analytics should still find 'all' entries
+        results = query_memories(populated_db, project="order-analytics", query="TRY_CAST")
         assert len(results) >= 1
         assert results[0]["project"] == "all"
 
@@ -487,7 +485,7 @@ class TestLifecycle:
         r = insert_memory(db_path, project="all", type="gotcha",
                           content="Test entry", status="candidate")
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "Henry", "decision_source": "agent supplied", "evidence": "claimed approval",
+            "actor_ref": "Alex", "decision_source": "agent supplied", "evidence": "claimed approval",
         })
         assert c["action"] == "confirmation_blocked"
         assert c["status"] == "candidate" and c["confirmation_count"] == 0
@@ -500,7 +498,7 @@ class TestLifecycle:
     def test_unverified_human_or_receipt_fields_are_blocked(self, db_path):
         r = insert_memory(db_path, project="all", type="gotcha", content="Test entry")
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "henry", "decision_source": "review", "evidence": "reviewed exact content",
+            "actor_ref": "alex", "decision_source": "review", "evidence": "reviewed exact content",
         }, actor_kind="human", approval_receipt={"id": "caller-asserted"})
         assert c["action"] == "confirmation_blocked"
         assert c["recurrence_promotion"]["status"] == "unavailable"
@@ -509,7 +507,7 @@ class TestLifecycle:
         r = insert_memory(db_path, project="all", type="gotcha",
                           content="Test", confidence=0.95)
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "henry", "decision_source": "review", "evidence": "reviewed exact content",
+            "actor_ref": "alex", "decision_source": "review", "evidence": "reviewed exact content",
         })
         assert c["confidence"] == 0.5
 

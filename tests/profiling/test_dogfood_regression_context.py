@@ -30,7 +30,7 @@ def sample_output():
     """A minimal valid tool output."""
     return {
         "kind": "exploration_context",
-        "subject": "silver.queue_positions",
+        "subject": "silver.order_snapshots",
         "summary": "Explored table with 5000 rows.",
         "metrics": {
             "row_count": 5000,
@@ -71,7 +71,7 @@ class TestOutputContract:
     def test_subject_includes_tool_kind(self, sample_output, tmp_path):
         ctx = dogfood_regression_context(sample_output, root=str(tmp_path))
         assert "exploration_context" in ctx["subject"]
-        assert "silver.queue_positions" in ctx["subject"]
+        assert "silver.order_snapshots" in ctx["subject"]
 
     def test_has_diffs_field(self, sample_output, tmp_path):
         ctx = dogfood_regression_context(sample_output, root=str(tmp_path))
@@ -271,10 +271,10 @@ class TestHelperFunctions:
         assert _slugify("hello_world") == "hello_world"
 
     def test_slugify_with_special_chars(self):
-        result = _slugify("exploration_context::silver.queue_positions")
+        result = _slugify("exploration_context::silver.order_snapshots")
         assert "." not in result
         assert ":" not in result
-        assert result == "exploration_context_silver_queue_positions"
+        assert result == "exploration_context_silver_order_snapshots"
 
     def test_slugify_removes_double_underscores(self):
         result = _slugify("a__b___c")

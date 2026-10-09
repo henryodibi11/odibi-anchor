@@ -165,7 +165,7 @@ result["checkpoints_evicted"]  # steps that were evicted by max_checkpoints
 
 ### Full quality chain
 ```python
-profile_ctx = anchor("profile_table", df, subject="queue_bronze")
+profile_ctx = anchor("profile_table", df, subject="orders_bronze")
 plan = anchor("transform", profile_ctx)
 
 # Review plan before applying
@@ -208,7 +208,7 @@ result = anchor("apply_transform", spark_df, plan,
 ```python
 result = anchor("apply_transform", df, plan)
 diff_ctx = anchor("diff", result["df_before"], result["df"],
-              keys=["Application ID"])
+              keys=["Order ID"])
 print(diff_ctx["summary"])  # "0 added, 0 removed, 12 changed, 32 unchanged"
 ```
 
