@@ -41,10 +41,11 @@ class ComputeIdentity:
 class FakeWorkspaceClient:
     """``databricks.sdk.WorkspaceClient`` bound to one fake environment."""
 
-    def __init__(self, environment: FakeDatabricks, *_args: Any, **_kwargs: Any) -> None:
+    def __init__(self, environment: FakeDatabricks, *, config: apis.Config | None = None) -> None:
         self.workspace = environment.workspace
         self.files = environment.files
-        self.config = types.SimpleNamespace(host="https://fake.cloud.databricks.invalid")
+        self.config = config or apis.Config()
+        environment.clients.append(self)
 
 
 class FakeDatabricks:
@@ -63,6 +64,7 @@ class FakeDatabricks:
         self.root = root
         self.runtime_version = runtime_version
         self.control = apis.CallControl()
+        self.clients: list[FakeWorkspaceClient] = []
         self.workspace = apis.FakeWorkspaceAPI(self.control)
         self.files = apis.FakeFilesAPI(self.control, root / "volumes")
         self.workspace.add_directory(f"/Users/{DEFAULT_USER}")
@@ -92,14 +94,16 @@ class FakeDatabricks:
             ObjectType=apis.ObjectType, ObjectInfo=apis.ObjectInfo,
         )
         service = module("databricks.sdk.service", __path__=[], workspace=workspace_types)
+        config = module("databricks.sdk.config", Config=apis.Config)
         sdk = module(
-            "databricks.sdk", __path__=[], errors=errors, service=service,
-            WorkspaceClient=lambda *args, **kwargs: FakeWorkspaceClient(self, *args, **kwargs),
+            "databricks.sdk", __path__=[], errors=errors, service=service, config=config,
+            WorkspaceClient=lambda **kwargs: FakeWorkspaceClient(self, **kwargs),
         )
         package = module("databricks", __path__=[], sdk=sdk)
         for name, module_object in (
             ("databricks", package), ("databricks.sdk", sdk), ("databricks.sdk.errors", errors),
-            ("databricks.sdk.service", service), ("databricks.sdk.service.workspace", workspace_types),
+            ("databricks.sdk.config", config), ("databricks.sdk.service", service),
+            ("databricks.sdk.service.workspace", workspace_types),
         ):
             monkeypatch.setitem(sys.modules, name, module_object)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", self.runtime_version)

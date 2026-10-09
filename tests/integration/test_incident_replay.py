@@ -267,11 +267,13 @@ def test_host_guidance_and_bootstrap_succeed_under_workspace_latency(replay, dat
     assert repeated["status"] == "unchanged"
     assert f"{workspace_root}/.odibi-anchor-host-guidance.json" in databricks.workspace.files
     assert f"{workspace_root}/agent_bootstrap.py" in databricks.workspace.files
+    assert databricks.clients[0].config.settings == {
+        "http_timeout_seconds": 30, "retry_timeout_seconds": 60,
+    }
     assert created["startup_packet"]["status"] == "ready"
     assert created["startup_packet"]["durable_checkpoint"]["action"] == "created"
 
 
-@pytest.mark.xfail(strict=True, reason="WS-D pending: startup_packet timings")
 def test_startup_packet_reports_phase_timings(replay, databricks):
     databricks.set_latency(0.002)
     replay.create_project("alpha")
@@ -280,11 +282,35 @@ def test_startup_packet_reports_phase_timings(replay, databricks):
     packet = replay.bootstrap("alpha")["startup_packet"]
 
     timings = packet["timings"]
-    assert isinstance(timings, dict) and timings
-    assert all(
-        isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
-        for value in timings.values()
-    )
+    assert (timings["schema"], timings["unit"]) == ("odibi-anchor-bootstrap-timings-v1", "ms")
+    phases = {entry["phase"]: entry for entry in timings["phases"]}
+    assert {"host_guidance", "local_state_identity", "runtime_preparation", "init"} <= set(phases)
+    assert all(entry["outcome"] == "ok" and entry["elapsed_ms"] >= 0 for entry in phases.values())
+    restore = [item for item in phases["runtime_preparation"].get("sub_phases", [])
+               if item["phase"] == "restore"]
+    assert [item["outcome"] for item in restore] == ["ok"]
+    assert timings["total_elapsed_ms"] >= sum(entry["elapsed_ms"] for entry in phases.values())
+
+
+def test_recovery_codes_survive_bootstrap_phase_timing(replay):
+    created = replay.create_project("alpha")
+    runtime_root = Path(created["startup_packet"]["local_state"]["runtime_root"])
+    replay.new_process()
+    displaced = runtime_root.with_name(runtime_root.name + ".displaced")
+    runtime_root.rename(displaced)
+    runtime_root.symlink_to(displaced, target_is_directory=True)
+
+    with pytest.raises(RuntimeError) as caught:
+        replay.bootstrap("alpha")
+
+    code, context = _recovery(caught.value)
+    assert code == "databricks_local_state_identity_collision"
+    assert (context["runtime_root"], context["runtime_root_status"]) == (str(runtime_root), "symlink")
+    timings = getattr(caught.value, "bootstrap_timings", None)
+    assert timings is not None, "failed bootstrap must still report its phase timings"
+    phases = {entry["phase"]: entry for entry in timings["phases"]}
+    assert phases["local_state_identity"]["outcome"] == "raised"
+    assert "runtime_preparation" not in phases
 
 
 # ── #28 path arguments through the MCP gateway ───────────────────────────────
@@ -335,7 +361,6 @@ def mcp_gateway(tmp_path, monkeypatch):
     server._table_cache.clear()
 
 
-@pytest.mark.xfail(strict=True, reason="#28 WS-E pending: MCP path arguments preserved")
 @pytest.mark.parametrize("pandas_available", [False, True], ids=["pandas_absent", "pandas_present"])
 def test_mcp_touched_preserves_json_path(mcp_gateway, workflow, monkeypatch, pandas_available):
     call, target = mcp_gateway

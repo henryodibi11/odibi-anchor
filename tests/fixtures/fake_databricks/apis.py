@@ -66,6 +66,14 @@ class ObjectType(enum.Enum):
     REPO = "REPO"
 
 
+class Config:
+    """``databricks.sdk.config.Config``: keeps the keyword settings it was given."""
+
+    def __init__(self, **settings: Any) -> None:
+        self.host = settings.pop("host", "https://fake.cloud.databricks.invalid")
+        self.settings = settings
+
+
 @dataclass(frozen=True)
 class ObjectInfo:
     path: str
