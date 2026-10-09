@@ -162,7 +162,6 @@ def test_portfolio_target_move_on_fresh_compute_is_classified(replay):
 # ── #24 competing writer during restore ──────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="#24 WS-C pending: restore_destination_conflict")
 def test_competing_writer_destination_survives_restore(replay, databricks):
     created = replay.create_project("alpha")
     _closed_task_snapshot(created["anchor"], replay)
@@ -192,7 +191,6 @@ def test_competing_writer_destination_survives_restore(replay, databricks):
 # ── restore qualification ────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="WS-C pending: durable_root_unavailable")
 def test_wrong_durable_root_is_unavailable_not_first_use(replay, databricks):
     target = replay.target("alpha")
     created = replay.create_project("alpha", target)
@@ -211,7 +209,6 @@ def test_wrong_durable_root_is_unavailable_not_first_use(replay, databricks):
     assert not any((root / ".agent_memory.db").exists() for root in databricks.runtime_roots())
 
 
-@pytest.mark.xfail(strict=True, reason="WS-C pending: restore classification no_lineage")
 def test_first_use_restore_is_classified_no_lineage(replay):
     replay.write_portfolio({"alpha": str(replay.target("alpha"))})
 
@@ -221,7 +218,6 @@ def test_first_use_restore_is_classified_no_lineage(replay):
     assert result["preparation"]["restore"]["classification"] == "no_lineage"
 
 
-@pytest.mark.xfail(strict=True, reason="WS-C pending: restore_incomplete with resume and abandon")
 def test_database_publication_failure_is_restore_incomplete(replay, databricks):
     created = replay.create_project("alpha")
     _closed_task_snapshot(created["anchor"], replay)
@@ -233,11 +229,15 @@ def test_database_publication_failure_is_restore_incomplete(replay, databricks):
     def publication_failure(point):
         return OSError(errno.EIO, "injected database publication failure", point.path)
 
+    # The failing restore already reports the owned partial state as restore_incomplete,
+    # chained from the injected OSError, instead of surfacing the raw OSError.
     with CrashInjector(
         scope=[databricks.local_root], crash_if=database_publication, error=publication_failure,
-    ) as injector, pytest.raises(OSError):
+    ) as injector, pytest.raises(RuntimeError) as failed:
         replay.bootstrap("alpha")
     assert injector.crashed is not None, "restore never reached database publication"
+    assert _recovery(failed.value)[0] == "restore_incomplete"
+    assert isinstance(failed.value.__cause__, OSError)
 
     replay.new_process()
     with pytest.raises(Exception) as caught:

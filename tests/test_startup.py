@@ -3,6 +3,7 @@ import io
 import json
 import os
 import runpy
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -83,7 +84,8 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
             "configured_root_status": "not_applicable",
             "migration": "not_applicable",
         },
-        "target_root": str(target), "restore": {"action": "not_applicable"},
+        "target_root": str(target),
+        "restore": {"action": "not_applicable", "classification": "local_present"},
     }
     observed = {}
     monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda root, adapter: {
@@ -125,7 +127,8 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
         "binding_source": "explicit",
         "guidance": {"status": "unchanged", "verified_files": 92, "verified_skills": 18},
         "local_state": prepared["local_state"],
-        "restore": {"action": "not_applicable"}, "project_created": False,
+        "restore": {"action": "not_applicable", "classification": "local_present"},
+        "project_created": False,
         "portfolio_change": None, "durable_checkpoint": None,
         "managed_artifact_actions": result["orientation"]["managed_artifact_actions"],
         "memory_scope_semantics": {
@@ -524,6 +527,7 @@ def test_prepare_portfolio_runtime_registers_exact_route_without_mutating_enviro
     assert result["registration"]["status"] == "created"
     assert result["environment"]["ANCHOR_PROJECT_ID"] == "alpha"
     assert result["restore"]["status"] == "not_applicable"
+    assert result["restore"]["classification"] == "not_configured"
     assert dict(os.environ) == before
     again = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
     assert again["registration"]["status"] == "existing"
@@ -569,6 +573,7 @@ def test_prepare_portfolio_runtime_restores_v2_database_and_managed_projects(tmp
     result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
 
     assert result["restore"]["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert result["restore"]["classification"] == "restored"
     assert result["restore"]["artifacts"]["status"] == "restored"
     assert result["registration"]["status"] == "existing"
     assert (projects / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
@@ -889,8 +894,9 @@ def test_prepare_portfolio_runtime_stops_when_durable_storage_is_unavailable(
         },
     )
 
-    with pytest.raises(FileNotFoundError, match="durable_root is unavailable"):
+    with pytest.raises(FileNotFoundError, match="durable_root is unavailable") as caught:
         prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert cast(Any, caught.value).error_code == "durable_root_unavailable"
     assert not state.exists()
 
 
@@ -963,11 +969,16 @@ def test_prepare_databricks_runtime_and_launch_use_sdk_without_volume_fuse(
     assert all(arguments["databricks"] is True for _, arguments in calls)
 
 
-@pytest.mark.parametrize("error", [FileNotFoundError("absent"), PermissionError("denied")])
-def test_prepare_databricks_runtime_only_treats_missing_snapshot_root_as_clean_start(
+@pytest.mark.parametrize(
+    "error", ["first_use", FileNotFoundError("absent"), PermissionError("denied")]
+)
+def test_prepare_databricks_runtime_only_treats_confirmed_first_use_as_clean_start(
     tmp_path, monkeypatch, error
 ):
     from odibi_anchor import durability
+
+    if error == "first_use":
+        error = durability.DurableSnapshotUnavailable("no valid durable snapshots")
 
     config = tmp_path / "anchor.toml"
     target = tmp_path / "target"
@@ -991,18 +1002,19 @@ def test_prepare_databricks_runtime_only_treats_missing_snapshot_root_as_clean_s
         durability, "restore_latest", lambda **_kwargs: (_ for _ in ()).throw(error)
     )
 
-    if isinstance(error, PermissionError):
-        with pytest.raises(PermissionError, match="denied"):
+    if not isinstance(error, durability.DurableSnapshotUnavailable):
+        with pytest.raises(type(error), match=str(error)):
             prepare_portfolio_runtime(
                 config_path=config, host_id="serverless", project_id="alpha"
             )
-        assert not (state / ".agent_memory.db").exists()
+        assert not list(tmp_path.glob("state*/.agent_memory.db"))
     else:
         result = prepare_portfolio_runtime(
             config_path=config, host_id="serverless", project_id="alpha"
         )
         assert result["restore"] == {
-            "status": "not_applicable", "reason": "no durable snapshot exists"
+            "status": "not_applicable", "reason": "no durable snapshot exists",
+            "classification": "no_lineage",
         }
         assert result["authority"]["status"] == "initialized"
 
@@ -1049,6 +1061,7 @@ def test_prepare_databricks_runtime_skips_remote_snapshot_io_when_local_state_is
     runtime_state = Path(result["environment"]["ANCHOR_HOME"])
     assert result["restore"] == {
         "status": "not_applicable", "reason": "local database already exists",
+        "classification": "local_present",
     }
     assert result["local_state"]["migration"] == "moved_configured_root"
     assert runtime_state.name.startswith(f"{state.name}.identity-{os.geteuid()}-")
@@ -1914,3 +1927,145 @@ def test_bootstrap_benchmark_reports_each_fresh_process_run(tmp_path):
     assert report["runs"][0]["packet"]["project_id"] == "alpha"
     assert report["phase_summary"]["host_guidance"]["count"] == 2
     assert report["phase_summary"]["host_guidance.read"]["median_ms"] == 1.5
+
+
+def _local_durable_portfolio(tmp_path):
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    durable = tmp_path / "durable"
+    target.mkdir()
+    durable.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "work", "trust_domain": "work"},
+        "hosts": {"local": {
+            "adapter": "amp", "local_state_root": str(state), "durable_root": str(durable),
+        }},
+        "projects": {"alpha": {"targets": {"local": str(target)}}},
+        "personas": {},
+    })
+    return config, target, state, durable
+
+
+def _published_lineage(state, target, durable):
+    from odibi_anchor import durability
+
+    register_project(anchor_home=state, project_id="alpha", project_root=target)
+    database = state / ".agent_memory.db"
+    projects = state / "workspace" / "projects"
+    (projects / "alpha" / "problems" / "P-1.md").write_text("# Recovered\n")
+    durability.ensure_database_authority(
+        database, authority_id="work", trust_domain="work", initialize=True
+    )
+    snapshot = durability.snapshot_state(
+        source_db=database, source_artifacts=projects, durable_root=durable, authority_id="work",
+    )
+    shutil.rmtree(state)
+    return snapshot
+
+
+def test_prepare_portfolio_runtime_first_use_and_missing_lineage_are_distinguished(tmp_path):
+    config, target, state, durable = _local_durable_portfolio(tmp_path)
+
+    first = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert first["restore"]["classification"] == "no_lineage"
+    assert first["authority"]["status"] == "initialized"
+
+    shutil.rmtree(state)
+    snapshot = _published_lineage(state, target, durable)
+    for manifest in (durable / "work" / "snapshots").glob("*.manifest.json"):
+        manifest.unlink()
+    assert snapshot["authority_marker"] == "created"
+
+    with pytest.raises(RuntimeError, match="durable lineage is missing") as caught:
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert cast(Any, caught.value).error_code == "durable_lineage_missing"
+    assert not (state / ".agent_memory.db").exists()
+
+
+def test_prepare_databricks_runtime_fails_closed_when_volume_root_is_not_found(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor import durability
+
+    class NotFound(Exception):
+        pass
+
+    class MissingVolume:
+        def list_directory_contents(self, path):
+            raise NotFound(path)
+
+        def get_directory_metadata(self, path):
+            raise NotFound(path)
+
+    config = tmp_path / "anchor.toml"
+    target = tmp_path / "target"
+    state = tmp_path / "state"
+    target.mkdir()
+    write_portfolio(config, {
+        "schema_version": 1,
+        "authority": {"id": "work", "trust_domain": "work"},
+        "hosts": {"serverless": {
+            "adapter": "databricks", "local_state_root": str(state),
+            "durable_root": "/Volumes/catalog/schema/missing",
+        }},
+        "projects": {"alpha": {"targets": {"serverless": str(target)}}},
+        "personas": {},
+    })
+    monkeypatch.setattr(durability, "_databricks_files_api", MissingVolume)
+    monkeypatch.setattr(
+        durability, "_is_databricks_not_found", lambda error: isinstance(error, NotFound)
+    )
+
+    with pytest.raises(FileNotFoundError, match="not found") as caught:
+        prepare_portfolio_runtime(config_path=config, host_id="serverless", project_id="alpha")
+
+    assert cast(Any, caught.value).error_code == "durable_root_unavailable"
+    assert cast(Any, caught.value).context["durable_root"] == "/Volumes/catalog/schema/missing"
+    assert not list(tmp_path.glob("state*/.agent_memory.db"))
+
+
+@pytest.mark.parametrize("recovery", ["resume", "abandon"])
+def test_prepare_portfolio_runtime_reports_incomplete_restore_with_public_recovery(
+    tmp_path, monkeypatch, recovery
+):
+    from odibi_anchor import cli, durability
+
+    config, target, state, durable = _local_durable_portfolio(tmp_path)
+    snapshot = _published_lineage(state, target, durable)
+    database = state / ".agent_memory.db"
+    projects = state / "workspace" / "projects"
+    real_publish = durability._publish_file_exclusive
+
+    def fail_database(source, destination):
+        if destination == database:
+            raise OSError("simulated database publication failure")
+        real_publish(source, destination)
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", fail_database)
+    with pytest.raises(RuntimeError, match="restore is incomplete") as through_timed_call:
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    monkeypatch.setattr(durability, "_publish_file_exclusive", real_publish)
+    # Raised inside timed_call("restore", ...); the recovery contract must survive it.
+    assert cast(Any, through_timed_call.value).error_code == "restore_incomplete"
+    assert cast(Any, through_timed_call.value).next_operations
+
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    error = cast(Any, caught.value)
+    assert error.error_code == "restore_incomplete"
+    assert error.context["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert not database.exists()
+    operation = {item["operation"]: item for item in error.next_operations}[f"{recovery}_restore"]
+    assert cli.main(shlex.split(operation["copy_ready"])[1:]) == 0
+
+    result = prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    assert database.is_file()
+    if recovery == "resume":
+        assert result["restore"]["classification"] == "local_present"
+    else:
+        assert result["restore"]["classification"] == "restored"
+        assert len(list(projects.parent.glob("projects.restore-abandoned-*/projects"))) == 1
+    assert (projects / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
+    assert not (projects / ".odibi-anchor-restore-owner.json").exists()

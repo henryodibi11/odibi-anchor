@@ -12,16 +12,20 @@ import importlib
 import json
 import os
 import re
+import secrets
+import shlex
 import shutil
 import sqlite3
+import stat
 import tarfile
 import tempfile
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from odibi_anchor._recovery import attach_recovery
 from odibi_anchor.codebase._migration_backup import logical_digest
 
 _MANIFEST_SUFFIX = ".manifest.json"
@@ -37,10 +41,23 @@ _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
 _OWNER_TABLE = "anchor_authority_identity"
 _MAX_ARTIFACT_MEMBERS = 100_000
 _MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+# Lineage evidence lives beside snapshots/, so readers that only scan snapshots/ ignore it.
+_AUTHORITY_MARKER = "AUTHORITY.json"
+_AUTHORITY_FORMAT = "odibi-anchor-durable-authority-v1"
+_RESTORE_OWNER = ".odibi-anchor-restore-owner.json"
+_RESTORE_OWNER_FORMAT = "odibi-anchor-restore-owner-v1"
+_RESTORE_PENDING = _RESTORE_OWNER + ".pending"
+_RESTORE_RECORD_KEYS = frozenset({
+    "authority_id", "created_at", "database", "databricks", "destination_artifacts",
+    "destination_db", "device", "durable_root", "format", "inode", "manifest_sha256", "nonce",
+    "snapshot_id",
+})
 
 
 class DurableSnapshotUnavailable(RuntimeError):
-    """No complete durable snapshot is available for restoration."""
+    """First use: the durable root is reachable and holds no authority marker or snapshot."""
+
+    classification = "no_lineage"
 
 
 def _next(operation: str, **arguments: Any) -> dict[str, Any]:
@@ -360,6 +377,312 @@ def _publish_file_exclusive(source: Path, destination: Path) -> None:
     _fsync_directory(destination.parent)
 
 
+def _durable_root_unavailable(root: Path, message: str, *, databricks: bool, observed: str) -> FileNotFoundError:
+    return attach_recovery(
+        FileNotFoundError(message),
+        error_code="durable_root_unavailable",
+        context={
+            "classification": "durable_root_unavailable",
+            "durable_root": str(root),
+            "databricks": databricks,
+            "observed": observed,
+        },
+    )
+
+
+def _identity(path: Path) -> tuple[int, int]:
+    metadata = os.lstat(path)
+    return metadata.st_dev, metadata.st_ino
+
+
+def _destination_conflict(path: Path, message: str, *, observed: str) -> FileExistsError:
+    return attach_recovery(
+        FileExistsError(message),
+        error_code="restore_destination_conflict",
+        context={
+            "classification": "restore_destination_conflict",
+            "destination": str(path),
+            "observed": observed,
+        },
+    )
+
+
+def _read_restore_record(destination: Path) -> dict[str, Any] | None:
+    """Return a well-formed ownership record, or None when none is present or readable."""
+    marker = destination / _RESTORE_OWNER
+    try:
+        if not stat.S_ISREG(os.lstat(marker).st_mode):
+            return None
+        raw = marker.read_bytes()
+        value = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or raw != _canonical_bytes(value)
+        or set(value) != _RESTORE_RECORD_KEYS
+        or value["format"] != _RESTORE_OWNER_FORMAT
+    ):
+        return None
+    return value
+
+
+def _restore_owned(destination: Path, record: Mapping[str, Any]) -> bool:
+    """The exact directory this restore created still carries this invocation's marker."""
+    try:
+        metadata = os.lstat(destination)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and (metadata.st_dev, metadata.st_ino) == (record["device"], record["inode"])
+        and _read_restore_record(destination) == record
+    )
+
+
+def _restore_operations(record: Mapping[str, Any], *, include_resume: bool = True) -> list[dict[str, Any]]:
+    arguments = {
+        key: record[key]
+        for key in ("durable_root", "authority_id", "destination_db", "destination_artifacts", "databricks")
+    }
+    flags = [
+        "--durable-root", record["durable_root"], "--authority", record["authority_id"],
+        "--database", record["destination_db"], "--artifacts", record["destination_artifacts"],
+    ] + (["--databricks"] if record["databricks"] else [])
+    operations = [
+        {
+            "operation": "resume_restore",
+            "arguments": arguments,
+            "copy_ready": shlex.join(["anchor", "state", "resume", *flags]),
+            "python": "odibi_anchor.durability.resume_restore(**arguments)",
+            "reason": "re-verify the owned tree against the same snapshot manifest, then publish the database",
+            "requires_owner": False,
+            "retry_safety": "verifies ownership and snapshot identity before writing; refuses on mismatch",
+        },
+        {
+            "operation": "abandon_restore",
+            "arguments": arguments,
+            "copy_ready": shlex.join(["anchor", "state", "abandon", *flags]),
+            "python": "odibi_anchor.durability.abandon_restore(**arguments)",
+            "reason": "move the owned incomplete tree to a preserved quarantine path; nothing is deleted",
+            "requires_owner": False,
+            "retry_safety": "moves only the verified owned tree; refuses on mismatch",
+        },
+    ]
+    return operations if include_resume else operations[1:]
+
+
+def _restore_incomplete(
+    record: Mapping[str, Any], *, observed: str, include_resume: bool = True,
+) -> RuntimeError:
+    return attach_recovery(
+        RuntimeError(
+            "restore is incomplete: managed artifacts at "
+            f"{record['destination_artifacts']} belong to an unfinished restore of snapshot "
+            f"{record['snapshot_id']} for database {record['destination_db']} ({observed}); "
+            "resume or abandon that restore"
+        ),
+        error_code="restore_incomplete",
+        context={
+            "classification": "restore_incomplete",
+            "observed": observed,
+            "owner_marker": str(Path(record["destination_artifacts"]) / _RESTORE_OWNER),
+            **{
+                key: record[key]
+                for key in (
+                    "snapshot_id", "manifest_sha256", "durable_root", "authority_id",
+                    "destination_db", "destination_artifacts", "databricks",
+                )
+            },
+        },
+        next_operations=_restore_operations(record, include_resume=include_resume),
+    )
+
+
+def _incomplete_restore_error(destination_artifacts: Path) -> RuntimeError | None:
+    """Describe a verified unfinished restore at this destination, if one is present."""
+    record = _read_restore_record(destination_artifacts)
+    if record is None or not _restore_owned(destination_artifacts, record):
+        return None
+    if _restore_database_published(record):
+        return _restore_incomplete(
+            record, observed="the database was published but the ownership marker was not removed",
+        )
+    return _restore_incomplete(record, observed="an incomplete restore record is present")
+
+
+def _restore_database_published(record: Mapping[str, Any]) -> bool:
+    """The destination database holds exactly the staged bytes this restore published.
+
+    Content, not inode identity, so a copy-fallback publication is recognized and a reused
+    inode cannot be mistaken for it.
+    """
+    if record["database"] is None:
+        return False
+    database = Path(record["destination_db"])
+    try:
+        if not stat.S_ISREG(os.lstat(database).st_mode):
+            return False
+        return _sha256(database) == record["database"]
+    except OSError:
+        return False
+
+
+def _record_database_intent(destination: Path, record: dict[str, Any], staged: Path) -> dict[str, Any]:
+    """Atomically extend the owned record with the staged database SHA-256 before publishing it."""
+    if not _restore_owned(destination, record):
+        raise RuntimeError("restore destination ownership changed before database publication")
+    updated = {**record, "database": _sha256(staged)}
+    pending = destination / _RESTORE_PENDING
+    descriptor = os.open(
+        pending, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600,
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(_canonical_bytes(updated))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(pending, destination / _RESTORE_OWNER)
+    _fsync_directory(destination)
+    return updated
+
+
+def _claim_restore_destination(destination: Path, base: Mapping[str, Any]) -> dict[str, Any]:
+    """Create the exact destination exclusively and bind it to a per-invocation nonce."""
+    try:
+        os.mkdir(destination)
+    except FileExistsError as exc:
+        raise _destination_conflict(
+            destination,
+            f"destination_artifacts appeared before this restore could claim it: {destination}",
+            observed="exists_at_claim",
+        ) from exc
+    device, inode = _identity(destination)
+    record = {
+        **base,
+        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "database": None,
+        "device": device,
+        "format": _RESTORE_OWNER_FORMAT,
+        "inode": inode,
+        "nonce": secrets.token_hex(16),
+    }
+    try:
+        descriptor = os.open(
+            destination / _RESTORE_OWNER,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as exc:
+        if _identity(destination) == (device, inode):
+            with suppress(OSError):
+                os.rmdir(destination)
+        raise _destination_conflict(
+            destination,
+            f"destination_artifacts changed before this restore could record ownership: {destination}",
+            observed="marker_collision",
+        ) from exc
+    marker_identity = os.fstat(descriptor)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(_canonical_bytes(record))
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_directory(destination)
+        _fsync_directory(destination.parent)
+    except BaseException:
+        # Release only the marker and directory this invocation just created.
+        with suppress(OSError):
+            if _identity(destination / _RESTORE_OWNER) == (marker_identity.st_dev, marker_identity.st_ino):
+                os.unlink(destination / _RESTORE_OWNER)
+            if _identity(destination) == (device, inode):
+                os.rmdir(destination)
+        raise
+    return record
+
+
+def _fill_owned_destination(
+    staged: Path,
+    destination: Path,
+    record: Mapping[str, Any],
+    created: list[tuple[Path, str, tuple[int, int]]],
+) -> None:
+    """Create absent snapshot entries exclusively and require existing ones to match exactly."""
+    expected: set[Path] = set()
+    directories = {Path("."): (record["device"], record["inode"])}
+    for source in sorted(staged.rglob("*"), key=lambda item: item.relative_to(staged).parts):
+        relative = source.relative_to(staged)
+        expected.add(relative)
+        target = destination / relative
+        # A parent swapped for a symlink or another directory must not redirect writes.
+        if _identity(target.parent) != directories.get(relative.parent):
+            raise RuntimeError(f"restore destination changed during copy: {relative.parent.as_posix()}")
+        try:
+            existing = os.lstat(target)
+        except FileNotFoundError:
+            existing = None
+        if source.is_dir():
+            if existing is None:
+                os.mkdir(target)
+                created.append((relative, "directory", _identity(target)))
+            elif not stat.S_ISDIR(existing.st_mode):
+                raise RuntimeError(f"restored artifact differs from the snapshot: {relative.as_posix()}")
+            directories[relative] = _identity(target)
+            continue
+        if existing is not None:
+            if not stat.S_ISREG(existing.st_mode) or _sha256(target) != _sha256(source):
+                raise RuntimeError(f"restored artifact differs from the snapshot: {relative.as_posix()}")
+            continue
+        descriptor = os.open(
+            target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o644,
+        )
+        metadata = os.fstat(descriptor)
+        created.append((relative, "file", (metadata.st_dev, metadata.st_ino)))
+        with source.open("rb") as incoming, os.fdopen(descriptor, "wb") as outgoing:
+            shutil.copyfileobj(incoming, outgoing)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+    for path in destination.rglob("*"):
+        relative = path.relative_to(destination)
+        if relative not in expected and relative not in (Path(_RESTORE_OWNER), Path(_RESTORE_PENDING)):
+            raise RuntimeError(f"restored artifact tree has an unexpected entry: {relative.as_posix()}")
+
+
+def _release_owned_destination(
+    destination: Path,
+    record: Mapping[str, Any],
+    created: list[tuple[Path, str, tuple[int, int]]],
+    *,
+    remove_root: bool,
+) -> str:
+    """Remove only entries this invocation created while the owned identity still holds."""
+    if not _restore_owned(destination, record):
+        return "not_owned"
+    for relative, kind, identity in reversed(created):
+        target = destination / relative
+        try:
+            if _identity(target) != identity:
+                continue
+            if kind == "directory":
+                os.rmdir(target)
+            else:
+                os.unlink(target)
+        except OSError:
+            continue
+    if not remove_root:
+        return "retained"
+    if any(entry.name != _RESTORE_OWNER for entry in os.scandir(destination)):
+        return "retained"
+    if not _restore_owned(destination, record):
+        return "not_owned"
+    os.unlink(destination / _RESTORE_OWNER)
+    try:
+        os.rmdir(destination)
+    except OSError:
+        return "not_owned"
+    _fsync_directory(destination.parent)
+    return "removed"
+
+
 def _safe_artifact_name(name: str) -> PurePosixPath:
     if (
         not name
@@ -383,6 +706,11 @@ def _stage_artifact_bundle(source: Path, destination: Path) -> dict[str, Any]:
     if not source.is_dir():
         raise FileNotFoundError(f"source_artifacts is not a directory: {source}")
     _reject_symlinks(source, "source_artifacts")
+    if os.path.lexists(source / _RESTORE_OWNER):
+        incomplete = _incomplete_restore_error(source)
+        if incomplete is not None:
+            raise incomplete
+        raise ValueError(f"source_artifacts contains a restore ownership marker: {source / _RESTORE_OWNER}")
     directories: list[tuple[str, Path]] = []
     files: list[tuple[str, Path]] = []
     total_bytes = 0
@@ -753,6 +1081,7 @@ def _snapshot_view(
     create: bool = False,
     latest_manifest_only: bool = False,
     download_manifests: bool = True,
+    missing_ok: bool = False,
 ) -> Iterator[tuple[Path, Any | None, str, Mapping[str, Any] | None]]:
     snapshot_root = root / authority / "snapshots"
     if not databricks:
@@ -777,10 +1106,128 @@ def _snapshot_view(
                 download_manifests=download_manifests,
             )
         except Exception as exc:
-            if _is_databricks_not_found(exc):
+            if not _is_databricks_not_found(exc):
+                raise
+            # NotFound is first use only when the configured Volume root itself is confirmed.
+            _confirm_remote_durable_root(files, root)
+            if not missing_ok:
                 raise FileNotFoundError(f"authority snapshot root is not a directory: {remote_root}") from exc
-            raise
+            remote_entries = {}
         yield local_root, files, remote_root, remote_entries
+
+
+def _confirm_remote_durable_root(files: Any, root: Path) -> None:
+    """Confirm the Unity Catalog Volume itself; a missing subdirectory inside it is first use."""
+    volume = Path(*root.parts[:5]) if len(root.parts) > 5 else root
+    try:
+        files.get_directory_metadata(str(volume))
+    except Exception as exc:
+        if not _is_databricks_not_found(exc):
+            sdk_code = getattr(exc, "error_code", None)
+            raise attach_recovery(
+                RuntimeError(
+                    f"durable_root is unavailable: the Databricks Files API could not confirm Volume {volume} "
+                    f"({type(exc).__name__}: {exc})"
+                ),
+                error_code="durable_root_unavailable",
+                context={
+                    "classification": "durable_root_unavailable",
+                    "durable_root": str(root),
+                    "databricks": True,
+                    "observed": type(exc).__name__,
+                    "sdk_error_code": sdk_code if isinstance(sdk_code, str) else None,
+                },
+            ) from exc
+        raise _durable_root_unavailable(
+            root,
+            f"durable_root is unavailable: the Databricks Files API reports Volume {volume} not found",
+            databricks=True,
+            observed="not_found",
+        ) from exc
+
+
+def _authority_marker_present(root: Path, authority: str, *, files: Any | None) -> bool:
+    if files is None:
+        return os.path.lexists(root / authority / _AUTHORITY_MARKER)
+    authority_root = _remote_child(str(root), authority)
+    marker = _remote_child(authority_root, _AUTHORITY_MARKER)
+    try:
+        return any(str(entry.path) == marker for entry in files.list_directory_contents(authority_root))
+    except Exception as exc:
+        if _is_databricks_not_found(exc):
+            return False
+        raise
+
+
+def _ensure_authority_marker(root: Path, authority: str, *, files: Any | None, staging: Path) -> str:
+    """Record that this lineage has published a snapshot; identical bytes for every writer."""
+    expected = _canonical_bytes({"authority_id": authority, "format": _AUTHORITY_FORMAT})
+    staged = staging / _AUTHORITY_MARKER
+    staged.write_bytes(expected)
+    if files is None:
+        marker = root / authority / _AUTHORITY_MARKER
+        if not os.path.lexists(marker):
+            descriptor, temporary = tempfile.mkstemp(prefix=f".{_AUTHORITY_MARKER}.", dir=marker.parent)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(expected)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.link(temporary, marker)
+                _fsync_directory(marker.parent)
+                return "created"
+            except FileExistsError:
+                pass
+            finally:
+                os.unlink(temporary)
+        if marker.is_symlink() or not marker.is_file() or marker.read_bytes() != expected:
+            raise RuntimeError(f"durable authority marker mismatch: {marker}")
+        return "present"
+    marker_path = _remote_child(_remote_child(str(root), authority), _AUTHORITY_MARKER)
+    if not _authority_marker_present(root, authority, files=files):
+        _publish_remote_file(files, staged, marker_path)
+        return "created"
+    if not _remote_file_matches(files, staged, marker_path):
+        raise RuntimeError(f"durable authority marker mismatch: {marker_path}")
+    return "present"
+
+
+def _no_snapshots(root: Path, authority: str, *, files: Any | None, databricks: bool) -> Exception:
+    """Classify an empty lineage as first use or as missing lineage; never guess."""
+    marker = (
+        _remote_child(_remote_child(str(root), authority), _AUTHORITY_MARKER)
+        if databricks
+        else str(root / authority / _AUTHORITY_MARKER)
+    )
+    context = {
+        "durable_root": str(root),
+        "authority_id": authority,
+        "databricks": databricks,
+        "authority_marker": marker,
+    }
+    if _authority_marker_present(root, authority, files=files):
+        flags = ["--durable-root", str(root), "--authority", authority]
+        return attach_recovery(
+            RuntimeError(
+                f"durable lineage is missing: authority marker {marker} shows snapshots were "
+                "published, but no valid snapshots were found; refusing to initialize empty state"
+            ),
+            error_code="durable_lineage_missing",
+            context={**context, "classification": "durable_lineage_missing"},
+            next_operations=[{
+                "operation": "list_snapshots",
+                "arguments": {"durable_root": str(root), "authority_id": authority, "databricks": databricks},
+                "copy_ready": shlex.join(
+                    ["anchor", "state", "list", *flags] + (["--databricks"] if databricks else [])
+                ),
+                "reason": "inspect the durable lineage; recovering or replacing it requires owner judgment",
+                "requires_owner": True,
+                "retry_safety": "read_only",
+            }],
+        )
+    unavailable = DurableSnapshotUnavailable("no valid durable snapshots")
+    unavailable.context = {**context, "classification": "no_lineage"}  # type: ignore[attr-defined]
+    return unavailable
 
 
 def _publish_remote_file(files: Any, source: Path, destination: str) -> None:
@@ -1001,7 +1448,9 @@ def list_snapshots(
     if not databricks:
         _reject_symlinks(root, "durable_root")
         if not root.is_dir():
-            raise FileNotFoundError(f"durable_root is not a directory: {root}")
+            raise _durable_root_unavailable(
+                root, f"durable_root is not a directory: {root}", databricks=False, observed="not_a_directory",
+            )
         snapshot_root = root / authority / "snapshots"
         if not snapshot_root.is_dir():
             raise FileNotFoundError(f"authority snapshot root is not a directory: {snapshot_root}")
@@ -1073,7 +1522,9 @@ def snapshot_state(
     if not source.is_file():
         raise FileNotFoundError(f"source_db is not a file: {source}")
     if not databricks and not root.is_dir():
-        raise FileNotFoundError(f"durable_root is not a directory: {root}")
+        raise _durable_root_unavailable(
+            root, f"durable_root is not a directory: {root}", databricks=False, observed="not_a_directory",
+        )
     authority = ensure_database_authority(
         source,
         authority_id=qualified["authority_id"],
@@ -1205,6 +1656,9 @@ def snapshot_state(
                         databricks=databricks,
                     ),
                 }
+                result["authority_marker"] = _ensure_authority_marker(
+                    root, qualified["authority_id"], files=files, staging=Path(temporary_directory),
+                )
                 if retention_policy is not None:
                     result["retention"] = _enforce_retention(
                         snapshot_root=snapshot_root,
@@ -1309,6 +1763,9 @@ def snapshot_state(
                     databricks=databricks,
                 ),
             }
+            result["authority_marker"] = _ensure_authority_marker(
+                root, qualified["authority_id"], files=files, staging=Path(temporary_directory),
+            )
             if retention_policy is not None:
                 result["retention"] = _enforce_retention(
                     snapshot_root=snapshot_root,
@@ -1332,7 +1789,12 @@ def restore_latest(
     overwrite: bool = False,
     databricks: bool = False,
 ) -> dict[str, Any]:
-    """Verify the latest snapshot locally and publish only to absent destinations."""
+    """Verify the latest snapshot locally and publish only to absent destinations.
+
+    The artifact destination is created exclusively and bound to this invocation before
+    any copy; failure cleanup removes only entries this invocation created. A failure after
+    the artifacts are complete leaves a ``restore_incomplete`` record for resume or abandon.
+    """
     if overwrite:
         raise ValueError("destructive overwrite is not supported")
     qualified = qualify_paths(
@@ -1350,14 +1812,19 @@ def restore_latest(
         else None
     )
     if not databricks and not root.is_dir():
-        raise FileNotFoundError(f"durable_root is not a directory: {root}")
+        raise _durable_root_unavailable(
+            root, f"durable_root is not a directory: {root}", databricks=False, observed="not_a_directory",
+        )
     if destination.exists():
         raise FileExistsError(f"destination_db already exists: {destination}")
-    if artifacts_destination is not None and (
-        artifacts_destination.exists() or artifacts_destination.is_symlink()
-    ):
-        raise FileExistsError(
-            f"destination_artifacts already exists: {artifacts_destination}"
+    if artifacts_destination is not None and os.path.lexists(artifacts_destination):
+        incomplete = _incomplete_restore_error(artifacts_destination)
+        if incomplete is not None:
+            raise incomplete
+        raise _destination_conflict(
+            artifacts_destination,
+            f"destination_artifacts already exists: {artifacts_destination}",
+            observed="exists_at_preflight",
         )
     if not destination.parent.is_dir():
         raise FileNotFoundError(f"destination parent is not a directory: {destination.parent}")
@@ -1366,113 +1833,195 @@ def restore_latest(
         qualified["authority_id"],
         databricks=databricks,
         latest_manifest_only=True,
+        missing_ok=True,
     ) as (
         snapshot_root,
         files,
         publication_root,
         remote_entries,
     ):
-        if not snapshot_root.is_dir():
-            raise DurableSnapshotUnavailable("no valid durable snapshots")
-        manifests = _validated_manifests(
-            snapshot_root,
-            remote_entries=remote_entries,
+        manifests = (
+            _validated_manifests(snapshot_root, remote_entries=remote_entries)
+            if snapshot_root.is_dir()
+            else []
         )
         if not manifests:
-            raise DurableSnapshotUnavailable("no valid durable snapshots")
+            raise _no_snapshots(root, qualified["authority_id"], files=files, databricks=databricks)
         latest_created = max(str(item["created_at"]) for item in manifests)
         latest = [item for item in manifests if item["created_at"] == latest_created]
         if len(latest) != 1:
             raise RuntimeError("ambiguous latest durable snapshot")
-        manifest = latest[0]
-        if manifest.get("authority_id") != qualified["authority_id"]:
-            raise RuntimeError("durable snapshot authority mismatch")
-        if manifest["format"] == _FORMAT_V2 and artifacts_destination is None:
-            raise ValueError(
-                "destination_artifacts is required to restore a v2 durable snapshot"
-            )
-        if files is not None:
+        return _restore_manifest(
+            qualified=qualified,
+            manifest=latest[0],
+            snapshot_root=snapshot_root,
+            files=files,
+            publication_root=publication_root,
+            record=None,
+        )
+
+
+def _restore_manifest(
+    *,
+    qualified: Mapping[str, Any],
+    manifest: dict[str, Any],
+    snapshot_root: Path,
+    files: Any | None,
+    publication_root: str,
+    record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Verify one manifest's payloads, fill the owned artifact tree, then publish the database."""
+    databricks = bool(qualified["databricks"])
+    destination = Path(qualified["destination_db"])
+    artifacts_destination = (
+        Path(qualified["destination_artifacts"])
+        if qualified["destination_artifacts"] is not None
+        else None
+    )
+    if manifest.get("authority_id") != qualified["authority_id"]:
+        raise RuntimeError("durable snapshot authority mismatch")
+    if manifest["format"] == _FORMAT_V2 and artifacts_destination is None:
+        raise ValueError(
+            "destination_artifacts is required to restore a v2 durable snapshot"
+        )
+    if files is not None:
+        _download_remote_file(
+            files,
+            publication_root,
+            snapshot_root,
+            manifest["snapshot_file"],
+        )
+        if manifest["format"] == _FORMAT_V2:
             _download_remote_file(
                 files,
                 publication_root,
                 snapshot_root,
-                manifest["snapshot_file"],
+                manifest["artifacts"]["file"],
             )
-            if manifest["format"] == _FORMAT_V2:
-                _download_remote_file(
-                    files,
-                    publication_root,
-                    snapshot_root,
-                    manifest["artifacts"]["file"],
-                )
-            _validate_manifest_payloads(snapshot_root, manifest)
-        durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
-        # Stage on the destination filesystem so hard-link publication is an atomic,
-        # no-overwrite directory-entry operation rather than the partial-copy fallback.
-        with tempfile.TemporaryDirectory(
-            prefix=".odibi-anchor-restore-", dir=destination.parent
-        ) as temporary_directory:
-            staged = Path(temporary_directory) / "restore.sqlite3"
-            shutil.copyfile(durable_snapshot, staged)
-            if _sha256(staged) != manifest["sha256"]:
-                raise RuntimeError("staged restore hash mismatch")
-            inspection = _inspect_local_database(staged)
-            if inspection["integrity_check"] != "ok":
-                raise RuntimeError("staged restore failed SQLite integrity check")
-            if inspection["logical_digest"] != manifest["logical_digest"]:
-                raise RuntimeError("staged restore logical digest mismatch")
-            ensure_database_authority(
-                staged,
-                authority_id=qualified["authority_id"],
-                trust_domain="work",
+        _validate_manifest_payloads(snapshot_root, manifest)
+    durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
+    # Stage on the destination filesystem so hard-link publication is an atomic,
+    # no-overwrite directory-entry operation rather than the partial-copy fallback.
+    with tempfile.TemporaryDirectory(
+        prefix=".odibi-anchor-restore-", dir=destination.parent
+    ) as temporary_directory:
+        staged = Path(temporary_directory) / "restore.sqlite3"
+        shutil.copyfile(durable_snapshot, staged)
+        if _sha256(staged) != manifest["sha256"]:
+            raise RuntimeError("staged restore hash mismatch")
+        inspection = _inspect_local_database(staged)
+        if inspection["integrity_check"] != "ok":
+            raise RuntimeError("staged restore failed SQLite integrity check")
+        if inspection["logical_digest"] != manifest["logical_digest"]:
+            raise RuntimeError("staged restore logical digest mismatch")
+        ensure_database_authority(
+            staged,
+            authority_id=qualified["authority_id"],
+            trust_domain="work",
+        )
+        artifacts_status: dict[str, Any]
+        if manifest["format"] == _FORMAT_V2:
+            assert artifacts_destination is not None
+            if not artifacts_destination.parent.exists():
+                artifacts_destination.parent.mkdir(parents=True)
+            _reject_symlinks(artifacts_destination.parent, "destination_artifacts")
+            staged_artifacts = Path(temporary_directory) / "artifacts"
+            bundle = snapshot_root / manifest["artifacts"]["file"]
+            extracted = _extract_artifact_bundle(bundle, staged_artifacts)
+            expected = {
+                key: manifest["artifacts"][key]
+                for key in ("file_count", "directory_count", "content_size_bytes")
+            }
+            if extracted != expected:
+                raise RuntimeError("artifact bundle inventory mismatch")
+            from odibi_anchor._dispatcher._session import (
+                _relocate_restored_continuity,
             )
-            artifacts_status: dict[str, Any]
-            if manifest["format"] == _FORMAT_V2:
-                assert artifacts_destination is not None
-                if not artifacts_destination.parent.exists():
-                    artifacts_destination.parent.mkdir(parents=True)
-                _reject_symlinks(artifacts_destination.parent, "destination_artifacts")
-                staged_artifacts = Path(temporary_directory) / "artifacts"
-                bundle = snapshot_root / manifest["artifacts"]["file"]
-                extracted = _extract_artifact_bundle(bundle, staged_artifacts)
-                expected = {
-                    key: manifest["artifacts"][key]
-                    for key in ("file_count", "directory_count", "content_size_bytes")
-                }
-                if extracted != expected:
-                    raise RuntimeError("artifact bundle inventory mismatch")
-                from odibi_anchor._dispatcher._session import (
-                    _relocate_restored_continuity,
+
+            continuity = _relocate_restored_continuity(
+                staged_artifacts, artifacts_destination
+            )
+            if continuity["status"] == "relocated":
+                from odibi_anchor.codebase._authority_relocation import append_verified_relocation
+
+                continuity["attestation_id"] = append_verified_relocation(
+                    staged, source_home=continuity["source_home"],
+                    destination_home=continuity["destination_home"], manifest=manifest,
                 )
+            fresh = record is None
+            if record is None:
+                record = _claim_restore_destination(artifacts_destination, {
+                    "authority_id": qualified["authority_id"],
+                    "databricks": databricks,
+                    "destination_artifacts": str(artifacts_destination),
+                    "destination_db": str(destination),
+                    "durable_root": qualified["durable_root"],
+                    "manifest_sha256": manifest["manifest_sha256"],
+                    "snapshot_id": manifest["snapshot_id"],
+                })
+            created: list[tuple[Path, str, tuple[int, int]]] = []
+            try:
+                _fill_owned_destination(staged_artifacts, artifacts_destination, record, created)
+                if not _restore_owned(artifacts_destination, record):
+                    raise RuntimeError("restore destination ownership changed during copy")
+                from odibi_anchor.codebase._workflow_artifact_restore import append_verified_restores
 
-                continuity = _relocate_restored_continuity(
-                    staged_artifacts, artifacts_destination
+                append_verified_restores(staged, projects=artifacts_destination, manifest=manifest)
+            except Exception as exc:
+                released = _release_owned_destination(
+                    artifacts_destination, record, created, remove_root=fresh,
                 )
-                if continuity["status"] == "relocated":
-                    from odibi_anchor.codebase._authority_relocation import append_verified_relocation
-
-                    continuity["attestation_id"] = append_verified_relocation(
-                        staged, source_home=continuity["source_home"],
-                        destination_home=continuity["destination_home"], manifest=manifest,
-                    )
-                try:
-                    shutil.copytree(staged_artifacts, artifacts_destination)
-                    from odibi_anchor.codebase._workflow_artifact_restore import append_verified_restores
-
-                    append_verified_restores(staged, projects=artifacts_destination, manifest=manifest)
-                except Exception:
-                    if artifacts_destination.is_dir() and not artifacts_destination.is_symlink():
-                        shutil.rmtree(artifacts_destination)
+                if released == "removed":
                     raise
-                artifacts_status = {
-                    "status": "restored",
-                    "destination": str(artifacts_destination),
-                    "continuity": continuity,
-                    **manifest["artifacts"],
-                }
-            else:
-                artifacts_status = {"status": "not_included_legacy_v1"}
+                if released == "not_owned":
+                    raise _destination_conflict(
+                        artifacts_destination,
+                        "destination_artifacts identity or ownership marker changed during restore; "
+                        f"nothing further was removed: {artifacts_destination}",
+                        observed="ownership_lost",
+                    ) from exc
+                raise _restore_incomplete(
+                    record,
+                    observed=f"artifact copy or verification failed: {type(exc).__name__}: {exc}",
+                    include_resume=False,
+                ) from exc
+            artifacts_status = {
+                "status": "restored",
+                "destination": str(artifacts_destination),
+                "continuity": continuity,
+                **manifest["artifacts"],
+            }
+        else:
+            artifacts_status = {"status": "not_included_legacy_v1"}
+        try:
+            if record is not None:
+                assert artifacts_destination is not None
+                record = _record_database_intent(artifacts_destination, record, staged)
             _publish_file_exclusive(staged, destination)
+        except Exception as exc:
+            if record is None or artifacts_destination is None:
+                raise
+            if not _restore_owned(artifacts_destination, record):
+                raise _destination_conflict(
+                    artifacts_destination,
+                    "destination_artifacts identity or ownership marker changed during restore: "
+                    f"{artifacts_destination}",
+                    observed="ownership_lost",
+                ) from exc
+            raise _restore_incomplete(
+                record, observed=f"database publication failed: {type(exc).__name__}: {exc}",
+            ) from exc
+    if record is not None:
+        assert artifacts_destination is not None
+        if not _restore_owned(artifacts_destination, record):
+            raise _destination_conflict(
+                artifacts_destination,
+                "the database was published but destination_artifacts no longer carries this "
+                f"restore's ownership marker: {artifacts_destination}",
+                observed="ownership_lost_after_publication",
+            )
+        os.unlink(artifacts_destination / _RESTORE_OWNER)
+        _fsync_directory(artifacts_destination)
     authority = ensure_database_authority(
         destination,
         authority_id=qualified["authority_id"],
@@ -1481,6 +2030,7 @@ def restore_latest(
     return {
         "kind": "durable_restore",
         "action": "created",
+        "classification": "restored",
         "destination_db": str(destination),
         "snapshot_id": manifest["snapshot_id"],
         "sha256": manifest["sha256"],
@@ -1493,4 +2043,181 @@ def restore_latest(
         "authority": authority,
         "transport": "databricks_files_api" if databricks else "local_filesystem",
         "next_operation": _next("inspect_restored_state", destination_db=str(destination)),
+    }
+
+
+def _owned_incomplete_restore(qualified: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the verified unfinished restore that exactly matches the requested arguments."""
+    destination = Path(qualified["destination_artifacts"])
+    record = _read_restore_record(destination)
+    if record is None or not _restore_owned(destination, record):
+        raise _destination_conflict(
+            destination,
+            f"no incomplete restore owned by Anchor is recorded at destination_artifacts: {destination}",
+            observed="no_owned_restore_record",
+        )
+    mismatched = sorted(
+        key
+        for key in ("durable_root", "authority_id", "destination_db", "destination_artifacts", "databricks")
+        if record[key] != qualified[key]
+    )
+    if mismatched:
+        raise _destination_conflict(
+            destination,
+            "the incomplete restore record does not match the requested "
+            f"{', '.join(mismatched)}: {destination}",
+            observed="record_mismatch",
+        )
+    return record
+
+
+def _foreign_database_conflict(record: Mapping[str, Any]) -> FileExistsError:
+    return _destination_conflict(
+        Path(record["destination_db"]),
+        "destination_db exists and is not the database this restore published: "
+        f"{record['destination_db']}",
+        observed="foreign_destination_db",
+    )
+
+
+def _restore_recovery_arguments(
+    durable_root: str | os.PathLike[str],
+    destination_db: str | os.PathLike[str],
+    destination_artifacts: str | os.PathLike[str],
+    authority_id: str,
+    databricks: bool,
+) -> dict[str, Any]:
+    qualified = qualify_paths(
+        durable_root=durable_root,
+        destination_db=destination_db,
+        destination_artifacts=destination_artifacts,
+        authority_id=authority_id,
+        databricks=databricks,
+    )
+    if qualified["destination_artifacts"] is None:
+        raise ValueError("destination_artifacts is required")
+    return qualified
+
+
+def resume_restore(
+    *,
+    durable_root: str | os.PathLike[str],
+    destination_db: str | os.PathLike[str],
+    destination_artifacts: str | os.PathLike[str],
+    authority_id: str,
+    databricks: bool = False,
+) -> dict[str, Any]:
+    """Finish an unfinished restore by re-verifying it against its recorded snapshot manifest."""
+    qualified = _restore_recovery_arguments(
+        durable_root, destination_db, destination_artifacts, authority_id, databricks,
+    )
+    record = _owned_incomplete_restore(qualified)
+    destination = Path(qualified["destination_artifacts"])
+    if _restore_database_published(record):
+        # Only the marker removal remained; the tree was verified before publication.
+        os.unlink(destination / _RESTORE_OWNER)
+        _fsync_directory(destination)
+        return {
+            "kind": "durable_restore",
+            "action": "finalized",
+            "classification": "restored",
+            "destination_db": qualified["destination_db"],
+            "destination_artifacts": str(destination),
+            "snapshot_id": record["snapshot_id"],
+            "authority": ensure_database_authority(
+                qualified["destination_db"], authority_id=qualified["authority_id"], trust_domain="work",
+            ),
+            "next_operation": _next("inspect_restored_state", destination_db=qualified["destination_db"]),
+        }
+    if os.path.lexists(qualified["destination_db"]):
+        raise _foreign_database_conflict(record)
+    root = Path(qualified["durable_root"])
+    name = f"{record['snapshot_id']}{_MANIFEST_SUFFIX}"
+    with _snapshot_view(
+        root, qualified["authority_id"], databricks=databricks, download_manifests=False,
+        missing_ok=True,
+    ) as (snapshot_root, files, publication_root, remote_entries):
+        # Lost or altered lineage offers only abandon; transport errors propagate for a retry.
+        try:
+            if remote_entries is not None:
+                if name not in remote_entries:
+                    raise RuntimeError(f"recorded snapshot manifest is missing: {name}")
+                _download_remote_file(files, publication_root, snapshot_root, name)
+            elif not (snapshot_root / name).is_file():
+                raise RuntimeError(f"recorded snapshot manifest is missing: {name}")
+            manifest = _load_manifest(snapshot_root / name)
+            _validate_manifest_identity(manifest, record["snapshot_id"], name)
+            if remote_entries is None:
+                _validate_manifest_payloads(snapshot_root, manifest)
+            else:
+                _validate_remote_manifest_references(manifest, remote_entries)
+            if manifest["manifest_sha256"] != record["manifest_sha256"]:
+                raise RuntimeError("recorded snapshot manifest checksum changed")
+        except RuntimeError as exc:
+            raise _restore_incomplete(
+                record,
+                observed=f"the recorded snapshot manifest cannot be verified: {type(exc).__name__}: {exc}",
+                include_resume=False,
+            ) from exc
+        result = _restore_manifest(
+            qualified=qualified,
+            manifest=manifest,
+            snapshot_root=snapshot_root,
+            files=files,
+            publication_root=publication_root,
+            record=record,
+        )
+    result["action"] = "resumed"
+    return result
+
+
+def abandon_restore(
+    *,
+    durable_root: str | os.PathLike[str],
+    destination_db: str | os.PathLike[str],
+    destination_artifacts: str | os.PathLike[str],
+    authority_id: str,
+    databricks: bool = False,
+) -> dict[str, Any]:
+    """Move an unfinished owned restore to a preserved sibling quarantine; never delete it."""
+    qualified = _restore_recovery_arguments(
+        durable_root, destination_db, destination_artifacts, authority_id, databricks,
+    )
+    record = _owned_incomplete_restore(qualified)
+    destination = Path(qualified["destination_artifacts"])
+    if _restore_database_published(record):
+        raise _destination_conflict(
+            destination,
+            "the restore already published its database; resume finalizes it instead of abandoning: "
+            f"{destination}",
+            observed="database_published",
+        )
+    stamp = re.sub(r"[^0-9TZ]", "", datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"))
+    quarantine = destination.parent / f"{destination.name}.restore-abandoned-{stamp}-{record['nonce'][:12]}"
+    os.mkdir(quarantine)
+    preserved = quarantine / destination.name
+    if not _restore_owned(destination, record):
+        os.rmdir(quarantine)
+        raise _destination_conflict(
+            destination,
+            f"destination_artifacts ownership changed before abandon: {destination}",
+            observed="ownership_lost",
+        )
+    os.rename(destination, preserved)
+    _fsync_directory(destination.parent)
+    return {
+        "kind": "durable_restore_abandoned",
+        "action": "quarantined",
+        "destination_artifacts": str(destination),
+        "destination_db": qualified["destination_db"],
+        "quarantine_path": str(preserved),
+        "snapshot_id": record["snapshot_id"],
+        "next_operation": _next(
+            "restore_latest",
+            durable_root=qualified["durable_root"],
+            authority_id=qualified["authority_id"],
+            destination_db=qualified["destination_db"],
+            destination_artifacts=str(destination),
+            databricks=databricks,
+        ),
     }

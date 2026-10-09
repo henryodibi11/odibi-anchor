@@ -7,6 +7,7 @@ import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -27,12 +28,21 @@ class FakeDatabricksFiles:
         self.downloads: list[tuple[str, bool, bool]] = []
         self.fail_manifest_upload = False
         self.fail_index_upload = False
+        self.missing_roots: set[str] = set()
+        self.root_error: Exception | None = None
+        self.strict_listing = False
 
     def create_directory(self, path: str) -> None:
         self.directories.add(path)
 
     def list_directory_contents(self, path: str):
         prefix = path.rstrip("/") + "/"
+        if (
+            self.strict_listing
+            and path.rstrip("/") not in self.directories
+            and not any(name.startswith(prefix) for name in self.files)
+        ):
+            raise FakeDatabricksNotFound(path)
         return [
             SimpleNamespace(path=name, file_size=len(self.files[name]))
             for name in sorted(self.files)
@@ -72,6 +82,12 @@ class FakeDatabricksFiles:
 
     def delete(self, path: str) -> None:
         del self.files[path]
+
+    def get_directory_metadata(self, path: str) -> None:
+        if path in self.missing_roots:
+            raise FakeDatabricksNotFound(path)
+        if self.root_error is not None:
+            raise self.root_error
 
 
 class FakeDatabricksNotFound(Exception):
@@ -588,7 +604,11 @@ def test_databricks_snapshot_restore_uses_files_api_without_fuse(
         }
     ]
     assert listing["next_operation"]["arguments"]["databricks"] is True
-    assert [path for path, _, _ in files.uploads][-1].endswith(".manifest.json")
+    uploaded = [path for path, _, _ in files.uploads]
+    assert [path for path in uploaded if "/snapshots/" in path][-1].endswith(".manifest.json")
+    assert uploaded[-1] == f"{durable}/work/AUTHORITY.json"
+    assert first["authority_marker"] == "created"
+    assert second["authority_marker"] == "present"
     assert all(not overwrite and not parallel for _, overwrite, parallel in files.uploads)
     assert all(not overwrite and not parallel for _, overwrite, parallel in files.downloads)
     assert [Path(path).suffixes for path, _, _ in listing_downloads] == [
@@ -856,18 +876,22 @@ def test_v2_restore_requires_absent_artifact_destination(tmp_path: Path) -> None
     durable.mkdir()
     artifacts.mkdir()
     existing.mkdir()
+    (existing / "keep.md").write_text("keep\n", encoding="utf-8")
     _database(source)
     durability.snapshot_state(
         source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work"
     )
+    before = _identity_and_tree(existing)
 
-    with pytest.raises(FileExistsError, match="destination_artifacts"):
+    with pytest.raises(FileExistsError, match="destination_artifacts") as caught:
         durability.restore_latest(
             durable_root=durable,
             destination_db=destination,
             destination_artifacts=existing,
             authority_id="work",
         )
+    assert getattr(caught.value, "error_code", None) == "restore_destination_conflict"
+    assert _identity_and_tree(existing) == before
     assert not destination.exists()
 
 
@@ -1058,3 +1082,718 @@ def test_manifest_is_published_last(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert list(snapshots.glob("*.sqlite3"))
     assert not list(snapshots.glob("*.manifest.json"))
     assert durability.list_snapshots(durable_root=str(durable), authority_id="work")["snapshots"] == []
+
+
+def _v2_lineage(tmp_path: Path) -> tuple[Path, Path, dict]:
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    (artifacts / "alpha" / "problems").mkdir(parents=True)
+    (artifacts / "alpha" / "problems" / "P-1.md").write_text("# Evidence\n", encoding="utf-8")
+    (artifacts / "alpha" / "problems" / "P-2.md").write_text("# Second\n", encoding="utf-8")
+    (artifacts / "beta").mkdir()
+    (artifacts / "beta" / "notes.md").write_text("beta\n", encoding="utf-8")
+    _database(source)
+    snapshot = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work",
+    )
+    return durable, artifacts, snapshot
+
+
+def _before_copy(monkeypatch: pytest.MonkeyPatch, hook) -> None:
+    from odibi_anchor._dispatcher import _session
+
+    original = _session._relocate_restored_continuity
+
+    def relocate_then_hook(staged, destination):
+        result = original(staged, destination)
+        hook(Path(destination))
+        return result
+
+    monkeypatch.setattr(_session, "_relocate_restored_continuity", relocate_then_hook)
+
+
+def test_restore_never_deletes_destination_created_by_competing_writer_after_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db = tmp_path / "restored" / "restored.db"
+    destination_artifacts = tmp_path / "restored" / "projects"
+    destination_db.parent.mkdir()
+
+    def competing_writer(destination: Path) -> None:
+        destination.mkdir()
+        (destination / "sentinel.txt").write_text("competitor\n", encoding="utf-8")
+
+    _before_copy(monkeypatch, competing_writer)
+
+    with pytest.raises(FileExistsError) as caught:
+        durability.restore_latest(
+            durable_root=durable,
+            destination_db=destination_db,
+            destination_artifacts=destination_artifacts,
+            authority_id="work",
+        )
+
+    assert (destination_artifacts / "sentinel.txt").read_text() == "competitor\n"
+    assert getattr(caught.value, "error_code", None) == "restore_destination_conflict"
+    assert sorted(path.name for path in destination_artifacts.iterdir()) == ["sentinel.txt"]
+    assert not destination_db.exists()
+
+
+def _identity_and_tree(path: Path) -> tuple:
+    metadata = path.lstat()
+    return (
+        (metadata.st_dev, metadata.st_ino),
+        sorted(
+            (item.relative_to(path).as_posix(), item.read_bytes() if item.is_file() else None)
+            for item in path.rglob("*")
+        ),
+    )
+
+
+def _fail_during_copy(monkeypatch: pytest.MonkeyPatch, *, after_files: int, action=None) -> None:
+    """Fail inside the owned copy after `after_files` files were written."""
+    armed: dict[str, Any] = {"copies": None}
+    real_copy = durability.shutil.copyfileobj
+
+    def arm(destination: Path) -> None:
+        armed["copies"] = 0
+        armed["destination"] = destination
+
+    def copy(incoming, outgoing, *args, **kwargs):
+        if armed["copies"] is not None:
+            if armed["copies"] == after_files:
+                if action is not None:
+                    action(armed["destination"])
+                raise OSError("simulated copy failure")
+            armed["copies"] += 1
+        return real_copy(incoming, outgoing, *args, **kwargs)
+
+    _before_copy(monkeypatch, arm)
+    monkeypatch.setattr(durability.shutil, "copyfileobj", copy)
+
+
+def _restore_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
+    parent = tmp_path / "local"
+    parent.mkdir()
+    neighbor = parent / "neighbor"
+    neighbor.mkdir()
+    (neighbor / "keep.md").write_text("neighbor\n", encoding="utf-8")
+    return parent / "restored.db", parent / "projects", neighbor
+
+
+def test_owned_partial_restore_cleanup_removes_only_its_own_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, neighbor = _restore_paths(tmp_path)
+    _fail_during_copy(monkeypatch, after_files=1)
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert not destination_artifacts.exists()
+    assert not destination_db.exists()
+    assert sorted(path.name for path in destination_db.parent.iterdir()) == ["neighbor"]
+    assert (neighbor / "keep.md").read_text() == "neighbor\n"
+
+
+def test_proof_failure_cleanup_preserves_foreign_entries_and_records_incomplete_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from odibi_anchor.codebase import _workflow_artifact_restore
+
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+
+    def foreign_entry_then_fail(_path, *, projects, manifest):
+        (projects / "foreign.md").write_text("foreign\n", encoding="utf-8")
+        raise RuntimeError("simulated proof failure")
+
+    monkeypatch.setattr(
+        _workflow_artifact_restore, "append_verified_restores", foreign_entry_then_fail,
+    )
+
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert getattr(caught.value, "error_code", None) == "restore_incomplete"
+    assert [item["operation"] for item in cast(Any, caught.value).next_operations] == [
+        "abandon_restore",
+    ]
+    assert sorted(path.name for path in destination_artifacts.iterdir()) == [
+        ".odibi-anchor-restore-owner.json", "foreign.md",
+    ]
+    assert not destination_db.exists()
+
+
+@pytest.mark.parametrize("substitution", ["replaced_directory", "symlink"])
+def test_destination_substitution_cannot_redirect_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, substitution: str,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    victim = tmp_path / "victim"
+    moved = tmp_path / "moved-owned"
+
+    def substitute(destination: Path) -> None:
+        destination.rename(moved)
+        (victim / "alpha" / "problems").mkdir(parents=True)
+        (victim / "alpha" / "problems" / "P-1.md").write_text("victim\n", encoding="utf-8")
+        (victim / ".odibi-anchor-restore-owner.json").write_bytes(
+            (moved / ".odibi-anchor-restore-owner.json").read_bytes()
+        )
+        if substitution == "symlink":
+            destination.symlink_to(victim, target_is_directory=True)
+        else:
+            victim.rename(destination)
+
+    _fail_during_copy(monkeypatch, after_files=1, action=substitute)
+    with pytest.raises(FileExistsError, match="ownership marker changed") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert getattr(caught.value, "error_code", None) == "restore_destination_conflict"
+    victim_root = victim if substitution == "symlink" else destination_artifacts
+    assert (victim_root / "alpha" / "problems" / "P-1.md").read_text() == "victim\n"
+    assert (moved / ".odibi-anchor-restore-owner.json").is_file()
+    assert any(path.is_file() for path in moved.rglob("*.md"))
+    assert not destination_db.exists()
+
+
+def test_two_competing_restores_have_one_owner_and_the_loser_deletes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    winner: dict = {}
+
+    def competing_restore(_destination: Path) -> None:
+        if not winner:
+            winner["result"] = None
+            winner["result"] = durability.restore_latest(
+                durable_root=durable, destination_db=destination_db,
+                destination_artifacts=destination_artifacts, authority_id="work",
+            )
+
+    _before_copy(monkeypatch, competing_restore)
+    with pytest.raises(FileExistsError) as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert getattr(caught.value, "error_code", None) == "restore_destination_conflict"
+    assert winner["result"]["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert (destination_artifacts / "alpha" / "problems" / "P-1.md").read_text() == "# Evidence\n"
+    assert not (destination_artifacts / ".odibi-anchor-restore-owner.json").exists()
+    assert durability.ensure_database_authority(
+        destination_db, authority_id="work", trust_domain="work",
+    )["status"] == "verified"
+
+
+def _incomplete_restore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, ...]:
+    durable, artifacts, snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    real_publish = durability._publish_file_exclusive
+
+    def fail_database(source: Path, destination: Path) -> None:
+        if destination == destination_db:
+            raise OSError("simulated database publication failure")
+        real_publish(source, destination)
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", fail_database)
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+    monkeypatch.setattr(durability, "_publish_file_exclusive", real_publish)
+    return caught.value, durable, artifacts, snapshot, destination_db, destination_artifacts
+
+
+def test_database_publication_failure_records_incomplete_restore_then_resume_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error, durable, artifacts, snapshot, destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+
+    operations = {item["operation"]: item for item in error.next_operations}
+    assert error.error_code == "restore_incomplete"
+    assert error.context["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert operations["resume_restore"]["copy_ready"].startswith("anchor state resume ")
+    assert operations["abandon_restore"]["copy_ready"].startswith("anchor state abandon ")
+    assert not destination_db.exists()
+    assert (destination_artifacts / ".odibi-anchor-restore-owner.json").is_file()
+    with pytest.raises(RuntimeError, match="restore is incomplete") as again:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+    assert cast(Any, again.value).error_code == "restore_incomplete"
+    (destination_artifacts / "beta" / "notes.md").unlink()
+
+    resumed = durability.resume_restore(**operations["resume_restore"]["arguments"])
+
+    assert resumed["action"] == "resumed"
+    assert resumed["classification"] == "restored"
+    assert resumed["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert not (destination_artifacts / ".odibi-anchor-restore-owner.json").exists()
+    assert _identity_and_tree(destination_artifacts)[1] == _identity_and_tree(artifacts)[1]
+    with sqlite3.connect(destination_db) as connection:
+        assert connection.execute("SELECT value FROM example ORDER BY id").fetchall() == [
+            ("alpha",), ("beta",),
+        ]
+
+
+def test_resume_refuses_tampered_incomplete_tree_without_deleting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error, _durable, _artifacts, _snapshot, destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+    tampered = destination_artifacts / "beta" / "notes.md"
+    tampered.write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.resume_restore(**error.next_operations[0]["arguments"])
+
+    assert cast(Any, caught.value).error_code == "restore_incomplete"
+    assert tampered.read_text() == "tampered\n"
+    assert (destination_artifacts / ".odibi-anchor-restore-owner.json").is_file()
+    assert not destination_db.exists()
+
+
+def test_abandon_quarantines_incomplete_restore_and_allows_fresh_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error, _durable, artifacts, _snapshot, destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+    incomplete_tree = _identity_and_tree(destination_artifacts)
+
+    abandoned = durability.abandon_restore(**error.next_operations[1]["arguments"])
+
+    quarantine = Path(abandoned["quarantine_path"])
+    assert abandoned["action"] == "quarantined"
+    assert not destination_artifacts.exists()
+    assert quarantine.parent.parent == destination_artifacts.parent
+    assert _identity_and_tree(quarantine) == incomplete_tree
+    restored = durability.restore_latest(**abandoned["next_operation"]["arguments"])
+    assert restored["classification"] == "restored"
+    assert _identity_and_tree(destination_artifacts)[1] == _identity_and_tree(artifacts)[1]
+    assert destination_db.is_file()
+
+
+@pytest.mark.parametrize("operation", ["resume_restore", "abandon_restore"])
+def test_restore_recovery_refuses_when_ownership_does_not_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    error, _durable, _artifacts, _snapshot, destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+    arguments = error.next_operations[0]["arguments"]
+    with pytest.raises(FileExistsError, match="does not match the requested authority_id") as mismatch:
+        getattr(durability, operation)(**{**arguments, "authority_id": "other"})
+    assert cast(Any, mismatch.value).error_code == "restore_destination_conflict"
+    impostor = destination_artifacts.parent / "impostor"
+    destination_artifacts.rename(destination_artifacts.parent / "original")
+    impostor.mkdir()
+    (impostor / ".odibi-anchor-restore-owner.json").write_bytes(
+        (destination_artifacts.parent / "original" / ".odibi-anchor-restore-owner.json").read_bytes()
+    )
+    impostor.rename(destination_artifacts)
+
+    with pytest.raises(FileExistsError, match="no incomplete restore owned by Anchor") as caught:
+        getattr(durability, operation)(**arguments)
+
+    assert cast(Any, caught.value).error_code == "restore_destination_conflict"
+    assert sorted(path.name for path in destination_artifacts.iterdir()) == [
+        ".odibi-anchor-restore-owner.json",
+    ]
+    assert not destination_db.exists()
+
+
+def test_restore_classifies_local_first_use_missing_root_and_missing_lineage(tmp_path: Path) -> None:
+    durable = tmp_path / "durable"
+    destination = tmp_path / "restored.db"
+    with pytest.raises(FileNotFoundError) as unavailable:
+        durability.restore_latest(durable_root=durable, destination_db=destination, authority_id="work")
+    assert cast(Any, unavailable.value).error_code == "durable_root_unavailable"
+
+    durable.mkdir()
+    with pytest.raises(durability.DurableSnapshotUnavailable) as first_use:
+        durability.restore_latest(durable_root=durable, destination_db=destination, authority_id="work")
+    assert cast(Any, first_use.value).classification == "no_lineage"
+
+    source = tmp_path / "live.db"
+    _database(source)
+    published = durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+    assert published["authority_marker"] == "created"
+    assert json.loads((durable / "work" / "AUTHORITY.json").read_text()) == {
+        "authority_id": "work", "format": "odibi-anchor-durable-authority-v1",
+    }
+    Path(published["manifest_path"]).unlink()
+    with pytest.raises(RuntimeError, match="durable lineage is missing") as missing:
+        durability.restore_latest(durable_root=durable, destination_db=destination, authority_id="work")
+    assert cast(Any, missing.value).error_code == "durable_lineage_missing"
+    assert cast(Any, missing.value).next_operations[0]["copy_ready"].startswith("anchor state list ")
+    assert not destination.exists()
+
+
+def test_existing_lineage_without_marker_restores_and_backfills_marker(tmp_path: Path) -> None:
+    durable, artifacts, snapshot = _v2_lineage(tmp_path)
+    marker = durable / "work" / "AUTHORITY.json"
+    marker.unlink()
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+
+    restored = durability.restore_latest(
+        durable_root=durable, destination_db=destination_db,
+        destination_artifacts=destination_artifacts, authority_id="work",
+    )
+    assert restored["classification"] == "restored"
+    assert restored["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert not marker.exists()
+
+    again = durability.snapshot_state(
+        source_db=tmp_path / "live.db", source_artifacts=artifacts,
+        durable_root=durable, authority_id="work",
+    )
+    assert again["action"] == "reused"
+    assert again["authority_marker"] == "created"
+    assert marker.is_file()
+
+
+def _strict_databricks(monkeypatch: pytest.MonkeyPatch) -> FakeDatabricksFiles:
+    files = FakeDatabricksFiles()
+    files.strict_listing = True
+    monkeypatch.setattr(durability, "_databricks_files_api", lambda: files)
+    monkeypatch.setattr(
+        durability, "_is_databricks_not_found", lambda error: isinstance(error, FakeDatabricksNotFound),
+    )
+    return files
+
+
+def test_databricks_restore_confirms_volume_root_before_first_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable = "/Volumes/catalog/schema/anchor"
+    destination = tmp_path / "restored.db"
+    files = _strict_databricks(monkeypatch)
+
+    def restore():
+        return durability.restore_latest(
+            durable_root=durable, destination_db=destination, authority_id="work", databricks=True,
+        )
+
+    files.missing_roots.add(durable)
+    with pytest.raises(FileNotFoundError, match=r"reports .* not found") as missing_root:
+        restore()
+    assert cast(Any, missing_root.value).error_code == "durable_root_unavailable"
+    with pytest.raises(FileNotFoundError, match=r"reports Volume /Volumes/catalog/schema/anchor not"):
+        durability.restore_latest(
+            durable_root=f"{durable}/never-created", destination_db=destination,
+            authority_id="work", databricks=True,
+        )
+
+    files.missing_roots.clear()
+    files.root_error = PermissionError("denied")
+    with pytest.raises(RuntimeError, match=r"could not confirm .*PermissionError: denied") as unreachable:
+        restore()
+    assert cast(Any, unreachable.value).error_code == "durable_root_unavailable"
+    assert isinstance(unreachable.value.__cause__, PermissionError)
+
+    files.root_error = None
+    with pytest.raises(durability.DurableSnapshotUnavailable) as first_use:
+        restore()
+    assert cast(Any, first_use.value).classification == "no_lineage"
+    with pytest.raises(durability.DurableSnapshotUnavailable):
+        durability.restore_latest(
+            durable_root=f"{durable}/never-created", destination_db=destination,
+            authority_id="work", databricks=True,
+        )
+
+    files.files[f"{durable}/work/AUTHORITY.json"] = b"{}"
+    with pytest.raises(RuntimeError, match="durable lineage is missing") as lineage:
+        restore()
+    assert cast(Any, lineage.value).error_code == "durable_lineage_missing"
+    assert not destination.exists()
+
+
+def test_parent_substitution_during_copy_cannot_redirect_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    real_copy = durability.shutil.copyfileobj
+    state = {"armed": False, "copies": 0}
+
+    def copy(incoming, outgoing, *args, **kwargs):
+        result = real_copy(incoming, outgoing, *args, **kwargs)
+        if state["armed"]:
+            state["copies"] += 1
+            if state["copies"] == 1:
+                problems = destination_artifacts / "alpha" / "problems"
+                problems.rename(tmp_path / "moved-problems")
+                problems.symlink_to(victim, target_is_directory=True)
+        return result
+
+    _before_copy(monkeypatch, lambda _destination: state.update(armed=True))
+    monkeypatch.setattr(durability.shutil, "copyfileobj", copy)
+
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert cast(Any, caught.value).error_code == "restore_incomplete"
+    assert "changed during copy" in cast(Any, caught.value).context["observed"]
+    assert list(victim.iterdir()) == []
+    assert (tmp_path / "moved-problems" / "P-1.md").read_text() == "# Evidence\n"
+    assert not destination_db.exists()
+
+
+def test_resume_uses_the_recorded_snapshot_not_a_newer_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error, durable, artifacts, snapshot, _destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+    recorded_tree = _identity_and_tree(artifacts)[1]
+    (artifacts / "beta" / "notes.md").write_text("newer\n", encoding="utf-8")
+    newer = durability.snapshot_state(
+        source_db=tmp_path / "live.db", source_artifacts=artifacts,
+        durable_root=durable, authority_id="work",
+    )
+    assert newer["manifest"]["snapshot_id"] != snapshot["manifest"]["snapshot_id"]
+
+    resumed = durability.resume_restore(**error.next_operations[0]["arguments"])
+
+    assert resumed["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert _identity_and_tree(destination_artifacts)[1] == recorded_tree
+
+
+def test_resume_offers_only_abandon_when_recorded_manifest_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error, durable, _artifacts, snapshot, destination_db, destination_artifacts = (
+        _incomplete_restore(tmp_path, monkeypatch)
+    )
+    (durable / "work" / "snapshots" / f"{snapshot['manifest']['snapshot_id']}.manifest.json").unlink()
+
+    with pytest.raises(RuntimeError, match="recorded snapshot manifest cannot be verified") as caught:
+        durability.resume_restore(**error.next_operations[0]["arguments"])
+
+    assert [item["operation"] for item in cast(Any, caught.value).next_operations] == [
+        "abandon_restore",
+    ]
+    assert (destination_artifacts / ".odibi-anchor-restore-owner.json").is_file()
+    assert not destination_db.exists()
+
+
+def test_marker_left_after_database_publication_is_finalized_by_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, artifacts, snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    marker = destination_artifacts / ".odibi-anchor-restore-owner.json"
+    real_unlink = durability.os.unlink
+
+    def crash_before_marker_removal(path, *args, **kwargs):
+        if Path(path) == marker and destination_db.exists():
+            raise KeyboardInterrupt("simulated crash after database publication")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(durability.os, "unlink", crash_before_marker_removal)
+    with pytest.raises(KeyboardInterrupt):
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+    monkeypatch.setattr(durability.os, "unlink", real_unlink)
+    assert destination_db.is_file() and marker.is_file()
+
+    with pytest.raises(RuntimeError, match="ownership marker was not removed") as caught:
+        durability.snapshot_state(
+            source_db=destination_db, source_artifacts=destination_artifacts,
+            durable_root=durable, authority_id="work",
+        )
+    operations = {item["operation"]: item for item in cast(Any, caught.value).next_operations}
+    with pytest.raises(FileExistsError, match="resume finalizes it"):
+        durability.abandon_restore(**operations["abandon_restore"]["arguments"])
+
+    finalized = durability.resume_restore(**operations["resume_restore"]["arguments"])
+
+    assert finalized["action"] == "finalized"
+    assert finalized["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    with sqlite3.connect(destination_db) as connection:
+        assert connection.execute("SELECT value FROM example ORDER BY id").fetchall() == [
+            ("alpha",), ("beta",),
+        ]
+    assert not marker.exists()
+    assert _identity_and_tree(destination_artifacts)[1] == _identity_and_tree(artifacts)[1]
+
+
+def test_foreign_database_blocks_resume_but_abandon_preserves_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+
+    def competitor_wins_database(_source: Path, destination: Path) -> None:
+        destination.write_bytes(b"competitor database")
+        raise FileExistsError(str(destination))
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", competitor_wins_database)
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+    operations = {item["operation"]: item for item in cast(Any, caught.value).next_operations}
+
+    with pytest.raises(FileExistsError, match="not the database this restore published") as refused:
+        durability.resume_restore(**operations["resume_restore"]["arguments"])
+    assert cast(Any, refused.value).error_code == "restore_destination_conflict"
+    abandoned = durability.abandon_restore(**operations["abandon_restore"]["arguments"])
+
+    assert destination_db.read_bytes() == b"competitor database"
+    assert not destination_artifacts.exists()
+    assert (Path(abandoned["quarantine_path"]) / ".odibi-anchor-restore-owner.json").is_file()
+
+
+def test_failed_ownership_marker_write_leaves_no_claimed_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, neighbor = _restore_paths(tmp_path)
+    real_fsync = durability.os.fsync
+    armed = {"on": False}
+
+    def fail_marker_fsync(descriptor):
+        if armed["on"]:
+            raise OSError("simulated marker write failure")
+        return real_fsync(descriptor)
+
+    _before_copy(monkeypatch, lambda _destination: armed.update(on=True))
+    monkeypatch.setattr(durability.os, "fsync", fail_marker_fsync)
+
+    with pytest.raises(OSError, match="simulated marker write failure"):
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+
+    assert not destination_artifacts.exists()
+    assert not destination_db.exists()
+    assert (neighbor / "keep.md").read_text() == "neighbor\n"
+
+
+def test_copied_database_left_with_marker_is_finalized_but_a_partial_copy_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable, _artifacts, snapshot = _v2_lineage(tmp_path)
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    marker = destination_artifacts / ".odibi-anchor-restore-owner.json"
+    real_link, real_unlink = durability.os.link, durability.os.unlink
+
+    def refuse_hard_links(source, destination, *args, **kwargs):
+        if Path(destination) == destination_db:
+            raise PermissionError(1, "hard links refused")
+        return real_link(source, destination, *args, **kwargs)
+
+    def crash_before_marker_removal(path, *args, **kwargs):
+        if Path(path) == marker and destination_db.exists():
+            raise KeyboardInterrupt("simulated crash after copied publication")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(durability.os, "link", refuse_hard_links)
+    monkeypatch.setattr(durability.os, "unlink", crash_before_marker_removal)
+    with pytest.raises(KeyboardInterrupt):
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work",
+        )
+    monkeypatch.setattr(durability.os, "unlink", real_unlink)
+    arguments = {
+        "durable_root": durable, "authority_id": "work", "destination_db": destination_db,
+        "destination_artifacts": destination_artifacts,
+    }
+    published = destination_db.read_bytes()
+    destination_db.write_bytes(published[: len(published) // 2])
+
+    with pytest.raises(FileExistsError, match="not the database this restore published"):
+        durability.resume_restore(**arguments)
+    destination_db.write_bytes(published)
+
+    finalized = durability.resume_restore(**arguments)
+
+    assert finalized["action"] == "finalized"
+    assert finalized["snapshot_id"] == snapshot["manifest"]["snapshot_id"]
+    assert not marker.exists()
+
+
+def test_databricks_resume_maps_lost_lineage_to_abandon_and_lets_transport_errors_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = _strict_databricks(monkeypatch)
+    durable = "/Volumes/catalog/schema/anchor"
+    source = tmp_path / "live.db"
+    artifacts = tmp_path / "projects"
+    (artifacts / "alpha").mkdir(parents=True)
+    (artifacts / "alpha" / "PROJECT.md").write_text("# Project\n", encoding="utf-8")
+    _database(source)
+    durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable,
+        authority_id="work", databricks=True,
+    )
+    destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
+    real_publish = durability._publish_file_exclusive
+
+    def fail_database(source_path: Path, destination: Path) -> None:
+        if destination == destination_db:
+            raise OSError("simulated database publication failure")
+        real_publish(source_path, destination)
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", fail_database)
+    with pytest.raises(RuntimeError, match="restore is incomplete") as caught:
+        durability.restore_latest(
+            durable_root=durable, destination_db=destination_db,
+            destination_artifacts=destination_artifacts, authority_id="work", databricks=True,
+        )
+    monkeypatch.setattr(durability, "_publish_file_exclusive", real_publish)
+    arguments = cast(Any, caught.value).next_operations[0]["arguments"]
+    real_download = files.download_to
+
+    def transient_download(path, destination, **kwargs):
+        raise ConnectionError("simulated transient Files API failure")
+
+    monkeypatch.setattr(files, "download_to", transient_download)
+    with pytest.raises(ConnectionError, match="transient"):
+        durability.resume_restore(**arguments)
+    monkeypatch.setattr(files, "download_to", real_download)
+
+    for name in [name for name in files.files if "/snapshots/" in name]:
+        del files.files[name]
+    with pytest.raises(RuntimeError, match="recorded snapshot manifest cannot be verified") as lost:
+        durability.resume_restore(**arguments)
+
+    assert [item["operation"] for item in cast(Any, lost.value).next_operations] == [
+        "abandon_restore",
+    ]
+    assert (destination_artifacts / ".odibi-anchor-restore-owner.json").is_file()
+    assert not destination_db.exists()
