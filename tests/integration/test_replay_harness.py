@@ -82,7 +82,7 @@ def _source_state(root: Path) -> tuple[Path, Path]:
     (projects / "alpha").mkdir(parents=True)
     (projects / "alpha" / "PROJECT.md").write_text("---\nid: alpha\n---\n")
     durability.ensure_database_authority(
-        database, authority_id="henry", trust_domain="work", initialize=True,
+        database, authority_id="alex", trust_domain="work", initialize=True,
     )
     return database, projects
 
@@ -97,7 +97,7 @@ def test_snapshot_publication_crash_never_exposes_a_partial_snapshot(databricks,
         durable_root = f"{DEFAULT_VOLUME}/{run.name}"
         prior = durability.snapshot_state(
             source_db=database, source_artifacts=projects, durable_root=durable_root,
-            authority_id="henry", databricks=True,
+            authority_id="alex", databricks=True,
         )
         (projects / "alpha" / "notes.md").write_text("new evidence\n")
         with sqlite3.connect(database) as connection:
@@ -108,19 +108,19 @@ def test_snapshot_publication_crash_never_exposes_a_partial_snapshot(databricks,
     def operation(state):
         state["published"] = durability.snapshot_state(
             source_db=state["database"], source_artifacts=state["projects"],
-            durable_root=state["durable_root"], authority_id="henry", databricks=True,
+            durable_root=state["durable_root"], authority_id="alex", databricks=True,
         )["manifest"]["snapshot_id"]
 
     def verify(state, point):
         listed = durability.list_snapshots(
-            durable_root=state["durable_root"], authority_id="henry", databricks=True,
+            durable_root=state["durable_root"], authority_id="alex", databricks=True,
         )["snapshots"]
         destination = state["run"] / "restored"
         destination.mkdir()
         restored = durability.restore_latest(
             durable_root=state["durable_root"], destination_db=destination / ".agent_memory.db",
             destination_artifacts=destination / "workspace" / "projects",
-            authority_id="henry", databricks=True,
+            authority_id="alex", databricks=True,
         )
         expected = state["prior"] if point is not None else state["published"]
         assert restored["snapshot_id"] == expected

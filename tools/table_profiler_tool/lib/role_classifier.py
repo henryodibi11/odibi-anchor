@@ -64,7 +64,7 @@ _FLAG_NAME_RE = re.compile(
 # Measure / metric columns
 _MEASURE_NAME_RE = re.compile(
     r"(?:^|_)(?:amount|total|sum|count|qty|quantity|price|cost|revenue|"
-    r"fee|rate|ratio|score|weight|capacity|mw|kwh|mwh|volume|"
+    r"fee|rate|ratio|score|weight|capacity|volume|"
     r"balance|budget|profit|margin|avg|average|pct|percent)(?:$|_)",
     re.IGNORECASE,
 )

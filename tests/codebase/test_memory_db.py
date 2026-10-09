@@ -155,22 +155,20 @@ class TestResolveProject:
     """Test project root to name mapping."""
 
     def test_odibi(self):
-        assert resolve_project("/Workspace/Users/user@example.com/data-engineering/odibi") == "odibi"
-
-    def test_queue_automation(self):
-        assert resolve_project("/Workspace/Users/user@example.com/data-engineering/queue-automation") == "queue-automation"
+        assert resolve_project("/Workspace/Users/user@example.com/projects/odibi") == "odibi"
 
     def test_odibi_anchor(self):
         assert resolve_project("/Workspace/Users/user@example.com/odibi_anchor") == "odibi_anchor"
 
-    def test_eaai_utilities(self):
-        assert resolve_project("/Workspace/Repos/eaai-common-resources/eaai-utilities") == "eaai-utilities"
+    def test_routed_fragment_matches_inside_deeper_paths_and_others_use_dirname(self):
+        assert resolve_project("/Workspace/Repos/team/odibi_anchor/src") == "odibi_anchor"
+        assert resolve_project("/Workspace/Repos/team/order-analytics/src") == "src"
 
     def test_unknown_fallback_to_dirname(self):
         assert resolve_project("/some/path/my-cool-project") == "my-cool-project"
 
     def test_path_object(self):
-                assert resolve_project(Path("/Workspace/Users/user@example.com/data-engineering/odibi")) == "odibi"
+                assert resolve_project(Path("/Workspace/Users/user@example.com/projects/odibi")) == "odibi"
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +485,7 @@ class TestLifecycle:
         r = insert_memory(db_path, project="all", type="gotcha",
                           content="Test entry", status="candidate")
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "Henry", "decision_source": "agent supplied", "evidence": "claimed approval",
+            "actor_ref": "Alex", "decision_source": "agent supplied", "evidence": "claimed approval",
         })
         assert c["action"] == "confirmation_blocked"
         assert c["status"] == "candidate" and c["confirmation_count"] == 0
@@ -500,7 +498,7 @@ class TestLifecycle:
     def test_unverified_human_or_receipt_fields_are_blocked(self, db_path):
         r = insert_memory(db_path, project="all", type="gotcha", content="Test entry")
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "henry", "decision_source": "review", "evidence": "reviewed exact content",
+            "actor_ref": "alex", "decision_source": "review", "evidence": "reviewed exact content",
         }, actor_kind="human", approval_receipt={"id": "caller-asserted"})
         assert c["action"] == "confirmation_blocked"
         assert c["recurrence_promotion"]["status"] == "unavailable"
@@ -509,7 +507,7 @@ class TestLifecycle:
         r = insert_memory(db_path, project="all", type="gotcha",
                           content="Test", confidence=0.95)
         c = confirm_memory_entry(db_path, entry_id=r["id"], human_review={
-            "actor_ref": "henry", "decision_source": "review", "evidence": "reviewed exact content",
+            "actor_ref": "alex", "decision_source": "review", "evidence": "reviewed exact content",
         })
         assert c["confidence"] == 0.5
 

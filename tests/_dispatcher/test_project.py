@@ -584,12 +584,12 @@ def test_route_path_identity_preserves_host_boundaries(tmp_path: Path) -> None:
 
     assert route_path_identity(f"{real}/") == route_path_identity(alias)
     assert route_path_identity(tmp_path / "CaseSensitive") != route_path_identity(tmp_path / "casesensitive")
-    assert route_path_identity("C:\\Users\\Henry\\Repo\\", platform="windows") == route_path_identity(
-        "c:/users/henry/repo",
+    assert route_path_identity("C:\\Users\\Example\\Repo\\", platform="windows") == route_path_identity(
+        "c:/users/example/repo",
         platform="windows",
     )
-    assert route_path_identity("/Workspace/Repos/henry/anchor") != route_path_identity(
-        "/dbfs/Workspace/Repos/henry/anchor"
+    assert route_path_identity("/Workspace/Repos/example/anchor") != route_path_identity(
+        "/dbfs/Workspace/Repos/example/anchor"
     )
 
 

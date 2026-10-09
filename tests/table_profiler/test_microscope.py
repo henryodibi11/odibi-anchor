@@ -34,7 +34,7 @@ def string_df():
     values = [
         "Alice", "Bob", "Charlie", "  Dave  ", "Eve",
         "", "N/A", "null", "Frank", "Grace",
-        "HENRY", "iris", "Jack Smith", "kate", "LEO",
+        "HELEN", "iris", "Jack Smith", "kate", "LEO",
         None, "Mike", "Nancy", "Oscar", "Pat",
     ]
     return pd.DataFrame({"name": values})

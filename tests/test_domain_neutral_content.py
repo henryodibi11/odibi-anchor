@@ -1,7 +1,7 @@
 """Guard: repository content stays domain-neutral.
 
-Examples, guidance and fixtures must not identify the owner's employer, people, internal
-systems, or the energy-industry domain. This test tokenizes every tracked text file (and the
+Examples, guidance and fixtures must not identify organizations, people, internal systems,
+or retired example domains. This test tokenizes every tracked text file (and the
 XML members of tracked zip containers such as .xlsx) and fails when a denylisted token appears.
 Third-party snapshots under ``.assistant/references/snapshots/`` are excluded.
 
@@ -31,28 +31,28 @@ EXCLUDED_PREFIXES = (".assistant/references/snapshots/",)
 MAX_SPAN_PARTS = 4
 
 DENYLIST_SHA256 = frozenset({
-    # personal or employer identifiers
+    # personal and organization identifiers
     "5e0176c9d2070a5a2a22bf74b4abed303654690d58d64221ccbd022af827abc4",
     "952868609bf256be5cc244fad1bf5de01ff5664e839bc02c144a2523ec346872",
     "e32717af922ec4f45732a082449ca805e99a3a19d6bb3698078b20e3b0714489",
     "b4c4f99f3b2fe1d7095ad9f39a3b7ce1736c1c9d9904f7c6e484dd2e10bf77ea",
     "605ededd8ce908aad9ffe490c2238736563ab417680e63346bdc19876fa9625e",
     "3ccbd9105a45d8fcd4a0101c6532c599f6f59cfa4d4ce378792f547a869a4bea",
-    # internal catalog and schema names
+    # internal system names
     "5af0c8d716a83273dc77aee0e84bcaf328f02526cc013ee46fa993fc71870a41",
     "cbade50ee7d5ca5bb6c82804dc5184a4b9205754fa9182b507753b6b9e06f350",
     "6784ac6b9758f20f4566cb23bd47140122e2000f0608b22317f152282e001f5d",
     "28700dbe9a45095d99fb8f49abb262408600e155b7410857cc01b02dd3a52ce6",
     "e601cf02d4efd6b2d77bd72002db431df930a05b1bcf9e3397cc9e0b36e6379c",
     "f502d12c289062a59164cd46caebe13a63280e994579e64e9f68fc11486933bb",
-    # grid operator names
+    # organization-specific names
     "74fd829f39136cbc94a1ebd2253c44d0e3bd7333b6b896c57f707467e0057d9f",
     "914ccee57b252e420137fa3f665c67482e5d9a95bb860ce17bcc78e1a06ac653",
     "c5db03c1b6dc9eee8482e1eeccd13b0d329c8a9f3fb5a74513a1b9202ee2a647",
     "16affacdd2cae3488ae8141c1c65ecf6915d3894a1a2a02c8a7fa40b6d7af5e1",
     "02f7cbec51895afa3c7b621ab752009ce0cecac844791fabb3d3da12395965b2",
     "798b3ab7f95ee6a72bb52bd3711683a4cda736a05d56675b16846e829b63c992",
-    # grid-connection request vocabulary
+    # legacy example-domain vocabulary
     "e13d31dd36c5b5fcc846d96d11413e0a601dc3df1251cdbda5c32bc725b18016",
     "7e88f6b74042179454f49b1b0943c6c5b0a98e9bd5858b4406b684b4fe8775f7",
     "9cb87871a7392bb8eb14340b3a9eb512defb005c003ed1635694935c8c4aee45",
@@ -67,7 +67,7 @@ DENYLIST_SHA256 = frozenset({
     "77ac1d4d815e3171e634edc3e2e88f1b42d73dd096c3913706ecb6bba41faeaf",
     "a21f28a4ac0b1de2557da8b07f3541dd07db656ebafdd29514db831786a99e19",
     "69299d5fd965e096cab76cc040c70eb7b447ff7ae72b43317752250e88d98cac",
-    # power-capacity vocabulary
+    # legacy example-domain measures
     "ab9bc75664d7032b2b24d757525603842b46f1f636739154551bda93308f9a25",
     "8e17371c330f0b0add506bdd11c666a7a79596bf96615bfd757108bdf549d0a4",
     "d0afa63c726b0a44fd8f67985c2f78ddf9410a308f591ae58f5e667839f07b01",
@@ -77,7 +77,7 @@ DENYLIST_SHA256 = frozenset({
     "5dd95f76a15599a820a2507fd1ce8e6cde8bc30ef81f154b2a6806fd0f3c405f",
     "cf0c7caa1cc55779e7ef489de20ba3c79aceda4fb91dd6d4ad042b23f91d2f71",
     "34b47b460d357bfde69f333b74c61682760f1ac3a66f763d508df1fc795a1231",
-    # utility company short names
+    # organization short names
     "f7c1fb1894e63838c7a2e783346a657241b00050d5e93a28206141f62dcbb3e8",
     "57cd285cc10d8e5b3f87526e9bb4b145a97ed5d1815f512b170f0c19ea6d7b29",
     "ad589ceb8b5ccca048911a0e4dcf5466a1f14dc9f50517c9a2c53988d7de2521",
@@ -87,18 +87,6 @@ DENYLIST_SHA256 = frozenset({
     "76e4952ce4de5226bdeb05a9935eb9c33e2eac2a95640f2b260fd7e2870d54a8",
     "b11be1856f3813f54e75311b0a5c066dccc94136f550852c6d189fb3363b30b2",
 })
-
-# Product routing behavior awaiting an owner decision; exempt only these digests in these files.
-EXEMPTIONS: dict[str, frozenset[str]] = {
-    "src/odibi_anchor/codebase/_memory_db.py": frozenset({
-        "b4c4f99f3b2fe1d7095ad9f39a3b7ce1736c1c9d9904f7c6e484dd2e10bf77ea",
-        "605ededd8ce908aad9ffe490c2238736563ab417680e63346bdc19876fa9625e",
-    }),
-    "tests/codebase/test_memory_db.py": frozenset({
-        "b4c4f99f3b2fe1d7095ad9f39a3b7ce1736c1c9d9904f7c6e484dd2e10bf77ea",
-        "605ededd8ce908aad9ffe490c2238736563ab417680e63346bdc19876fa9625e",
-    }),
-}
 
 _RUN = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
 _PART = re.compile(r"[a-z0-9]+|[_-]")
@@ -140,12 +128,11 @@ def _tracked_files() -> list[str]:
             if path and not path.startswith(EXCLUDED_PREFIXES)]
 
 
-def _violations(path: str, data: bytes) -> list[str]:
-    allowed = EXEMPTIONS.get(path, frozenset())
+def _violations(data: bytes) -> list[str]:
     found = set()
     for text in _texts(data):
         found |= {_digest(token) for token in _tokens(text)} & DENYLIST_SHA256
-    return sorted(found - allowed)
+    return sorted(found)
 
 
 def test_tokenizer_checks_identifier_sub_spans():
@@ -160,7 +147,7 @@ def test_tracked_files_contain_no_denylisted_tokens():
         file_path = ROOT / path
         if not file_path.is_file():
             continue
-        hits = _violations(path, file_path.read_bytes())
+        hits = _violations(file_path.read_bytes())
         if hits:
             offenders[path] = [digest[:12] for digest in hits]
     assert not offenders, (

@@ -171,6 +171,22 @@ class TestMeasure:
         assert result.value == ColumnRole.MEASURE
         assert result.confidence >= 0.85
 
+    def test_measure_name_hint_excludes_unit_suffixes_but_keeps_capacity(self):
+        def infer(name: str) -> Inference:
+            return infer_column_role(_profile(
+                name, spark_type="double", is_unique=False,
+                distinct_count=80, distinct_pct=0.80, mean_value=1500.0,
+            ))
+
+        hinted = infer("storage_capacity")
+        assert "name_matches_measure_pattern" in hinted.evidence
+        assert hinted.confidence >= 0.85
+        for name in ("peak_mw", "usage_kwh", "output_mwh"):
+            result = infer(name)
+            assert result.value == ColumnRole.MEASURE
+            assert "name_matches_measure_pattern" not in result.evidence
+            assert result.confidence < hinted.confidence
+
     def test_numeric_without_measure_name(self):
         p = _profile("value_x", spark_type="float",
                      is_unique=False, distinct_count=50, distinct_pct=0.50,

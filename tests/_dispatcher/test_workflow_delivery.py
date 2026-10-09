@@ -51,7 +51,7 @@ def delivery(tmp_path, monkeypatch):
     retain_evidence((db, producer, workflow))
     workflow = e.qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
                                   expected_generation=4, request_id="qualify")
-    provider = SimpleNamespace(expected_owner_id="henry", assurance="test_authenticated_owner",
+    provider = SimpleNamespace(expected_owner_id="alex", assurance="test_authenticated_owner",
                                transport=SimpleNamespace(name="fixture"))
     owner_module = importlib.import_module("odibi_anchor.human_input_owner")
     monkeypatch.setattr(owner_module, "select_owner_approval_provider", lambda: provider)
@@ -62,7 +62,7 @@ def delivery(tmp_path, monkeypatch):
 def approve(delivery, monkeypatch, **overrides):
     human = importlib.import_module("odibi_anchor.human_input")
     prepared = delivery.d.prepare_delivery(delivery.db, **delivery.args)
-    reply = {"response": prepared["approval_response"], "response_user_id": "henry",
+    reply = {"response": prepared["approval_response"], "response_user_id": "alex",
              "transport": "fixture", "request_id": "request:1", "response_message_id": "response:1"}
     reply.update(overrides)
     monkeypatch.setattr(human, "request_human_input_record", lambda *a, **k: SimpleNamespace(**reply))
@@ -107,7 +107,7 @@ def test_changed_bytes_during_approval_cannot_authorize(delivery, monkeypatch):
 
     def reply(*args, **kwargs):
         delivery.artifact.write_bytes(b"Different result\n")
-        return SimpleNamespace(response=prepared["approval_response"], response_user_id="henry",
+        return SimpleNamespace(response=prepared["approval_response"], response_user_id="alex",
                                transport="fixture", request_id="request:1", response_message_id="response:1")
 
     monkeypatch.setattr(human, "request_human_input_record", reply)

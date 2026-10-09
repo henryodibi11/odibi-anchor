@@ -94,7 +94,7 @@ def test_explicit_lifecycle_and_confirmation_telemetry(tmp_path):
     confirmed = _entry(db)
     rejected = _entry(db, "incorrect operational guidance")
     result = confirm_memory_entry(db, entry_id=confirmed, human_review={
-        "actor_ref": "henry", "decision_source": "review", "evidence": "reviewed exact content",
+        "actor_ref": "alex", "decision_source": "review", "evidence": "reviewed exact content",
     })
     reject_memory_entry(db, entry_id=rejected)
     row = get_db(db).execute(

@@ -561,14 +561,14 @@ def test_ownership_fields_are_preserved_and_prompted():
         task="Plan artifact test.",
         subject="artifact test",
         audience="agent",
-        requester="Henry",
+        requester="Alex",
         executor="Genie Code",
         priority="high",
         due_date="before Spark follow-up",
         stakeholders=["data engineering", "analytics engineering"],
     )
     assert context["ownership"] == {
-        "requester": "Henry",
+        "requester": "Alex",
         "executor": "Genie Code",
         "stakeholders": ["data engineering", "analytics engineering"],
         "priority": "high",
@@ -576,7 +576,7 @@ def test_ownership_fields_are_preserved_and_prompted():
     }
     prompt = context["handoff"]["prompt_brief"]
     assert "Requester:" in prompt
-    assert "Henry" in prompt
+    assert "Alex" in prompt
     assert "Executor:" in prompt
     assert "Genie Code" in prompt
     assert "Priority:" in prompt
@@ -632,7 +632,7 @@ def test_hints_include_human_questions_and_prompt_quality_checks():
 def test_ready_to_ask_ai_when_context_is_strong_enough():
     context = make_rich_context(
         expected_output_format="Return a concise test summary.",
-        requester="Henry",
+        requester="Alex",
         executor="Genie Code",
     )
     assert context["hints"]["ready_to_ask_ai"] is True
