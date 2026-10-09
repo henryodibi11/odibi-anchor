@@ -459,6 +459,13 @@ def prepare_portfolio_runtime(
             target_hint=target,
             runtime_instance_id="portfolio:prepare",
         )
+    except ValueError as exc:
+        # Surface structured route failures unchanged, adding the portfolio provenance.
+        if getattr(exc, "error_code", None) in {
+            "route_target_conflict", "managed_descriptor_damaged",
+        }:
+            exc.context.update(config_path=document["path"], host_id=host_id)  # type: ignore[attr-defined]
+        raise
     assert route is not None
     return {
         "kind": "portfolio_runtime_preparation",

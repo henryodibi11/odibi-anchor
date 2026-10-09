@@ -659,3 +659,311 @@ def test_binding_diagnostics_are_safe_and_registry_mutation_is_precise(tmp_path:
     assert route_binding_staleness_reason(binding) == (
         "bound managed project 'alpha' no longer exists"
     )
+
+
+def _referenced(tmp_path: Path, *, create_target: bool = True) -> tuple[Path, Path]:
+    target = tmp_path / "target-alpha"
+    if create_target:
+        target.mkdir()
+    project_action(tmp_path, "create", name="alpha", target=target, output_format="dict")
+    return target.resolve(), (tmp_path / "workspace" / "projects" / "alpha").resolve()
+
+
+def test_intact_referenced_descriptor_keeps_target_and_artifact_separate(tmp_path: Path) -> None:
+    from odibi_anchor._utils._session_state import is_managed_artifact_path
+
+    target, artifact = _referenced(tmp_path)
+
+    binding = resolve_route_binding(
+        tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-intact",
+    )
+    listed = project_action(tmp_path, "list", output_format="dict")["projects"]
+
+    assert binding is not None
+    assert (binding.target_root, binding.artifact_root) == (str(target), str(artifact))
+    assert listed[0]["integrity_status"] == "intact"
+    assert listed[0]["project_type"] == "referenced"
+    # Relative touched paths still resolve against the target, never the artifact root.
+    assert not is_managed_artifact_path(
+        "problems/notes.md", artifact_root=binding.artifact_root, target_root=binding.target_root,
+    )
+    assert is_managed_artifact_path(
+        str(artifact / "problems" / "notes.md"),
+        artifact_root=binding.artifact_root, target_root=binding.target_root,
+    )
+
+
+def _drop_line(text: str, prefix: str) -> str:
+    return "".join(line for line in text.splitlines(keepends=True) if not line.startswith(prefix))
+
+
+@pytest.mark.parametrize(
+    ("damage", "status", "missing", "detail"),
+    [
+        (
+            lambda text: text.split("---\n", 2)[2],
+            "missing_frontmatter", [], "first line is not the '---' frontmatter delimiter",
+        ),
+        (
+            lambda text: _drop_line(text, "target_root:"),
+            "missing_fields", ["target_root"], "required route fields are missing or empty",
+        ),
+        (
+            lambda text: text.replace("project_type: referenced\n", "project_type: referenced\nproject_type: managed\n"),
+            "malformed_frontmatter", [], "line 6 duplicates field 'project_type'",
+        ),
+        (
+            lambda _text: "# Alpha\n\nOwner notes replaced the whole file.\n\n---\n\nMore notes.\n",
+            "missing_frontmatter", [], "first line is not the '---' frontmatter delimiter",
+        ),
+    ],
+    ids=["missing_frontmatter", "missing_target_root", "malformed_frontmatter", "plain_markdown_replacement"],
+)
+def test_damaged_referenced_descriptor_fails_closed_without_rewrite(
+    tmp_path: Path, damage, status: str, missing: list[str], detail: str,
+) -> None:
+    import hashlib
+
+    target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    descriptor.write_text(damage(descriptor.read_text(encoding="utf-8")), encoding="utf-8")
+    damaged_bytes = descriptor.read_bytes()
+
+    with pytest.raises(ValueError, match="managed_descriptor_damaged") as caught:
+        resolve_route_binding(
+            tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-damaged",
+        )
+
+    assert caught.value.error_code == "managed_descriptor_damaged"  # type: ignore[attr-defined]
+    assert caught.value.context == {  # type: ignore[attr-defined]
+        "project_id": "alpha",
+        "descriptor_path": str(descriptor),
+        "descriptor_sha256": hashlib.sha256(damaged_bytes).hexdigest(),
+        "integrity_status": status,
+        "missing_fields": missing,
+        "detail": detail,
+        "artifact_root": str(artifact),
+        "requested_target": str(target),
+        "owner_decision_required": True,
+        "supported_repair_available": False,
+    }
+    assert caught.value.next_operations == []  # type: ignore[attr-defined]
+    # Detection is read-only: status reports the damage and never rewrites the bytes.
+    status_result = project_action(tmp_path, "status", output_format="dict")
+    assert status_result["projects"][0]["integrity_status"] == status
+    assert status_result["active_project_descriptor_damage"]["integrity_status"] == status
+    assert "Stop and ask the project owner" in status_result["suggested_next_actions"][0]
+    assert descriptor.read_bytes() == damaged_bytes
+
+
+def test_managed_project_whose_target_is_its_artifact_root_stays_valid(tmp_path: Path) -> None:
+    project_action(tmp_path, "create", name="alpha", output_format="dict")
+    artifact = (tmp_path / "workspace" / "projects" / "alpha").resolve()
+
+    binding = resolve_route_binding(
+        tmp_path, project="alpha", target_hint=artifact, runtime_instance_id="runtime-managed",
+    )
+
+    assert binding is not None
+    assert binding.target_root == binding.artifact_root == str(artifact)
+    assert resolve_active_project(tmp_path, "alpha")["project_type"] == "managed"  # type: ignore[index]
+
+
+@pytest.mark.parametrize("descriptor_target_exists", [False, True])
+def test_route_target_conflict_classifies_probable_move_or_ambiguous(
+    tmp_path: Path, descriptor_target_exists: bool,
+) -> None:
+    old_target, artifact = _referenced(tmp_path, create_target=descriptor_target_exists)
+    new_target = tmp_path / "moved" / "alpha"
+    new_target.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="conflicts with target hint") as caught:
+        resolve_route_binding(
+            tmp_path, project="alpha", target_hint=new_target, runtime_instance_id="runtime-conflict",
+        )
+
+    classification = "ambiguous" if descriptor_target_exists else "probable_move"
+    assert caught.value.error_code == "route_target_conflict"  # type: ignore[attr-defined]
+    assert caught.value.context == {  # type: ignore[attr-defined]
+        "project_id": "alpha",
+        "requested_target": str(new_target.resolve()),
+        "descriptor_target": str(old_target),
+        "artifact_root": str(artifact),
+        "config_path": None,
+        "classification": classification,
+        "classification_evidence": {
+            "descriptor_target_exists": descriptor_target_exists,
+            "requested_target_exists": True,
+        },
+        "owner_decision_required": True,
+        "supported_move_available": False,
+    }
+    assert caught.value.next_operations == []  # type: ignore[attr-defined]
+    assert "stop and ask the project owner" in str(caught.value)
+
+
+def test_set_target_on_damaged_descriptor_refuses_without_writing(tmp_path: Path) -> None:
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    descriptor.write_text("# Alpha\n\nReplaced by an agent.\n\n---\n", encoding="utf-8")
+    before = descriptor.read_bytes()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    with pytest.raises(ValueError, match="managed_descriptor_damaged") as caught:
+        project_action(tmp_path, "set_target", "alpha", target=replacement, output_format="dict")
+
+    assert caught.value.context["integrity_status"] == "missing_frontmatter"  # type: ignore[attr-defined]
+    assert caught.value.context["requested_target"] == str(replacement.resolve())  # type: ignore[attr-defined]
+    assert descriptor.read_bytes() == before
+    assert sorted(path.name for path in artifact.iterdir() if path.is_file()) == ["PROJECT.md"]
+
+
+def _record_accepted_task(database: Path, target: Path) -> None:
+    import sqlite3
+
+    from odibi_anchor.codebase._task_authority import initialize_schema
+
+    initialize_schema(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO accepted_task_records VALUES (?,?,?,?,?,?,?,?,?)",
+            ("ltw_prior", "rec_prior", "alpha", str(target), "source_change",
+             "2026-01-01T00:00:00Z", "{}", "0" * 64, "2026-01-01T00:00:00Z"),
+        )
+
+
+def _record_workflow(database: Path, target: Path) -> None:
+    import json
+    import sqlite3
+
+    from odibi_anchor.codebase._workflow import _DDL
+
+    owner = {"project_id": "alpha", "target_root": str(target)}
+    with sqlite3.connect(database) as connection:
+        for statement in _DDL:
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO workflow_events VALUES (?,?,?,?,?,?,?)",
+            ("wf_prior", 0, "req", "0" * 64, "", json.dumps({"state": {"owner": owner}}), "0" * 64),
+        )
+
+
+@pytest.mark.parametrize(
+    ("record", "label", "identifier"),
+    [(_record_accepted_task, "accepted_tasks", "ltw_prior"), (_record_workflow, "workflows", "wf_prior")],
+    ids=["accepted_task", "workflow"],
+)
+def test_set_target_refuses_when_authority_records_bind_the_current_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record, label: str, identifier: str,
+) -> None:
+    target, artifact = _referenced(tmp_path)
+    database = tmp_path / "authority.db"
+    monkeypatch.setenv("ANCHOR_MEMORY_DB", str(database))
+    record(database, target)
+    descriptor = artifact / "PROJECT.md"
+    before = descriptor.read_bytes()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    with pytest.raises(ValueError, match="project_retarget_requires_migration") as caught:
+        project_action(tmp_path, "set_target", "alpha", target=replacement, output_format="dict")
+
+    context = caught.value.context  # type: ignore[attr-defined]
+    assert caught.value.error_code == "project_retarget_requires_migration"  # type: ignore[attr-defined]
+    assert context["current_target"] == str(target)
+    assert context["requested_target"] == str(replacement.resolve())
+    assert context["invalidated"] == {
+        label: {"count": 1, "ids": [identifier], "databases": [str(database.resolve())]},
+    }
+    assert descriptor.read_bytes() == before
+
+
+def test_unreadable_descriptor_is_reported_and_fails_closed(tmp_path: Path) -> None:
+    import os
+
+    if os.name == "nt" or os.geteuid() == 0:
+        pytest.skip("permission bits cannot make a file unreadable here")
+    target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    descriptor.chmod(0)
+    try:
+        status_result = project_action(tmp_path, "status", output_format="dict")
+        with pytest.raises(ValueError, match="managed_descriptor_damaged") as caught:
+            resolve_route_binding(
+                tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-unreadable",
+            )
+    finally:
+        descriptor.chmod(0o644)
+
+    assert status_result["projects"][0]["integrity_status"] == "unreadable"
+    assert status_result["active_project_descriptor_damage"]["integrity_status"] == "unreadable"
+    assert caught.value.context["integrity_status"] == "unreadable"  # type: ignore[attr-defined]
+    assert caught.value.context["descriptor_sha256"] is None  # type: ignore[attr-defined]
+
+
+def test_set_target_on_never_launched_project_rewrites_only_route_lines_atomically(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    original = descriptor.read_text(encoding="utf-8")
+    descriptor.write_text(original + "\n## Owner notes\n\n---\n\ntarget_root: prose\n", encoding="utf-8")
+    before = descriptor.read_bytes()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    result = project_action(
+        tmp_path, "set_target", "alpha", target=replacement,
+        expected_sha256=hashlib.sha256(before).hexdigest(), output_format="dict",
+    )
+
+    after = descriptor.read_bytes()
+    assert result["target_updated"] is True
+    assert result["reinitialize_required"] is False
+    assert result["descriptor_sha256"] == hashlib.sha256(after).hexdigest()
+    assert after == before.replace(
+        f"target_root: {_target}\n".encode(), f"target_root: {replacement.resolve()}\n".encode(), 1,
+    )
+    assert after.endswith(b"---\n\ntarget_root: prose\n")
+    assert sorted(path.name for path in artifact.iterdir() if path.is_file()) == ["PROJECT.md"]
+    assert resolve_active_project(tmp_path, "alpha")["target_root"] == str(replacement.resolve())  # type: ignore[index]
+
+
+def test_set_target_with_stale_expected_sha256_refuses(tmp_path: Path) -> None:
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    before = descriptor.read_bytes()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    with pytest.raises(ValueError, match="managed_descriptor_changed") as caught:
+        project_action(
+            tmp_path, "set_target", "alpha", target=replacement,
+            expected_sha256="0" * 64, output_format="dict",
+        )
+
+    assert caught.value.context["expected_sha256"] == "0" * 64  # type: ignore[attr-defined]
+    assert caught.value.next_operation["copy_ready"] == (  # type: ignore[attr-defined]
+        "anchor('project', 'status', output_format='dict')"
+    )
+    assert descriptor.read_bytes() == before
+
+
+def test_unrepresentable_target_is_refused_before_any_descriptor_write(tmp_path: Path) -> None:
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    before = descriptor.read_bytes()
+    quoted = tmp_path / "quoted-target'"
+    quoted.mkdir()
+
+    with pytest.raises(ValueError, match="cannot be represented"):
+        project_action(tmp_path, "set_target", "alpha", target=quoted, output_format="dict")
+    with pytest.raises(ValueError, match="cannot be represented"):
+        project_action(tmp_path, "create", name="beta", target=quoted, output_format="dict")
+
+    assert descriptor.read_bytes() == before
+    assert resolve_active_project(tmp_path, "alpha")["target_root"] == str(_target)  # type: ignore[index]
+    assert not (tmp_path / "workspace" / "projects" / "beta").exists()

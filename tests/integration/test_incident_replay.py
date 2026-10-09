@@ -80,7 +80,6 @@ def test_fresh_compute_restores_route_and_continuity(replay, databricks):
 # ── #29 descriptor loss ──────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="#29 WS-A pending: managed_descriptor_damaged")
 @pytest.mark.parametrize("resume", ["restart", "new_compute"])
 def test_plain_markdown_descriptor_fails_closed_as_damaged(replay, resume):
     created = replay.create_project("alpha")
@@ -110,7 +109,6 @@ def test_plain_markdown_descriptor_fails_closed_as_damaged(replay, resume):
 # ── #30 target moves ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="#30 WS-A pending: project_retarget_requires_migration")
 def test_set_target_on_launched_project_is_refused_and_project_still_boots(replay, workflow):
     original = replay.target("alpha")
     moved = replay.target("alpha-moved")
@@ -135,7 +133,6 @@ def test_set_target_on_launched_project_is_refused_and_project_still_boots(repla
     assert rebooted["startup_packet"]["target_root"] == str(original)
 
 
-@pytest.mark.xfail(strict=True, reason="#30 WS-A pending: route_target_conflict probable_move")
 def test_portfolio_target_move_on_fresh_compute_is_classified(replay):
     original = replay.target("alpha")
     created = replay.create_project("alpha", original)

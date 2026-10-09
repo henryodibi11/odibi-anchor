@@ -11,12 +11,24 @@ import json
 import ntpath
 import os
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from odibi_anchor._dispatcher._descriptor import (
+    DESCRIPTOR_NAME,
+    DescriptorIntegrity,
+    descriptor_damaged_error,
+    read_descriptor,
+    render_route_update,
+    require_route_roundtrip,
+    validate_sha256,
+    write_descriptor_atomic,
+)
+
 _ACTIVE_PROJECT_FILE = ".active_project"
-_PROJECT_DESCRIPTOR = "PROJECT.md"
+_PROJECT_DESCRIPTOR = DESCRIPTOR_NAME
 ROUTE_BINDING_SCHEMA_VERSION = "1.0"
 _BINDING_SOURCES = frozenset({"explicit", "target_match", "legacy_selector"})
 ARTIFACT_CONTRACT_VERSION = "1.2"
@@ -285,6 +297,13 @@ def route_binding_staleness_reason(binding: RouteBinding) -> str | None:
         current = resolve_active_project(binding.anchor_home, binding.project_id)
     except FileNotFoundError:
         return f"bound managed project '{binding.project_id}' no longer exists"
+    except ValueError as exc:
+        if getattr(exc, "error_code", None) != "managed_descriptor_damaged":
+            raise
+        return (
+            f"bound managed project '{binding.project_id}' descriptor is damaged "
+            f"({exc.context['integrity_status']})"  # type: ignore[attr-defined]
+        )
     assert current is not None
     if route_path_identity(current["artifact_root"]) != route_path_identity(
         binding.artifact_root
@@ -427,32 +446,101 @@ def resolve_active_project(
 ) -> dict[str, str] | None:
     """Resolve an explicit or remembered managed project.
 
-    An explicit missing project is an error. Stale remembered state is ignored so
-    Odibi Anchor can still boot from its own home.
+    An explicit missing project is an error. A remembered selector naming a missing
+    project is ignored so Odibi Anchor can still boot from its own home; a present but
+    damaged descriptor always fails closed with ``managed_descriptor_damaged``.
     """
     explicit = project is not None
     project_id = _normalize_project_id(project) if explicit else _read_active_project_id(anchor_home)
     if project_id is None:
         return None
     project_root = _managed_project_root(anchor_home, project_id)
-    if not (project_root / _PROJECT_DESCRIPTOR).is_file():
+    if not _descriptor_present(project_root):
         if explicit:
             raise FileNotFoundError(
                 f"Managed project '{project_id}' does not exist. "
                 f"Create it with anchor('project', 'create', name='{project_id}')."
             )
         return None
-    descriptor = _parse_descriptor(project_root)
-    configured_target = descriptor.get("target_root")
-    if configured_target and not Path(configured_target).is_absolute():
-        configured_target = str((project_root / configured_target).resolve())
+    integrity = read_descriptor(project_root)
+    if not integrity.intact:
+        # Never substitute the artifact root for a damaged or unreadable route target.
+        raise descriptor_damaged_error(
+            integrity, project_id=project_id, artifact_root=str(project_root)
+        )
     return {
         "project_id": project_id,
         "project_root": str(project_root),
         "artifact_root": str(project_root),
-        "target_root": configured_target or str(project_root),
-        "project_type": descriptor.get("project_type", "managed"),
+        "target_root": _descriptor_target(project_root, integrity),
+        "project_type": integrity.fields["project_type"],
     }
+
+
+def _descriptor_present(project_root: Path) -> bool:
+    """Return descriptor presence; an unreadable directory is present and later unreadable."""
+    try:
+        return (project_root / _PROJECT_DESCRIPTOR).is_file()
+    except PermissionError:
+        return True
+
+
+def _descriptor_target(project_root: Path, integrity: DescriptorIntegrity) -> str:
+    """Resolve an intact descriptor target; relative targets anchor at the artifact root."""
+    configured = integrity.fields["target_root"]
+    if not Path(configured).is_absolute():
+        return str((project_root / configured).resolve())
+    return configured
+
+
+def _route_target_conflict(
+    active: dict[str, str], target_hint: str | Path
+) -> ValueError:
+    """Classify a requested-versus-descriptor target mismatch from simple disk evidence.
+
+    ``probable_move`` means the descriptor target is absent while the requested target
+    exists; every other combination is ``ambiguous``. Neither grants retarget authority.
+    """
+    from odibi_anchor._recovery import attach_recovery
+
+    requested = _normalize_target(target_hint)
+    descriptor_target = active["target_root"]
+    descriptor_exists = Path(descriptor_target).exists()
+    requested_exists = Path(requested).exists()
+    classification = (
+        "probable_move" if not descriptor_exists and requested_exists else "ambiguous"
+    )
+    explanation = (
+        "The descriptor target is absent and the requested target exists, which resembles "
+        "a target move."
+        if classification == "probable_move"
+        else "The mismatch cannot be classified safely from the observed targets."
+    )
+    return attach_recovery(
+        ValueError(
+            f"Managed project '{active['project_id']}' conflicts with target hint "
+            f"(route_target_conflict, {classification}): requested target {requested!r} "
+            f"differs from the intact descriptor target {descriptor_target!r}. "
+            f"{explanation} No supported move-target operation exists in this version; "
+            "stop and ask the project owner. Do not edit PROJECT.md, the portfolio, or "
+            "Anchor state manually."
+        ),
+        error_code="route_target_conflict",
+        context={
+            "project_id": active["project_id"],
+            "requested_target": requested,
+            "descriptor_target": descriptor_target,
+            "artifact_root": active["artifact_root"],
+            "config_path": None,
+            "classification": classification,
+            "classification_evidence": {
+                "descriptor_target_exists": descriptor_exists,
+                "requested_target_exists": requested_exists,
+            },
+            "owner_decision_required": True,
+            "supported_move_available": False,
+        },
+    )
 
 
 def resolve_route_binding(
@@ -485,26 +573,54 @@ def resolve_route_binding(
         )
 
     if project is not None:
-        active = resolve_active_project(home, project)
+        try:
+            active = resolve_active_project(home, project)
+        except ValueError as exc:
+            if target_hint is not None and getattr(exc, "error_code", None) == (
+                "managed_descriptor_damaged"
+            ):
+                exc.context["requested_target"] = _normalize_target(target_hint)  # type: ignore[attr-defined]
+            raise
         assert active is not None
         if target_hint is not None and route_path_identity(
             active["target_root"]
         ) != route_path_identity(target_hint):
-            raise ValueError(
-                f"Managed project '{active['project_id']}' conflicts with target hint; "
-                "use the registry target or explicitly retarget the project before startup."
-            )
+            raise _route_target_conflict(active, target_hint)
         return bind(active, "explicit")
 
     if target_hint is not None:
         target_identity = route_path_identity(target_hint)
         matches: list[dict[str, str]] = []
+        damaged: list[str] = []
         for item in _list_projects(home):
+            if item["integrity_status"] != "intact":
+                # A damaged descriptor claims no target; it can never be matched.
+                damaged.append(item["id"])
+                continue
             candidate = resolve_active_project(home, item["id"])
             if candidate is not None and route_path_identity(
                 candidate["target_root"]
             ) == target_identity:
                 matches.append(candidate)
+        if not matches and damaged:
+            # The intended project may be one whose route descriptor is damaged.
+            damaged_root = _managed_project_root(home, damaged[0])
+            error = descriptor_damaged_error(
+                read_descriptor(damaged_root), project_id=damaged[0],
+                artifact_root=str(damaged_root), requested_target=_normalize_target(target_hint),
+            )
+            error.args = (
+                f"No intact managed project claims target {str(target_hint)!r}; damaged "
+                f"project(s) {', '.join(damaged)} may be the intended one. {error.args[0]}",
+            )
+            error.context.update(  # type: ignore[attr-defined]
+                damaged_project_ids=damaged,
+                match_reason=(
+                    "no intact project claims the requested target; a damaged project may be "
+                    "the intended one"
+                ),
+            )
+            raise error
         if not matches:
             raise FileNotFoundError(
                 f"No managed project target matches {str(target_hint)!r}; "
@@ -581,40 +697,28 @@ def resolve_runtime_roots(
     )
 
 
-def _parse_descriptor(project_root: Path) -> dict[str, str]:
-    """Read the small flat frontmatter contract from ``PROJECT.md``."""
-    values: dict[str, str] = {}
-    try:
-        lines = (project_root / _PROJECT_DESCRIPTOR).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    if not lines or lines[0].strip() != "---":
-        return values
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        if ":" in line:
-            key, value = line.split(":", 1)
-            values[key.strip()] = value.strip().strip("\"'")
-    return values
-
-
-def _list_projects(anchor_home: str | Path) -> list[dict[str, str]]:
-    """Return managed projects in stable ID order."""
+def _list_projects(anchor_home: str | Path) -> list[dict[str, Any]]:
+    """Return managed projects in stable ID order with read-only descriptor integrity."""
     projects_root = _workspace_root(anchor_home) / "projects"
     if not projects_root.is_dir():
         return []
-    projects: list[dict[str, str]] = []
+    projects: list[dict[str, Any]] = []
     for project_root in sorted((path for path in projects_root.iterdir() if path.is_dir()), key=lambda p: p.name):
-        if not (project_root / _PROJECT_DESCRIPTOR).is_file():
+        if not _descriptor_present(project_root):
             continue
-        descriptor = _parse_descriptor(project_root)
+        try:
+            integrity = read_descriptor(project_root)
+        except FileNotFoundError:
+            continue
+        fields = integrity.fields
         projects.append({
-            "id": descriptor.get("id", project_root.name),
-            "name": descriptor.get("name", project_root.name.replace("-", " ").title()),
-            "status": descriptor.get("status", "active"),
-            "project_type": descriptor.get("project_type", "managed"),
+            "id": project_root.name,
+            "name": fields.get("name") or project_root.name.replace("-", " ").title(),
+            "status": fields.get("status") or "active",
+            "project_type": fields.get("project_type") if integrity.intact else None,
             "path": str(project_root.resolve()),
+            "integrity_status": integrity.status,
+            "descriptor_sha256": integrity.sha256,
         })
     return projects
 
@@ -639,10 +743,6 @@ def _create_project(
         )
     target_root = _normalize_target(target) if target is not None else str(project_root)
     project_type = "referenced" if target is not None else "managed"
-
-    project_root.mkdir(parents=True, exist_ok=False)
-    for directory in _PROJECT_DIRECTORIES:
-        (project_root / directory).mkdir(exist_ok=True)
     display_name = name.strip()
     descriptor = (
         "---\n"
@@ -669,7 +769,13 @@ def _create_project(
         "## External references\n\n"
         "[Add repositories, Databricks workspaces, catalogs, dashboards, or services.]\n"
     )
-    descriptor_path.write_text(descriptor, encoding="utf-8")
+    require_route_roundtrip(
+        descriptor, path=str(descriptor_path), project_id=project_id, target_root=target_root,
+    )
+    project_root.mkdir(parents=True, exist_ok=False)
+    for directory in _PROJECT_DIRECTORIES:
+        (project_root / directory).mkdir(exist_ok=True)
+    write_descriptor_atomic(descriptor_path, descriptor, expected_sha256=None)
     _write_active_project_id(anchor_home, project_id)
     return {
         "created": True,
@@ -791,6 +897,8 @@ def _render_project_context(result: dict[str, Any]) -> str:
         lines.append("")
         for item in projects:
             marker = " (active)" if item["id"] == active_project else ""
+            if item.get("integrity_status", "intact") != "intact":
+                marker += f" (descriptor {item['integrity_status']})"
             lines.append(f"- **{item['id']}**{marker} — {item['status']} — `{item['path']}`")
     else:
         lines.append("No managed projects. Create one with `anchor('project', 'create', name='...')`.")
@@ -798,6 +906,219 @@ def _render_project_context(result: dict[str, Any]) -> str:
         lines.extend(["", "## Next actions", ""])
         lines.extend(f"- {action}" for action in result["suggested_next_actions"])
     return "\n".join(lines)
+
+
+def _remembered_project(
+    anchor_home: Path,
+) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+    """Resolve the legacy selector, reporting descriptor damage instead of raising."""
+    try:
+        return resolve_active_project(anchor_home), None
+    except ValueError as exc:
+        if getattr(exc, "error_code", None) != "managed_descriptor_damaged":
+            raise
+        return None, dict(exc.context)  # type: ignore[attr-defined]
+
+
+def _authority_records(database: Path, project_id: str, target_root: str) -> dict[str, list[str]]:
+    """Read-only lookup of authority records whose exact owner names one target.
+
+    Accepted tasks and workflow events store ``target_root`` in their owner identity;
+    memory abandonment/recovery receipts store its SHA-256 identity. Each lookup matches
+    both the raw descriptor value and the canonical form used by that record's writer.
+    """
+    resolved = str(Path(target_root).expanduser().resolve())
+    accepted = sorted({target_root, os.path.normcase(resolved)})
+    owners = sorted({target_root, resolved})
+    digests = sorted({
+        hashlib.sha256(value.encode("utf-8")).hexdigest() for value in (target_root, resolved)
+    })
+
+    def among(values: list[str]) -> str:
+        return "(" + ",".join("?" for _ in values) + ")"
+
+    connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        tables = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        queries = {
+            "accepted_task_records": (
+                "accepted_tasks",
+                "SELECT task_window_id FROM accepted_task_records WHERE project_id=? "
+                f"AND target_root IN {among(accepted)} ORDER BY task_window_id",
+                (project_id, *accepted),
+            ),
+            "workflow_events": (
+                "workflows",
+                "SELECT DISTINCT workflow_id FROM workflow_events WHERE "
+                "json_extract(event_json,'$.state.owner.project_id')=? AND "
+                f"json_extract(event_json,'$.state.owner.target_root') IN {among(owners)} "
+                "ORDER BY workflow_id",
+                (project_id, *owners),
+            ),
+            "memory_selection_abandonments": (
+                "memory_abandonment_receipts",
+                "SELECT abandonment_id FROM memory_selection_abandonments WHERE project_id=? "
+                f"AND target_identity_sha256 IN {among(digests)} ORDER BY abandonment_id",
+                (project_id, *digests),
+            ),
+            "memory_selection_recoveries": (
+                "memory_recovery_receipts",
+                "SELECT recovery_id FROM memory_selection_recoveries WHERE project_id=? "
+                f"AND target_identity_sha256 IN {among(digests)} ORDER BY recovery_id",
+                (project_id, *digests),
+            ),
+        }
+        found: dict[str, list[str]] = {}
+        for table, (label, sql, parameters) in queries.items():
+            if table in tables:
+                identifiers = [row[0] for row in connection.execute(sql, parameters)]
+                if identifiers:
+                    found[label] = identifiers
+        return found
+    finally:
+        connection.close()
+
+
+def _retarget_invalidations(
+    anchor_home: Path, project_id: str, artifact_root: Path, old_target: str, new_target: str,
+) -> dict[str, Any]:
+    """Name continuity and authority records that a retarget would orphan."""
+    invalidated: dict[str, Any] = {}
+    sentinel = artifact_root / "continuity" / "v1" / "OWNER.json"
+    if sentinel.exists() or sentinel.is_symlink():
+        try:
+            owner_target = json.loads(sentinel.read_text(encoding="utf-8")).get("target_root")
+            owner_matches = route_path_identity(owner_target) == route_path_identity(new_target)
+        except (OSError, ValueError, AttributeError, TypeError):
+            # An unreadable or malformed sentinel cannot prove the retarget is safe.
+            owner_target, owner_matches = None, False
+        if not owner_matches:
+            invalidated["continuity_owner"] = {"path": str(sentinel), "target_root": owner_target}
+    from odibi_anchor.codebase._memory_db import _resolve_default_db_path
+
+    databases: list[Path] = []
+    for candidate in (Path(_resolve_default_db_path()), anchor_home / ".agent_memory.db"):
+        resolved = candidate.resolve()
+        if resolved not in databases and resolved.is_file():
+            databases.append(resolved)
+    for database in databases:
+        try:
+            records = _authority_records(database, project_id, old_target)
+        except (OSError, sqlite3.Error) as exc:
+            invalidated.setdefault("authority_unavailable", []).append(
+                {"database": str(database), "error_type": type(exc).__name__}
+            )
+            continue
+        for label, identifiers in records.items():
+            entry = invalidated.setdefault(label, {"count": 0, "ids": [], "databases": []})
+            entry["count"] += len(identifiers)
+            entry["ids"] = (entry["ids"] + identifiers)[:20]
+            entry["databases"].append(str(database))
+    return invalidated
+
+
+def _set_target(
+    anchor_home: Path, project_id: str, target_root: str, *, expected_sha256: str | None,
+) -> dict[str, Any]:
+    """Retarget one never-launched project by atomically rewriting only its route lines."""
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    project_root = _managed_project_root(anchor_home, project_id)
+    descriptor_path = project_root / _PROJECT_DESCRIPTOR
+    if not descriptor_path.is_file():
+        resolve_active_project(anchor_home, project_id)  # Raises the standard missing-project error.
+    integrity = read_descriptor(project_root)
+    if not integrity.intact:
+        raise descriptor_damaged_error(
+            integrity, project_id=project_id, artifact_root=str(project_root),
+            requested_target=target_root,
+        )
+    current_target = _descriptor_target(project_root, integrity)
+    status_operation = dispatcher_operation(
+        "project", "status", kwargs={"output_format": "dict"},
+        reason="read the current descriptor_sha256 and route before asking the owner how to proceed",
+    )
+
+    def changed(actual: str | None) -> ValueError:
+        return attach_recovery(
+            ValueError(
+                f"Managed project '{project_id}' descriptor changed (managed_descriptor_changed): "
+                f"expected sha256 {expected_sha256 or integrity.sha256}, found {actual or 'absent'}. "
+                "The descriptor was not changed; re-read it before deciding whether to retry."
+            ),
+            error_code="managed_descriptor_changed",
+            context={
+                "project_id": project_id,
+                "descriptor_path": str(descriptor_path),
+                "expected_sha256": expected_sha256 or integrity.sha256,
+                "actual_sha256": actual,
+                "requested_target": target_root,
+            },
+            next_operations=[status_operation],
+        )
+
+    if expected_sha256 is not None and expected_sha256 != integrity.sha256:
+        raise changed(integrity.sha256)
+    target_changed = route_path_identity(current_target) != route_path_identity(target_root)
+    if target_changed:
+        invalidated = _retarget_invalidations(
+            anchor_home, project_id, project_root, current_target, target_root
+        )
+        if invalidated:
+            raise attach_recovery(
+                ValueError(
+                    f"Managed project '{project_id}' cannot be retargeted from "
+                    f"{current_target!r} to {target_root!r} "
+                    "(project_retarget_requires_migration): records bound to the current "
+                    "target would be invalidated or could not be verified: "
+                    f"{', '.join(sorted(invalidated))}. The descriptor was not changed. No "
+                    "supported retarget migration exists in this version; stop and ask the "
+                    "project owner. Do not edit PROJECT.md, continuity files, or SQLite manually."
+                ),
+                error_code="project_retarget_requires_migration",
+                context={
+                    "project_id": project_id,
+                    "descriptor_path": str(descriptor_path),
+                    "descriptor_sha256": integrity.sha256,
+                    "artifact_root": str(project_root),
+                    "current_target": current_target,
+                    "requested_target": target_root,
+                    "invalidated": invalidated,
+                    "owner_decision_required": True,
+                    "supported_migration_available": False,
+                },
+            )
+    updated = render_route_update(
+        integrity, {"project_type": "referenced", "target_root": target_root}
+    )
+    require_route_roundtrip(
+        updated, path=str(descriptor_path), project_id=project_id, target_root=target_root,
+    )
+    descriptor_sha256 = integrity.sha256
+    if updated != integrity.text:
+        try:
+            descriptor_sha256 = write_descriptor_atomic(
+                descriptor_path, updated, expected_sha256=integrity.sha256
+            )
+        except FileExistsError as exc:
+            actual = (
+                hashlib.sha256(descriptor_path.read_bytes()).hexdigest()
+                if descriptor_path.is_file() else None
+            )
+            raise changed(actual) from exc
+    return {
+        "target_updated": updated != integrity.text,
+        "project_root": str(project_root),
+        "artifact_root": str(project_root),
+        "target_root": target_root,
+        "previous_target_root": current_target,
+        "project_type": "referenced",
+        "descriptor_path": str(descriptor_path),
+        "previous_descriptor_sha256": integrity.sha256,
+        "descriptor_sha256": descriptor_sha256,
+    }
 
 
 def project_action(
@@ -810,6 +1131,7 @@ def project_action(
     route_binding: RouteBinding | None = None,
     routing_stale: bool = False,
     dry_run: bool = True,
+    expected_sha256: str | None = None,
     output_format: str = "markdown",
     **_extra: Any,
 ) -> dict[str, Any] | str:
@@ -822,7 +1144,7 @@ def project_action(
 
     command = str(args[0]).lower().strip() if args else "list"
     command_arg = str(args[1]) if len(args) > 1 else None
-    active = resolve_active_project(anchor_home_path)
+    active, active_damage = _remembered_project(anchor_home_path)
     result: dict[str, Any] = {
         "kind": "project_context",
         "anchor_home": str(anchor_home_path),
@@ -866,39 +1188,19 @@ def project_action(
             result["runtime_binding_unchanged"] = True
     elif command == "set_target":
         project_id = _normalize_project_id(command_arg or name or "")
-        resolved = resolve_active_project(anchor_home_path, project_id)
-        assert resolved is not None
         if target is None:
             raise ValueError("set_target requires target=...")
-        descriptor_path = Path(resolved["project_root"]) / _PROJECT_DESCRIPTOR
-        descriptor = descriptor_path.read_text(encoding="utf-8")
-        target_root = _normalize_target(target)
-        descriptor = re.sub(r"^project_type:.*$", "project_type: referenced", descriptor, count=1, flags=re.MULTILINE)
-        if re.search(r"^target_root:", descriptor, flags=re.MULTILINE):
-            descriptor = re.sub(
-                r"^target_root:.*$",
-                lambda _match: f"target_root: {target_root}",
-                descriptor,
-                count=1,
-                flags=re.MULTILINE,
-            )
-        else:
-            descriptor = descriptor.replace("---\n\n", f"target_root: {target_root}\n---\n\n", 1)
-        temporary_path = descriptor_path.with_suffix(".md.tmp")
-        temporary_path.write_text(descriptor, encoding="utf-8")
-        temporary_path.replace(descriptor_path)
-        result.update({
-            "target_updated": True,
-            "project_root": resolved["project_root"],
-            "artifact_root": resolved["artifact_root"],
-            "target_root": target_root,
-            "project_type": "referenced",
-            "reinitialize_required": (
-                route_binding.project_id == project_id
-                if route_binding is not None
-                else current_project == project_id and current_target != target_root
-            ),
-        })
+        if expected_sha256 is not None:
+            validate_sha256(expected_sha256, "expected_sha256")
+        result.update(_set_target(
+            anchor_home_path, project_id, _normalize_target(target),
+            expected_sha256=expected_sha256,
+        ))
+        result["reinitialize_required"] = result["target_updated"] and (
+            route_binding.project_id == project_id
+            if route_binding is not None
+            else current_project == project_id and current_target != result["target_root"]
+        )
     elif command == "migrate":
         if type(dry_run) is not bool:
             raise ValueError("dry_run must be true or false")
@@ -923,7 +1225,11 @@ def project_action(
     else:
         raise ValueError("Unknown project sub-command. Valid: list, create, use, status, set_target, migrate")
 
-    active = resolve_active_project(anchor_home_path)
+    active, active_damage = _remembered_project(anchor_home_path)
+    if active_damage is not None:
+        # Read-only status reports the remembered project's damage instead of crashing.
+        result["active_project"] = active_damage["project_id"]
+        result["active_project_descriptor_damage"] = active_damage
     if active:
         result.setdefault("project_root", active["project_root"])
         result.setdefault("artifact_root", active["artifact_root"])
@@ -939,6 +1245,12 @@ def project_action(
         if result.get("reinitialize_required")
         else ["Create or resume project work with anchor('task') after orientation."]
     )
+    if active_damage is not None:
+        result["suggested_next_actions"].insert(0, (
+            f"Stop and ask the project owner: the remembered project "
+            f"'{active_damage['project_id']}' has a damaged PROJECT.md route descriptor "
+            f"({active_damage['integrity_status']}); no supported repair exists in this version."
+        ))
     # Discovery follows the immutable runtime binding, never a changed legacy selector.
     discovery_root = route_binding.artifact_root if route_binding is not None else result.get("artifact_root")
     result["artifact_contract"] = artifact_contract(

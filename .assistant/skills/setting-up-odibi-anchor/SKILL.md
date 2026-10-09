@@ -156,6 +156,14 @@ the user's file; never delete staging, legacy, state, or snapshot directories by
 Cleanup requires an exact inventory and classification as active, evidence, rollback, or
 disposable.
 
+Never replace a managed project's whole `PROJECT.md`; edit it only in place and preserve its
+frontmatter route fields `id`, `project_type`, and `target_root`. If startup reports
+`managed_descriptor_damaged` or `route_target_conflict`, stop and give the project owner the
+error context; this version has no supported descriptor repair or move-target operation, so do
+not edit the descriptor, portfolio, or state by hand. `anchor("project", "set_target", ...)`
+retargets only a never-launched project and otherwise refuses with
+`project_retarget_requires_migration`.
+
 ## Related skills
 
 Use [[dependency-management]] when changing package dependency policy. Use
