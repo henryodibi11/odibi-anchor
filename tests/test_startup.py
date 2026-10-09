@@ -2069,3 +2069,126 @@ def test_prepare_portfolio_runtime_reports_incomplete_restore_with_public_recove
         assert len(list(projects.parent.glob("projects.restore-abandoned-*/projects"))) == 1
     assert (projects / "alpha" / "problems" / "P-1.md").read_text() == "# Recovered\n"
     assert not (projects / ".odibi-anchor-restore-owner.json").exists()
+
+
+def _portfolio_with_target(config, state, target, instruction=None):
+    host = {"adapter": "amp", "local_state_root": str(state)}
+    if instruction is not None:
+        host["instruction_root"] = str(instruction)
+    payload = {
+        "schema_version": 1,
+        "authority": {"id": "work", "trust_domain": "work"},
+        "hosts": {"local": host},
+        "projects": {"alpha": {"targets": {"local": str(target)}}},
+        "personas": {},
+    }
+    expected = hashlib.sha256(config.read_bytes()).hexdigest() if config.exists() else None
+    write_portfolio(config, payload, expected_sha256=expected)
+
+
+@pytest.mark.parametrize("old_target_exists", [False, True])
+def test_managed_bootstrap_surfaces_route_target_conflict_with_portfolio_context(
+    tmp_path, monkeypatch, old_target_exists
+):
+    config = tmp_path / "anchor.toml"
+    state = tmp_path / "state"
+    instruction = tmp_path / "instructions"
+    old_target = tmp_path / "old" / "alpha"
+    new_target = tmp_path / "projects" / "alpha"
+    instruction.mkdir()
+    old_target.mkdir(parents=True)
+    new_target.mkdir(parents=True)
+    _isolated_anchor_environment(monkeypatch)
+    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    _portfolio_with_target(config, state, old_target, instruction)
+    prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    descriptor = state / "workspace" / "projects" / "alpha" / "PROJECT.md"
+    before = descriptor.read_bytes()
+    if not old_target_exists:
+        old_target.rmdir()
+    _portfolio_with_target(config, state, new_target, instruction)
+
+    with pytest.raises(ValueError, match="route_target_conflict") as prepared:
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    with pytest.raises(ValueError, match="route_target_conflict") as launched:
+        launch(anchor_home=state, project_id="alpha", project_root=new_target)
+    with pytest.raises(ValueError, match="route_target_conflict") as bootstrapped:
+        bootstrap_managed_project(
+            config_path=config, project_id="alpha", instruction_root=instruction,
+        )
+
+    classification = "ambiguous" if old_target_exists else "probable_move"
+    context = prepared.value.context
+    assert prepared.value.error_code == "route_target_conflict"
+    assert context["classification"] == classification
+    assert context["requested_target"] == str(new_target.resolve())
+    assert context["descriptor_target"] == str(old_target.resolve())
+    assert context["artifact_root"] == str(descriptor.parent.resolve())
+    assert context["config_path"] == str(config.resolve())
+    assert context["host_id"] == "local"
+    assert prepared.value.next_operations == []
+    assert launched.value.error_code == "route_target_conflict"
+    assert launched.value.context["classification"] == classification
+    # Bootstrap phase timing wrappers re-raise the same structured error.
+    assert bootstrapped.value.error_code == "route_target_conflict"
+    assert bootstrapped.value.context == context
+    assert isinstance(bootstrapped.value.bootstrap_timings, dict)
+    assert descriptor.read_bytes() == before
+
+
+def test_managed_bootstrap_refuses_damaged_referenced_descriptor(tmp_path):
+    config = tmp_path / "anchor.toml"
+    state = tmp_path / "state"
+    target = tmp_path / "target"
+    target.mkdir()
+    _portfolio_with_target(config, state, target)
+    prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    artifact = state / "workspace" / "projects" / "alpha"
+    descriptor = artifact / "PROJECT.md"
+    descriptor.write_text("# Alpha\n\nAn agent replaced the managed descriptor.\n")
+    before = descriptor.read_bytes()
+
+    with pytest.raises(ValueError, match="managed_descriptor_damaged") as prepared:
+        prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
+    with pytest.raises(ValueError, match="managed_descriptor_damaged"):
+        launch(anchor_home=state, project_id="alpha", project_root=target)
+
+    context = prepared.value.context
+    assert context["integrity_status"] == "missing_frontmatter"
+    assert context["requested_target"] == str(target.resolve())
+    assert context["artifact_root"] == str(artifact.resolve())
+    assert context["config_path"] == str(config.resolve())
+    assert "conflicts with target hint" not in str(prepared.value)
+    assert descriptor.read_bytes() == before
+
+
+def test_set_target_after_launch_requires_migration_and_keeps_project_bootable(
+    tmp_path, monkeypatch
+):
+    from odibi_anchor._dispatcher._project import project_action
+
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    replacement = tmp_path / "replacement"
+    target.mkdir()
+    replacement.mkdir()
+    for name in ("ANCHOR_HOME", "ANCHOR_PROJECT_ID", "ANCHOR_PROJECT_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    register_project(anchor_home=home, project_id="alpha", project_root=target)
+    assert callable(launch(anchor_home=home, project_id="alpha", project_root=target))
+    descriptor = home / "workspace" / "projects" / "alpha" / "PROJECT.md"
+    before = descriptor.read_bytes()
+
+    with pytest.raises(ValueError, match="project_retarget_requires_migration") as refused:
+        project_action(home, "set_target", "alpha", target=replacement, output_format="dict")
+
+    owner = descriptor.parent / "continuity" / "v1" / "OWNER.json"
+    assert refused.value.error_code == "project_retarget_requires_migration"
+    assert refused.value.context["invalidated"]["continuity_owner"] == {
+        "path": str(owner.resolve()), "target_root": str(target.resolve()),
+    }
+    assert descriptor.read_bytes() == before
+    relaunched = launch(anchor_home=home, project_id="alpha", project_root=target)
+    assert relaunched("status", output_format="dict")["runtime"]["route_binding"]["target_root"] == str(
+        target.resolve()
+    )
