@@ -77,26 +77,26 @@ def test_single_key_duplicates_returns_counts_rates_and_samples():
 
 def test_composite_key_duplicates():
     df = pd.DataFrame({
-        "project_id": ["A", "A", "A", "B", "B"],
+        "order_id": ["A", "A", "A", "B", "B"],
         "snapshot_date": ["2026-01-01", "2026-01-01", "2026-02-01", "2026-01-01", "2026-01-01"],
-        "mw": [10, 12, 20, 30, 35],
+        "qty": [10, 12, 20, 30, 35],
     })
 
-    result = duplicate_key_context(df, keys=["project_id", "snapshot_date"], subject="project_snapshot")
+    result = duplicate_key_context(df, keys=["order_id", "snapshot_date"], subject="order_snapshot")
 
     assert result["passed"] is False
-    assert result["metrics"]["key_columns"] == ["project_id", "snapshot_date"]
+    assert result["metrics"]["key_columns"] == ["order_id", "snapshot_date"]
     assert result["metrics"]["unique_key_count"] == 3
     assert result["metrics"]["duplicate_key_count"] == 2
     assert result["metrics"]["duplicate_row_count"] == 4
     assert result["samples"]["duplicate_keys"] == [
         {
-            "key": {"project_id": "A", "snapshot_date": "2026-01-01"},
+            "key": {"order_id": "A", "snapshot_date": "2026-01-01"},
             "row_count": 2,
             "excess_row_count": 1,
         },
         {
-            "key": {"project_id": "B", "snapshot_date": "2026-01-01"},
+            "key": {"order_id": "B", "snapshot_date": "2026-01-01"},
             "row_count": 2,
             "excess_row_count": 1,
         },
@@ -146,20 +146,20 @@ def test_null_keys_can_be_excluded_from_duplicate_grouping_but_still_reported():
 
 def test_partial_null_composite_keys_are_reported():
     df = pd.DataFrame({
-        "project_id": ["A", "A", "B", None],
+        "order_id": ["A", "A", "B", None],
         "snapshot_date": [None, None, "2026-01-01", "2026-01-01"],
     })
 
-    result = duplicate_key_context(df, keys=["project_id", "snapshot_date"])
+    result = duplicate_key_context(df, keys=["order_id", "snapshot_date"])
 
     assert result["has_null_keys"] is True
     assert result["metrics"]["null_key_row_count"] == 3
     assert result["metrics"]["all_null_key_row_count"] == 0
-    assert result["metrics"]["null_counts_by_key"] == {"project_id": 1, "snapshot_date": 2}
+    assert result["metrics"]["null_counts_by_key"] == {"order_id": 1, "snapshot_date": 2}
     assert result["metrics"]["duplicate_key_count"] == 1
     assert result["samples"]["duplicate_keys"] == [
         {
-            "key": {"project_id": "A", "snapshot_date": None},
+            "key": {"order_id": "A", "snapshot_date": None},
             "row_count": 2,
             "excess_row_count": 1,
         }
@@ -228,19 +228,19 @@ def test_include_duplicate_rows_returns_capped_row_examples():
 
 def test_json_safe_output_for_timestamps_and_numpy_values():
     df = pd.DataFrame({
-        "project_id": np.array([1, 1, 2], dtype=np.int64),
+        "order_id": np.array([1, 1, 2], dtype=np.int64),
         "snapshot_date": [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02")],
         "amount": np.array([10.5, 11.5, 20.0], dtype=np.float64),
     })
 
     result = duplicate_key_context(
         df,
-        keys=["project_id", "snapshot_date"],
+        keys=["order_id", "snapshot_date"],
         include_duplicate_rows=True,
     )
 
     json.dumps(result)
-    assert result["samples"]["duplicate_keys"][0]["key"] == {"project_id": 1, "snapshot_date": "2026-01-01T00:00:00"}
+    assert result["samples"]["duplicate_keys"][0]["key"] == {"order_id": 1, "snapshot_date": "2026-01-01T00:00:00"}
     assert result["samples"]["duplicate_rows"][0]["snapshot_date"] == "2026-01-01T00:00:00"
 
 

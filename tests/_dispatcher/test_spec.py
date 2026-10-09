@@ -156,7 +156,7 @@ class TestSpecAction:
         created = problem_action(
             tmp_path,
             "create",
-            title="Reduce queue latency",
+            title="Reduce export latency",
             recommendation="Increase worker capacity, then measure p95 latency.",
             evidence={"source": "load test 42", "observation": "CPU exceeded 95%."},
             recommendation_evidence="E1",
@@ -168,7 +168,7 @@ class TestSpecAction:
             str(tmp_path),
             "from_problem",
             created["problem_id"],
-            name="QUEUE_CAPACITY",
+            name="EXPORT_THROUGHPUT",
             specs_dir=tmp_path / "specs",
             output_format="dict",
         )
@@ -181,7 +181,7 @@ class TestSpecAction:
         assert "evidence_ids: [E1]" in content
         assert "`E1` — load test 42" in content
         assert "load test 42" in content
-        assert problem["linked_specs"] == ["QUEUE_CAPACITY"]
+        assert problem["linked_specs"] == ["EXPORT_THROUGHPUT"]
 
     def test_from_problem_requires_recommendation(self, tmp_path):
         from odibi_anchor._dispatcher._problem import problem_action
@@ -189,7 +189,7 @@ class TestSpecAction:
         created = problem_action(
             tmp_path,
             "create",
-            title="Unresolved queue latency",
+            title="Unresolved export latency",
             output_format="dict",
         )
         with pytest.raises(ValueError, match="captured recommendation"):
@@ -207,7 +207,7 @@ class TestSpecAction:
         created = problem_action(
             tmp_path,
             "create",
-            title="Queue latency",
+            title="Export latency",
             evidence={"source": "load test", "observation": "CPU exceeded 95%."},
             recommendation="Scale workers.",
             recommendation_evidence="E1",

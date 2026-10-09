@@ -221,10 +221,10 @@ class TestCaseFileCoOccurrence:
             "target": [None if i < 40 else f"V{i}" for i in range(n)],
             "constant_col": ["ALWAYS"] * n,  # 100% in full table — noise
             "signal_col": (
-                ["ERCOT"] * 36  # 90% of null rows = ERCOT
-                + ["MISO"] * 4  # remaining null rows
-                + ["ERCOT"] * 40  # 25% of non-null rows
-                + ["MISO"] * 60 + ["PJM"] * 60  # rest of non-nulls
+                ["WEST"] * 36  # 90% of null rows = WEST
+                + ["SOUTH"] * 4  # remaining null rows
+                + ["WEST"] * 40  # 25% of non-null rows
+                + ["SOUTH"] * 60 + ["EAST"] * 60  # rest of non-nulls
             ),
         }
         df = pd.DataFrame(data)
@@ -235,7 +235,7 @@ class TestCaseFileCoOccurrence:
         # signal_col SHOULD appear (90% in flagged vs 38% baseline → lift ≈ 2.4x)
         signal = [c for c in co if c["column"] == "signal_col"]
         assert len(signal) == 1
-        assert signal[0]["value"] == "ERCOT"
+        assert signal[0]["value"] == "WEST"
         assert signal[0]["lift"] >= 2.0
 
     def test_co_occurrence_requires_lift(self):

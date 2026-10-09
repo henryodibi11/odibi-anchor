@@ -25,14 +25,14 @@ def _capture_trace(fn) -> tuple[str, BaseException]:
 
 
 @pytest.fixture
-def project_df() -> pd.DataFrame:
-    """Synthetic project-level dataset used by pandas failure tests."""
+def orders_df() -> pd.DataFrame:
+    """Synthetic order-level dataset used by pandas failure tests."""
     return pd.DataFrame(
         {
-            "project_id": ["P1", "P2", "P3", "P4"],
-            "project_name": ["Solar A", "Wind B", "Battery C", "Solar D"],
-            "capacity_mw": [100.0, 250.5, None, 75.2],
-            "region": ["ERCOT", "MISO", "CAISO", "PJM"],
+            "order_id": ["O1", "O2", "O3", "O4"],
+            "product_name": ["Desk Lamp", "Office Chair", "Bookshelf", "Desk Lamp"],
+            "order_total": [100.0, 250.5, None, 75.2],
+            "region": ["NORTH", "SOUTH", "WEST", "EAST"],
         }
     )
 
@@ -42,10 +42,10 @@ def project_df() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def test_output_contract_keys_exist(project_df: pd.DataFrame):
-    trace, _ = _capture_trace(lambda: project_df["missing_capacity_mw"])
+def test_output_contract_keys_exist(orders_df: pd.DataFrame):
+    trace, _ = _capture_trace(lambda: orders_df["missing_order_total"])
 
-    result = error_trace_context(trace, df=project_df, subject="project_df")
+    result = error_trace_context(trace, df=orders_df, subject="orders_df")
 
     assert set(result).issuperset(
         {
@@ -65,7 +65,7 @@ def test_output_contract_keys_exist(project_df: pd.DataFrame):
         }
     )
     assert result["kind"] == "error_trace_context"
-    assert result["subject"] == "project_df"
+    assert result["subject"] == "orders_df"
     assert isinstance(result["summary"], str)
     assert isinstance(result["suggested_next_actions"], list)
 
@@ -75,15 +75,15 @@ def test_output_contract_keys_exist(project_df: pd.DataFrame):
 # ---------------------------------------------------------------------------
 
 
-def test_key_error_from_pandas_dataframe_extracts_column_context(project_df: pd.DataFrame):
-    trace, exc = _capture_trace(lambda: project_df["missing_capacity_mw"])
+def test_key_error_from_pandas_dataframe_extracts_column_context(orders_df: pd.DataFrame):
+    trace, exc = _capture_trace(lambda: orders_df["missing_order_total"])
 
-    result_from_text = error_trace_context(trace, df=project_df, subject="project_df")
-    result_from_exception = error_trace_context(exc, df=project_df, subject="project_df")
+    result_from_text = error_trace_context(trace, df=orders_df, subject="orders_df")
+    result_from_exception = error_trace_context(exc, df=orders_df, subject="orders_df")
 
     assert result_from_text["error"]["type"] == "KeyError"
     assert result_from_text["error"]["category"] == "schema_or_column_reference"
-    assert "missing_capacity_mw" in result_from_text["dataframe_context"]["referenced_columns_missing"]
+    assert "missing_order_total" in result_from_text["dataframe_context"]["referenced_columns_missing"]
     assert result_from_text["metrics"]["has_dataframe_context"] is True
     assert result_from_exception["error"]["type"] == "KeyError"
 
@@ -100,21 +100,21 @@ def test_value_error_numeric_conversion_is_type_conversion():
 
 
 def test_pandas_merge_validation_error_is_merge_or_key():
-    left = pd.DataFrame({"project_id": ["P1", "P1"], "capacity_mw": [100, 101]})
-    right = pd.DataFrame({"project_id": ["P1"], "region": ["ERCOT"]})
-    trace, _ = _capture_trace(lambda: left.merge(right, on="project_id", validate="one_to_one"))
+    left = pd.DataFrame({"order_id": ["O1", "O1"], "order_total": [100, 101]})
+    right = pd.DataFrame({"order_id": ["O1"], "region": ["NORTH"]})
+    trace, _ = _capture_trace(lambda: left.merge(right, on="order_id", validate="one_to_one"))
 
-    result = error_trace_context(trace, df=left, subject="project_merge")
+    result = error_trace_context(trace, df=left, subject="order_merge")
 
     assert result["error"]["type"] == "MergeError"
     assert result["error"]["category"] == "merge_or_key"
     assert any("duplicate" in action.lower() or "grain" in action.lower() for action in result["suggested_next_actions"])
 
 
-def test_attribute_error_unknown_dataframe_method_has_location(project_df: pd.DataFrame):
-    trace, _ = _capture_trace(lambda: project_df.not_a_method())
+def test_attribute_error_unknown_dataframe_method_has_location(orders_df: pd.DataFrame):
+    trace, _ = _capture_trace(lambda: orders_df.not_a_method())
 
-    result = error_trace_context(trace, df=project_df)
+    result = error_trace_context(trace, df=orders_df)
 
     assert result["error"]["type"] == "AttributeError"
     assert result["location"]["failing_line"] is not None
@@ -128,16 +128,16 @@ def test_attribute_error_unknown_dataframe_method_has_location(project_df: pd.Da
 
 def test_spark_analysis_exception_string_is_column_reference():
     raw = """
-AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column or function parameter with name `meter_id` cannot be resolved. Did you mean one of the following? [`asset_id`, `timestamp`, `mw`].;
-'Project [meter_id#12]
-+- Relation [asset_id#1,timestamp#2,mw#3] parquet
+AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column or function parameter with name `register_id` cannot be resolved. Did you mean one of the following? [`store_id`, `timestamp`, `units_sold`].;
+'Project [register_id#12]
++- Relation [store_id#1,timestamp#2,units_sold#3] parquet
 """
 
     result = error_trace_context(raw, subject="spark_select")
 
     assert result["error"]["type"] == "AnalysisException"
     assert result["error"]["category"] == "schema_or_column_reference"
-    assert "meter_id" in result["findings"][2]
+    assert "register_id" in result["findings"][2]
     assert result["metrics"]["has_dataframe_context"] is False
 
 
@@ -162,8 +162,8 @@ SELECT FROM catalog.schema.table
 def test_databricks_command_frame_is_parsed():
     raw = '''Traceback (most recent call last):
   File "<command-123456789>", line 4, in <module>
-    result = transform_projects(df)
-  File "/Workspace/Repos/team/project/notebooks/transform.py", line 27, in transform_projects
+    result = transform_orders(df)
+  File "/Workspace/Repos/team/project/notebooks/transform.py", line 27, in transform_orders
     return df["missing_col"]
 KeyError: 'missing_col'
 '''
@@ -203,7 +203,7 @@ def test_max_chars_truncates_relevant_trace_and_records_risk():
     assert any("truncated" in risk.lower() for risk in result["risks"])
 
 
-def test_sample_limit_controls_trace_frames_and_dataframe_rows(project_df: pd.DataFrame):
+def test_sample_limit_controls_trace_frames_and_dataframe_rows(orders_df: pd.DataFrame):
     raw = '''Traceback (most recent call last):
   File "/tmp/a.py", line 1, in a
     a()
@@ -211,10 +211,10 @@ def test_sample_limit_controls_trace_frames_and_dataframe_rows(project_df: pd.Da
     b()
   File "/tmp/c.py", line 3, in c
     c()
-KeyError: 'missing_capacity_mw'
+KeyError: 'missing_order_total'
 '''
 
-    result = error_trace_context(raw, df=project_df, sample_limit=2)
+    result = error_trace_context(raw, df=orders_df, sample_limit=2)
 
     assert len(result["trace_frames"]) == 2
     assert len(result["dataframe_context"]["sample_rows"]) == 2
@@ -228,16 +228,16 @@ def test_metadata_is_compacted_and_unapproved_keys_are_dropped():
             "job_id": 123,
             "notebook_path": "/Workspace/Users/example/debug",
             "secret_token": "do-not-include",
-            "step": "normalize_projects",
+            "step": "normalize_orders",
         },
     )
 
     assert result["metadata"] == {
         "job_id": 123,
         "notebook_path": "/Workspace/Users/example/debug",
-        "step": "normalize_projects",
+        "step": "normalize_orders",
     }
-    assert result["subject"] == "normalize_projects"
+    assert result["subject"] == "normalize_orders"
 
 
 def test_unsupported_dataframe_engine_records_risk():

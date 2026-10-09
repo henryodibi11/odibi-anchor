@@ -211,7 +211,7 @@ anchor("learning", "assess", outcome="observations_recorded",
 
 ```python
 # Incident response uses relaxed planning — speed matters
-anchor("task", "production fix: pipeline failure in silver_queue",
+anchor("task", "production fix: pipeline failure in silver_orders",
     goal="restore pipeline functionality and data accuracy",
     mode="debugging",
     known_facts=["Error: ...", "Started failing at: ...", "Severity: P2"],

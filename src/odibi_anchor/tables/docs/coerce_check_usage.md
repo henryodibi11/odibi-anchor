@@ -86,7 +86,7 @@ ctx["column_results"]["col_name"] = {
 
 ```python
 ctx["samples"]["col_name"] = [
-    {"old": "Scoping",   "new": "SCOPING",  "category": "case"},
+    {"old": "Pending",   "new": "PENDING",  "category": "case"},
     {"old": "  Active  ", "new": "ACTIVE",  "category": "whitespace+case"},
     {"old": "01/15/2024", "new": "2024-01-15", "category": "date_format"},
 ]
@@ -120,11 +120,11 @@ if changed_cols:
 ### Check only one column in detail
 ```python
 ctx = anchor("coerce_check", old_df, new_df, keys=["id"],
-         columns=["Generic Queue Status"], sample_limit=50)
+         columns=["Order Status"], sample_limit=50)
 
-result = ctx["column_results"]["Generic Queue Status"]
+result = ctx["column_results"]["Order Status"]
 print(f"Dominant: {result['dominant_category']} ({result['confidence']:.0%} confidence)")
-for s in ctx["samples"]["Generic Queue Status"]:
+for s in ctx["samples"]["Order Status"]:
     print(f"  '{s['old']}' → '{s['new']}' ({s['category']})")
 ```
 

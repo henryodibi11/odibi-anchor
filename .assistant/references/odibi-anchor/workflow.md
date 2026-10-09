@@ -256,7 +256,7 @@ successful managed checkpoint enforces the age window and minimum restore-point 
 delete snapshot manifests or blobs manually.
 
 ```python
-result = anchor("project", "create", name="queue-automation")
+result = anchor("project", "create", name="order-analytics")
 result = anchor("project", "create", name="shared-service", target="/path/to/repository")
 result = anchor("project", "set_target", "shared-service", target="/new/local/clone")
 ```
@@ -386,7 +386,7 @@ high-impact, or multi-session work, keep one living record instead of generating
 analysis and handoff documents:
 
 ```python
-result = anchor("problem", "create", title="Reduce queue processing delays")
+result = anchor("problem", "create", title="Reduce order export delays")
 result = anchor("problem", "update", "PRB-2026-0001", issue={...}, hypothesis={...})
 result = anchor("problem", "update", "PRB-2026-0001", evidence={"source": "...", ...})
 result = anchor("problem", "resume", "PRB-2026-0001")
@@ -401,11 +401,11 @@ an implementation contract; inconclusive investigations can close without a spec
 Tasks can create or resume the record directly:
 
 ```python
-task = anchor("task", "investigate queue latency", goal="choose a remedy",
+task = anchor("task", "investigate order export latency", goal="choose a remedy",
           mode="analysis", create_problem=True)
 task = anchor("task", "implement accepted remedy", goal="reduce p95 latency",
           mode="implementation", problem="PRB-2026-0001")
-spec = anchor("spec", "from_problem", "PRB-2026-0001", name="QUEUE_CAPACITY")
+spec = anchor("spec", "from_problem", "PRB-2026-0001", name="EXPORT_THROUGHPUT")
 ```
 
 Tool findings are offered as evidence candidates but are not persisted automatically.

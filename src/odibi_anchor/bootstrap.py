@@ -6,7 +6,7 @@ Usage when the package is already importable:
     anchor, ROOT, MANIFEST = init()
 
     # With a managed project beneath odibi_anchor/workspace/projects:
-    anchor, ROOT, MANIFEST = init(project="queue-automation")
+    anchor, ROOT, MANIFEST = init(project="order-analytics")
 
     # With a backward-compatible external target root:
     anchor, ROOT, MANIFEST = init(root="/path/to/project")

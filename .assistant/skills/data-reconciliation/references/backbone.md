@@ -11,10 +11,10 @@ Use this reference only after `data-reconciliation` owns the requested proof out
 
 | Scenario | Example |
 |---|---|
-| Comparing pipeline output to a reference (Excel, legacy system) | "Does our gold table match Sophie's Excel?" |
+| Comparing pipeline output to a reference (Excel, legacy system) | "Does our gold table match the finance team's Excel workbook?" |
 | Verifying counts across pipeline stages | "Bronze has 45k rows but gold only has 38k — where did 7k go?" |
 | Auditing after a pipeline change | "We changed the dedup logic — verify nothing broke" |
-| Cross-system reconciliation | "PJM portal shows 1,234 active projects — do we match?" |
+| Cross-system reconciliation | "The storefront admin shows 1,234 open orders — do we match?" |
 | Pre-go-live validation | "Before switching from manual Excel to pipeline, prove they match" |
 
 ## Evidence Checklist — Execute In Order
@@ -73,9 +73,9 @@ anchor("profile_table", truth_df, subject="source_of_truth")
 
 **Record as known_facts:**
 - Row count
-- Column names (watch for naming differences: `Project ID` vs `project_id`)
+- Column names (watch for naming differences: `Order ID` vs `order_id`)
 - Key column(s) and their cardinality
-- Any filters already applied (e.g., "Sophie's Excel excludes Withdrawn projects")
+- Any filters already applied (e.g., "the finance workbook excludes Cancelled orders")
 - Data freshness / snapshot date
 - Known quirks (duplicate rows, extra header rows, trailing whitespace)
 
@@ -167,7 +167,7 @@ ctx = anchor("coerce_check", old_df, new_df, keys=["id"],
 | False mismatch | Root cause | How to confirm |
 |---|---|---|
 | Count off by a few rows | Timing — source of truth is stale | Check data freshness dates |
-| Keys present in one but not other | Different source data (CRM extract date) | Compare source extract timestamps |
+| Keys present in one but not other | Different source data (OMS extract date) | Compare source extract timestamps |
 | Values slightly different | Rounding (float vs decimal) | Check with tolerance: `ABS(a - b) < 0.01` |
 | Duplicates in source of truth | Manual Excel has copy-paste duplicates | Dedup truth before comparing |
 | NULL vs blank mismatch | One system stores '' and other stores NULL | Normalize both with NULLIF |
@@ -194,38 +194,38 @@ After completing this checklist, you should have:
 
 ```python
 known_facts = [
-    "Source of truth: Sophie's Excel (PJM tab, downloaded 2026-05-18, 1,247 rows)",
-    "System under test: analytics_dev.gold.queue_positions_pjm (last run 2026-05-19, 1,234 rows)",
+    "Source of truth: finance team's Excel workbook (WEB tab, downloaded 2026-05-18, 1,247 rows)",
+    "System under test: example_catalog.gold.orders_web (last run 2026-05-19, 1,234 rows)",
     "Row count gap: 13 rows — truth has more",
-    "Sophie's Excel filters: position_type='existing', Project Status NOT IN ('Withdrawn','Operating')",
+    "Finance workbook filters: order_type='standard', Order Status NOT IN ('Cancelled','Returned')",
     "Our pipeline filters: same logic in gold view",
-    "Column mapping: Sophie's 'Queue Pos' → our 'queue_position', Sophie's 'MW' → our 'capacity_mw'",
-    "Sophie's Excel has 72 NULL Project Status rows — 36 are duplicated SPP ERAS-2025 IDs",
-    "Our CRM has no duplicates (Salesforce dedup applied upstream)",
-    "Past learning: all count gaps in previous audit were CRM source differences, not logic bugs",
+    "Column mapping: workbook 'Order No' → our 'order_number', workbook 'Total' → our 'order_total'",
+    "Finance workbook has 72 NULL Order Status rows — 36 are duplicated 2025 platform-migration order IDs",
+    "Our OMS extract has no duplicates (dedup applied upstream)",
+    "Past learning: all count gaps in previous audit were OMS extract differences, not logic bugs",
 ]
 
 constraints = [
     "Must apply same filters to both sides before comparing",
-    "Must TRIM + UPPER join keys (Sophie's data has trailing whitespace)",
-    "Must handle NULL Project Status — Sophie keeps them, verify we do too",
-    "Do not report CRM source differences as pipeline bugs",
+    "Must TRIM + UPPER join keys (the workbook has trailing whitespace)",
+    "Must handle NULL Order Status — the workbook keeps them, verify we do too",
+    "Do not report OMS extract differences as pipeline bugs",
 ]
 
 acceptance_criteria = [
     "Row count gap fully explained (each missing/extra row attributed to a cause)",
-    "Key coverage: <5 orphan keys after accounting for CRM differences",
-    "Value match: capacity_mw within $0.01 for all matched keys",
+    "Key coverage: <5 orphan keys after accounting for OMS extract differences",
+    "Value match: order_total within $0.01 for all matched keys",
     "Status values match after case normalization",
     "Reconciliation report produced with per-check pass/fail",
 ]
 
-in_scope = ["PJM EXISTING tab reconciliation"]
-out_of_scope = ["NEW tab", "CRM_NOT_QUEUE tab", "Other ISOs"]
+in_scope = ["WEB tab reconciliation"]
+out_of_scope = ["STORE tab", "RETURNS tab", "Other sales channels"]
 
 risks = [
-    "Sophie's Excel may be from different CRM extract — dates must match",
-    "Floating point comparison on MW capacity needs tolerance",
+    "The finance workbook may come from a different OMS extract — dates must match",
+    "Floating point comparison on order totals needs tolerance",
 ]
 ```
 

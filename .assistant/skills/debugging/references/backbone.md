@@ -172,7 +172,7 @@ WHERE raw_column IS NOT NULL
 # 1. Are there actually duplicates on the expected key?
 from pyspark.sql import functions as F
 
-key_cols = ["project_id", "queue_date"]
+key_cols = ["order_id", "line_number"]
 dupes = df.groupBy(key_cols).agg(F.count("*").alias("cnt")).where("cnt > 1")
 dupe_count = dupes.count()
 print(f"Duplicate key combinations: {dupe_count}")
@@ -197,9 +197,9 @@ if dupe_count > 0:
 
 ```sql
 -- Find ties that make ROW_NUMBER non-deterministic
-SELECT project_id, queue_date, COUNT(*) AS ties
+SELECT order_id, line_number, COUNT(*) AS ties
 FROM source
-GROUP BY project_id, queue_date, file_modified_at  -- include ORDER BY col
+GROUP BY order_id, line_number, file_modified_at  -- include ORDER BY col
 HAVING COUNT(*) > 1
 ```
 
@@ -282,7 +282,7 @@ old_df = spark.read.format("delta").option("versionAsOf", 10).table("catalog.sch
 new_df = spark.read.format("delta").option("versionAsOf", 12).table("catalog.schema.target")
 
 # Use anchor("diff") for row-level comparison
-anchor("diff", old_df, new_df, keys=["project_id"])
+anchor("diff", old_df, new_df, keys=["order_id"])
 # → Row-level diff: inserts, updates, deletes between versions
 # → Column-level change classification per column
 
@@ -333,12 +333,12 @@ df_before_agg.where("group_key = 'sample_value'").show(truncate=False)
 
 ```python
 # Check for duplicate merge keys (#1 MERGE failure: "matched multiple source rows")
-anchor("duplicate", source_df, ["project_id", "queue_date"])
+anchor("duplicate", source_df, ["order_id", "line_number"])
 
 # Validate merge keys are not null (null keys silently won't match)
 anchor("validate", source_df, rules=[
-    {"column": "project_id", "rule": "not_null"},
-    {"column": "queue_date", "rule": "not_null"},
+    {"column": "order_id", "rule": "not_null"},
+    {"column": "line_number", "rule": "not_null"},
 ])
 
 # Check schema compatibility with target
@@ -388,8 +388,8 @@ anchor("profile_table", source_df, subject="source")  # Check row_count > 0
 anchor("profile_table", dim_df, subject="dim")        # Check row_count > 0
 
 # 2. Do join keys overlap? Check key values on both sides
-anchor("microscope", source_df, "project_id")  # See distinct values
-anchor("microscope", dim_df, "project_id")     # Compare — do they match?
+anchor("microscope", source_df, "customer_id")  # See distinct values
+anchor("microscope", dim_df, "customer_id")     # Compare — do they match?
 
 # 3. Does filter eliminate everything?
 anchor("case_file", source_df, column="status", filter="where:status = 'Active'")
@@ -414,7 +414,7 @@ anchor("case_file", source_df, column="status", filter="where:status = 'Active'"
 
 ```python
 # Trace one row back through its upstream sources
-anchor("trace_row", output_df, keys=["project_id"], values={"project_id": "PJM-12345"},
+anchor("trace_row", output_df, keys=["order_id"], values={"order_id": "ORD-12345"},
    upstream={"source": source_df, "dim": dim_df})
 # → For each output column: which upstream it came from, whether value matches
 # → Flags: coerced (type changed), orphan (no upstream match), conflict (multiple sources disagree)
@@ -445,16 +445,16 @@ anchor("trace_row", output_df, keys=["project_id"], values={"project_id": "PJM-1
 | Trailing whitespace | "Active " ≠ "Active" in joins | TRIM all string columns at bronze→silver boundary |
 | BOM character | "\uFEFF" prefix on first column name | Strip in column rename or REGEXP_REPLACE |
 
-### ISO/Energy Domain
+### Multi-Source Business Data
 
 | Issue | How it manifests | Fix |
 | --- | --- | --- |
-| MW capacity as string | "1,234.5" fails numeric cast (comma) | REGEXP_REPLACE(',', '') before TRY_CAST |
-| Queue position reuse | Same queue_id assigned to new project after withdrawal | Composite key must include effective_date or version |
-| Status inconsistency | "Active"/"ACTIVE"/"active" across ISOs | Normalize: UPPER(TRIM(status)) at silver |
-| Date format variance | "01/15/2024" (MISO) vs "2024-01-15" (PJM) vs "Jan 15, 2024" (ERCOT) | ISO-specific date parsing in bronze→silver |
-| Withdrawn projects reappear | Project withdrawn then re-queued with same ID | SCD2 or add re-queue sequence number to key |
-| Interconnection ID format change | ISO changes ID format mid-history | COALESCE(new_format_id, legacy_id) as unified key |
+| Amount as string | "1,234.50" fails numeric cast (comma) | REGEXP_REPLACE(',', '') before TRY_CAST |
+| Business key reuse | Same order number reissued to a new order after cancellation | Composite key must include effective_date or version |
+| Status inconsistency | "Open"/"OPEN"/"open" across sales channels | Normalize: UPPER(TRIM(status)) at silver |
+| Date format variance | "01/15/2024" (store POS) vs "2024-01-15" (web) vs "Jan 15, 2024" (marketplace) | Source-specific date parsing in bronze→silver |
+| Cancelled records reappear | Order cancelled then re-placed with the same ID | SCD2 or add a revision sequence number to key |
+| ID format change | A source system changes its ID format mid-history | COALESCE(new_format_id, legacy_id) as unified key |
 
 ### PySpark-Specific
 
@@ -476,7 +476,7 @@ anchor("trace_row", output_df, keys=["project_id"], values={"project_id": "PJM-1
 anchor("known_bad", error_text="row count dropped after join", task_type="debugging")
 
 # 2. Log the investigation
-anchor("known_error", "target has 50% fewer rows than source", subject="silver_queue_positions pipeline")
+anchor("known_error", "target has 50% fewer rows than source", subject="silver_order_lines pipeline")
 
 # 3. If genuinely reusable, capture the evidence-backed resolution, then assess its ID
 observation = anchor("learning", "capture", observation_type="reusable_practice", ...)

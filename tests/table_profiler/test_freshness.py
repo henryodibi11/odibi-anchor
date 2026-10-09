@@ -286,7 +286,7 @@ class TestInferenceContract:
 class TestAuditColumnPreference:
     """Regression: audit/load columns must be preferred over business-date columns.
 
-    Mirrors the queue_ercot dogfood failure where freshness picked Approval_Date__
+    Mirrors an orders-table failure where freshness picked Approval_Date__
     (a business date that appears first in the schema) instead of _extracted_at
     or Created_Timestamp (audit/ETL provenance columns that appear later).
     """
@@ -325,7 +325,7 @@ class TestAuditColumnPreference:
         assert result.freshness_column == "loaded_at"
 
     def test_prefers_updated_timestamp_case_insensitive(self) -> None:
-        """Mixed-case 'Updated_Timestamp' (as in queue_ercot) must be matched."""
+        """Mixed-case 'Updated_Timestamp' (as in a spreadsheet-sourced orders table) must be matched."""
         df = pd.DataFrame({
             "Approval_Date": pd.date_range("2024-06-01", periods=20, freq="MS"),
             "Updated_Timestamp": pd.date_range("2025-05-01", periods=20, freq="D"),

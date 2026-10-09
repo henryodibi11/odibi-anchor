@@ -3,7 +3,7 @@
 Allows users to register custom semantic patterns that the profiler
 will apply during semantic type inference. This is the extension point
 for domain-specific knowledge like:
-- Interconnection numbers (energy industry)
+- Order numbers (e.g. ORD-001234)
 - Internal project codes
 - Custom ID formats
 
@@ -62,7 +62,7 @@ def register_semantic_pattern(
     """Register a custom semantic pattern for the profiler.
 
     Args:
-        name: Unique name for this pattern (e.g., "interconnection_number").
+        name: Unique name for this pattern (e.g., "order_number").
         regex: Regular expression that matches values of this type.
         description: Human-readable description.
         examples: Example values that match the pattern.

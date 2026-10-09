@@ -96,7 +96,7 @@ Warning-level failures alone do NOT block promotion.
 ```python
 {
     "kind": "validation_summary_context",
-    "subject": "silver.energy.transactions",
+    "subject": "silver.retail.transactions",
     "summary": "2/4 rules failed (150/10,000 rows affected). Promotion: BLOCKED.",
     "metrics": {
         "engine": "spark",
@@ -190,7 +190,7 @@ ctx = validation_summary_context(
         {"type": "not_null", "columns": ["id"]},
         {"type": "unique", "columns": ["id"]},
     ],
-    subject="silver.energy.transactions",
+    subject="silver.retail.transactions",
     spark=spark,
 )
 ```

@@ -26,7 +26,7 @@ from odibi_anchor._dispatcher._project import (
 
 
 def test_normalize_project_id() -> None:
-    assert _normalize_project_id("Queue Automation") == "queue-automation"
+    assert _normalize_project_id("Order Analytics") == "order-analytics"
     assert _normalize_project_id("bronze_customer") == "bronze-customer"
 
 
@@ -54,21 +54,21 @@ def test_create_builds_managed_layout_and_selects_project(tmp_path: Path) -> Non
     result = project_action(
         tmp_path,
         "create",
-        name="Queue Automation",
+        name="Order Analytics",
         current_project=None,
         output_format="dict",
     )
 
-    project_root = tmp_path / "workspace" / "projects" / "queue-automation"
+    project_root = tmp_path / "workspace" / "projects" / "order-analytics"
     assert result["created"] is True
-    assert result["active_project"] == "queue-automation"
+    assert result["active_project"] == "order-analytics"
     assert (project_root / "PROJECT.md").is_file()
     for directory in ("source", "notebooks", "problems", "specs", "work_items", "decisions", "archive"):
         assert (project_root / directory).is_dir()
     descriptor = (project_root / "PROJECT.md").read_text(encoding="utf-8")
     assert "versioned runtime artifact contract" in descriptor
     assert "Existing projects inherit that contract without record rewrites." in descriptor
-    assert (tmp_path / "workspace" / ".active_project").read_text(encoding="utf-8") == "queue-automation\n"
+    assert (tmp_path / "workspace" / ".active_project").read_text(encoding="utf-8") == "order-analytics\n"
 
 
 def test_artifact_contract_is_runtime_owned_and_complete() -> None:
@@ -276,16 +276,16 @@ def test_referenced_project_keeps_artifacts_managed(tmp_path: Path) -> None:
     created = project_action(
         tmp_path,
         "create",
-        name="External Queue",
+        name="External Exports",
         target=external,
         output_format="dict",
     )
     roots = resolve_runtime_roots(tmp_path)
 
     assert created["project_type"] == "referenced"
-    assert roots.active_project == "external-queue"
+    assert roots.active_project == "external-exports"
     assert roots.artifact_root == str(
-        (tmp_path / "workspace" / "projects" / "external-queue").resolve()
+        (tmp_path / "workspace" / "projects" / "external-exports").resolve()
     )
     assert roots.target_root == str(external.resolve())
     assert Path(roots.artifact_root) != external.resolve()

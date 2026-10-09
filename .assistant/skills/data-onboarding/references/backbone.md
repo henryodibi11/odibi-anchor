@@ -128,21 +128,21 @@ idempotent on re-run, follows project I/O policy, and gates production writes.
 
 ```python
 # Step 1: Profile the raw source
-result = anchor("profile_table", raw_df, subject="queue_pjm_raw")
+result = anchor("profile_table", raw_df, subject="orders_web_raw")
 # → Shows row count, column types, null%, distinct counts
 
 # Step 2: Deep-dive suspicious columns
-result = anchor("microscope", raw_df, "queue_date", subject="queue_pjm.queue_date")
+result = anchor("microscope", raw_df, "order_date", subject="orders_web.order_date")
 # → Reveals if dates are strings, serials, or proper timestamps
 
 # Step 3: Check data quality
-result = anchor("quality", raw_df, subject="queue_pjm", keys=["project_id"])
+result = anchor("quality", raw_df, subject="orders_web", keys=["order_id"])
 # → Key uniqueness, null rates, type consistency
 ```
 
 ```python
 # Step 4: Generate transform plan from profile
-result = anchor("transform", profile_result, subject="queue_pjm")
+result = anchor("transform", profile_result, subject="orders_web")
 # → Suggests: trim whitespace, cast dates, handle nulls
 
 # Step 5: Apply transforms (with rollback support)
@@ -151,8 +151,8 @@ result = anchor("apply_transform", raw_df, transform_plan, checkpoint=True)
 
 # Step 6: Validate cleaned output
 result = anchor("validate", cleaned_df, rules=[
-    {"column": "project_id", "rule": "not_null"},
-    {"column": "queue_date", "rule": "is_date"},
-    {"column": "mw_capacity", "rule": "positive"},
+    {"column": "order_id", "rule": "not_null"},
+    {"column": "order_date", "rule": "is_date"},
+    {"column": "order_total", "rule": "positive"},
 ])
 ```

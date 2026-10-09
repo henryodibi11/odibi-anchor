@@ -78,7 +78,7 @@ anchor("microscope", df, "column_name", sample_limit=30, bin_count=25)
 | **boolean** | true_count, false_count, null_pct | Imbalanced flags |
 
 **Pattern fingerprints** (string columns): Replaces digits with `9`, letters with `A`.
-Example: `"PJM-B16"` → `"AAA-A99"`. Shows format variants at a glance.
+Example: `"ORD-B16"` → `"AAA-A99"`. Shows format variants at a glance.
 
 **Performance:** <0.5s on 134K rows.
 
@@ -94,10 +94,10 @@ anchor("case_file", df, column="county", filter="nulls")
 anchor("case_file", df, column="col", filter="null_like")       # catches '', 'N/A', 'null', '--'
 anchor("case_file", df, column="amount", filter="outliers")      # IQR-based
 anchor("case_file", df, filter="duplicates", key_columns=["id", "date"])
-anchor("case_file", df, column="fuel_type", filter="top:3")      # most frequent N values
-anchor("case_file", df, column="fuel_type", filter="bottom:2")   # rarest N values
+anchor("case_file", df, column="product_category", filter="top:3")      # most frequent N values
+anchor("case_file", df, column="product_category", filter="bottom:2")   # rarest N values
 anchor("case_file", df, column="date_col", filter="pattern:9/99/9999")  # specific format
-anchor("case_file", df, filter="where:mw_capacity > 500")        # arbitrary expression
+anchor("case_file", df, filter="where:order_total > 500")        # arbitrary expression
 
 # Row lookup by ID
 anchor("case_file", df, row_ids=[101, 102], key_columns=["order_id"])
@@ -233,13 +233,13 @@ cf = anchor("case_file", df, filter="duplicates", key_columns=["id", "date"], ou
 ### Pattern 6: Diff → Coerce Check → Coerce Fix
 ```python
 # 1. Diff shows WHAT changed — now with NULL-aware breakdown
-ctx = anchor("diff", old_df, new_df, keys=["Application ID"])
+ctx = anchor("diff", old_df, new_df, keys=["Order ID"])
 # → changed_column_counts now includes null_to_value, value_to_null, value_changed per column
 # → Immediately see: is this a null-fill, a deletion, or a value change?
 
 # 2. For columns with value_changed > 0, check WHY they differ
-coerce_ctx = anchor("coerce_check", old_df, new_df, keys=["Application ID"],
-         columns=["Interconnection Entity", "Generic Queue Status"])
+coerce_ctx = anchor("coerce_check", old_df, new_df, keys=["Order ID"],
+         columns=["Carrier Name", "Order Status"])
 # → Classifies each mismatch: whitespace, case, unicode, numeric_representation, date_format, or genuine
 # → dominant_category tells you the fix: TRIM(), UPPER(), strip zero-width chars, CAST, etc.
 # → Only compares non-null pairs; null transitions are already visible in diff
@@ -253,13 +253,13 @@ cleaned_df = anchor("apply_transform", dirty_df, fix_plan)
 # → Review fix_plan first to see what will change
 
 # 4. Verify: re-run coerce_check on fixed data
-anchor("coerce_check", old_df, cleaned_df, keys=["Application ID"],
-   columns=["Interconnection Entity", "Generic Queue Status"])
+anchor("coerce_check", old_df, cleaned_df, keys=["Order ID"],
+   columns=["Carrier Name", "Order Status"])
 # → Should show 0 mismatches (or only genuine ones remaining)
 ```
 
 **When to use coerce_check + transform/apply_transform:** After `diff` shows value_changed > 0 and you suspect
-the differences are formatting, not real data changes. Common with CRM/queue data where source
+the differences are formatting, not real data changes. Common with order and customer exports where source
 systems coerce differently. `transform` + `apply_transform` automates the manual TRIM/UPPER/strip code.
 
 **Important:** Pass the DataFrame with the formatting issues to `apply_transform`. If 0 rows are
@@ -268,12 +268,12 @@ affected, the tool warns you — try the other side.
 ### Pattern 7: Pre-Join Validation
 ```python
 # Before joining two tables, validate join keys on both sides
-anchor("validate", fact_df, rules=[{"column": "project_id", "rule": "not_null"}])
-anchor("validate", dim_df, rules=[{"column": "project_id", "rule": "not_null"}])
+anchor("validate", fact_df, rules=[{"column": "customer_id", "rule": "not_null"}])
+anchor("validate", dim_df, rules=[{"column": "customer_id", "rule": "not_null"}])
 
 # Check key cardinality and overlap using microscope
-anchor("microscope", fact_df, "project_id")  # distinct count, null pct, top values
-anchor("microscope", dim_df, "project_id")   # compare — do values overlap?
+anchor("microscope", fact_df, "customer_id")  # distinct count, null pct, top values
+anchor("microscope", dim_df, "customer_id")   # compare — do values overlap?
 
 # For composite keys, validate each component
 anchor("validate", orders_df, rules=[
@@ -282,7 +282,7 @@ anchor("validate", orders_df, rules=[
 ])
 
 # Check for duplicates that would cause fanout
-anchor("duplicate", dim_df, ["project_id"])  # 1:many risk if duplicates exist
+anchor("duplicate", dim_df, ["customer_id"])  # 1:many risk if duplicates exist
 ```
 
 **Workflow:** Validate keys (not_null, unique) → microscope both sides (overlap, cardinality) →
@@ -321,7 +321,7 @@ old_df = spark.read.format("delta").option("versionAsOf", 10).table("catalog.sch
 new_df = spark.read.format("delta").option("versionAsOf", 12).table("catalog.schema.table")
 
 # Use anchor("diff") for row-level comparison
-anchor("diff", old_df, new_df, keys=["project_id"])
+anchor("diff", old_df, new_df, keys=["order_id"])
 # → Row-level diff: inserts, updates, deletes between versions
 # → Column-level breakdown: which columns changed and how
 
@@ -338,7 +338,7 @@ Use `DESCRIBE HISTORY` to find relevant version numbers first.
 ### Pattern 10: Row Lineage Tracing
 ```python
 # Trace a single row's lineage through upstream sources
-anchor("trace_row", output_df, keys=["project_id"], values={"project_id": "PJM-12345"},
+anchor("trace_row", output_df, keys=["order_id"], values={"order_id": "ORD-12345"},
    upstream={"source": source_df, "dim": dim_df})
 # → Traces each output column back to its upstream source
 # → Use when tracing where a wrong value came from
@@ -361,7 +361,7 @@ anchor("evolve", df, coerce_ctx=coerce_check_result)
 2. **Spark DataFrames are converted to pandas** internally. For tables >500K rows, the tools sample automatically.
 3. **profile_table subject parameter**: Pass it when using a DataFrame (not a table name) so output labels are meaningful.
 4. **case_file requires at least ONE targeting mode**: column+filter, row_ids+key_columns, or filter alone (for duplicates/where).
-5. **pattern fingerprint format**: Digits→`9`, uppercase→`A`, lowercase→`a`. So `"2024-01-15"` → `"9999-99-99"`, `"PJM-B16"` → `"AAA-A99"`.
+5. **pattern fingerprint format**: Digits→`9`, uppercase→`A`, lowercase→`a`. So `"2024-01-15"` → `"9999-99-99"`, `"ORD-B16"` → `"AAA-A99"`.
 6. **Co-occurrence returns empty for diverse tables**: This is correct behavior — diverse multi-category data genuinely has no strong co-occurrence. Don't treat empty co-occurrence as a bug.
 7. **where filter uses pandas query syntax**: Column names with spaces need backticks: `` filter="where:`Column Name` > 100" ``
 

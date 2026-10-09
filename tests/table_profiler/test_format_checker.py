@@ -34,14 +34,14 @@ def single_date_format_df() -> pd.DataFrame:
 @pytest.fixture
 def mixed_case_df() -> pd.DataFrame:
     """Low-cardinality column with same values in different cases."""
-    vals = ["Active"] * 40 + ["ACTIVE"] * 30 + ["active"] * 20 + ["Withdrawn"] * 10
+    vals = ["Active"] * 40 + ["ACTIVE"] * 30 + ["active"] * 20 + ["Cancelled"] * 10
     return pd.DataFrame({"status": vals})
 
 
 @pytest.fixture
 def consistent_case_df() -> pd.DataFrame:
     """Column already normalised to a single case."""
-    return pd.DataFrame({"status": ["Active"] * 60 + ["Withdrawn"] * 40})
+    return pd.DataFrame({"status": ["Active"] * 60 + ["Cancelled"] * 40})
 
 
 @pytest.fixture
@@ -73,8 +73,8 @@ def consistent_code_df() -> pd.DataFrame:
 @pytest.fixture
 def units_df() -> pd.DataFrame:
     """Column with embedded unit suffixes."""
-    vals = ["100.5MW"] * 50 + ["200 kW"] * 30 + ["150MW"] * 20
-    return pd.DataFrame({"capacity": vals})
+    vals = ["100.5kg"] * 50 + ["200 lb"] * 30 + ["150kg"] * 20
+    return pd.DataFrame({"weight": vals})
 
 
 @pytest.fixture
@@ -100,8 +100,8 @@ def currency_df() -> pd.DataFrame:
 def date_string_col_df() -> pd.DataFrame:
     """Column storing datetime strings — must NOT produce inconsistent_code_format.
 
-    Mirrors real-world columns like Air_Permit / GHG_Permit in queue_ercot
-    that store datetime strings such as '2024-02-09 00:00:00'.  These values
+    Mirrors spreadsheet-sourced columns like Gift_Message / Return_Reason in an
+    order export that store datetime strings such as '2024-02-09 00:00:00'.  These values
     match the code-separator regex (alphanumeric + '-' + alphanumeric) AND have
     mixed separators ('-' between date parts, ' ' between date and time), which
     previously triggered a false-positive inconsistent_code_format error.
@@ -111,7 +111,7 @@ def date_string_col_df() -> pd.DataFrame:
         + ["2025-01-15 12:30:00"] * 30
         + ["2023-11-01 00:00:00"] * 30
     )
-    return pd.DataFrame({"air_permit": vals})
+    return pd.DataFrame({"gift_message": vals})
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ class TestInconsistentCodeFormatDateGuard:
     def test_iso_date_only_strings_not_flagged(self) -> None:
         """Plain ISO date strings (no time part) should also be safe."""
         df = pd.DataFrame({
-            "permit_date": ["2024-02-09"] * 60 + ["2025-03-15"] * 40,
+            "return_date": ["2024-02-09"] * 60 + ["2025-03-15"] * 40,
         })
         issues = [
             i for i in detect_format_issues(df)
@@ -242,12 +242,12 @@ class TestInconsistentCodeFormatDateGuard:
     def test_natural_language_phrase_column_not_flagged(self) -> None:
         """Regression: 'Not Required' / 'See Note' columns must not be flagged.
 
-        Mirrors the real-world queue_ercot Air_Permit column which stores mostly
+        Mirrors a spreadsheet-sourced Gift_Message column which stores mostly
         'Not Required' (97%) with a few date strings (3%).  Space is the dominant
         separator so the column is a phrase column, not a code column.
         """
         vals = ["Not Required"] * 970 + ["2024-02-09 00:00:00"] * 30
-        df = pd.DataFrame({"air_permit": vals})
+        df = pd.DataFrame({"gift_message": vals})
         issues = [
             i for i in detect_format_issues(df)
             if i.issue_type == "inconsistent_code_format"
@@ -269,7 +269,7 @@ class TestNumericWithUnits:
     def test_column_name_correct(self, units_df: pd.DataFrame) -> None:
         issues = [i for i in detect_format_issues(units_df)
                   if i.issue_type == "numeric_with_units"]
-        assert issues[0].column == "capacity"
+        assert issues[0].column == "weight"
 
     def test_severity_is_error(self, units_df: pd.DataFrame) -> None:
         issues = [i for i in detect_format_issues(units_df)
@@ -344,21 +344,21 @@ class TestOutputContract:
             assert len(i.fix_suggestion) > 0
 
 class TestInconsistentCodeFormatPrefixGuard:
-    """B1 corpus fix: prefix-overlap guard prevents false positives on cluster/cycle cols."""
+    """B1 corpus fix: prefix-overlap guard prevents false positives on promo/wave cols."""
 
     def test_disjoint_code_series_not_flagged(self):
-        """ERCOT hyphen codes vs MISO space codes: disjoint prefixes must not produce errors."""
+        """Web-channel hyphen codes vs store-channel space codes: disjoint prefixes must not produce errors."""
         sample = (
-            ["ISA-3D2", "ISA-4D2", "ATXI-3", "ATXI-4"] * 20
-            + ["Cycle 3", "Cycle 4", "Group A", "Group B"] * 5
+            ["PROMO-3D2", "PROMO-4D2", "FLASH-3", "FLASH-4"] * 20
+            + ["Wave 3", "Wave 4", "Batch A", "Batch B"] * 5
         )
-        df = pd.DataFrame({"cluster_cycle_code": sample})
+        df = pd.DataFrame({"promo_wave_code": sample})
         issues = detect_format_issues(df)
         errors = [
             i for i in issues
             if i.issue_type == "inconsistent_code_format"
             and i.severity == "error"
-            and i.column == "cluster_cycle_code"
+            and i.column == "promo_wave_code"
         ]
         assert errors == [], (
             f"Disjoint-prefix groups should not produce code_format errors: {errors}"
@@ -380,30 +380,30 @@ class TestInconsistentCodeFormatPrefixGuard:
     def test_partial_prefix_overlap_above_threshold_still_flagged(self):
         """When >=20pct of minority prefixes overlap with dominant, flag is retained."""
         sample = (
-            ["ISA-3D2", "ISA-4D2", "ISA-5D2"] * 20
-            + ["ISA Cycle", "ISA Group", "OTHER Cycle"] * 8
+            ["PROMO-3D2", "PROMO-4D2", "PROMO-5D2"] * 20
+            + ["PROMO Wave", "PROMO Batch", "OTHER Wave"] * 8
         )
-        df = pd.DataFrame({"study_cycle": sample})
+        df = pd.DataFrame({"promo_wave": sample})
         issues = detect_format_issues(df)
         assert any(
-            i.issue_type == "inconsistent_code_format" and i.column == "study_cycle"
+            i.issue_type == "inconsistent_code_format" and i.column == "promo_wave"
             for i in issues
         ), "Partial overlap above threshold should still flag"
 
-    def test_study_cycle_real_world_not_error(self):
-        """Study_Cycle with real ERCOT+MISO corpus values must not produce an ERROR."""
+    def test_promo_wave_mixed_sources_not_error(self):
+        """Promo_Wave with values merged from two sales channels must not produce an ERROR."""
         sample = (
-            ["ISA-3D2", "ISA-4D2", "ATXI-3", "ISA-3"] * 25
-            + ["Cycle 3", "Group A"] * 5
+            ["PROMO-3D2", "PROMO-4D2", "FLASH-3", "PROMO-3"] * 25
+            + ["Wave 3", "Batch A"] * 5
         )
-        df = pd.DataFrame({"Study_Cycle": sample})
+        df = pd.DataFrame({"Promo_Wave": sample})
         issues = detect_format_issues(df)
         errors = [
             i for i in issues
             if i.issue_type == "inconsistent_code_format"
             and i.severity == "error"
-            and i.column == "Study_Cycle"
+            and i.column == "Promo_Wave"
         ]
         assert errors == [], (
-            f"Study_Cycle with disjoint series should not produce errors: {errors}"
+            f"Promo_Wave with disjoint series should not produce errors: {errors}"
         )

@@ -16,13 +16,13 @@ def _risk_types(context):
 
 
 def test_identical_tables_return_standard_ok_context():
-    old = pd.DataFrame({"id": [1, 2], "status": ["active", "retired"], "mw": [100.0, 50.0]})
+    old = pd.DataFrame({"id": [1, 2], "status": ["active", "discontinued"], "qty": [100.0, 50.0]})
     new = old.copy()
 
-    context = diff_tables_by_key(old, new, keys=["id"], subject="asset_snapshot", engine="pandas")
+    context = diff_tables_by_key(old, new, keys=["id"], subject="product_snapshot", engine="pandas")
 
     assert context["kind"] == "diff_tables_by_key"
-    assert context["subject"] == "asset_snapshot"
+    assert context["subject"] == "product_snapshot"
     assert context["status"] == "ok"
     assert {
         "kind",
@@ -39,7 +39,7 @@ def test_identical_tables_return_standard_ok_context():
     } <= set(context)
     assert context["engine"] == "pandas"
     assert context["columns"]["keys"] == ["id"]
-    assert context["columns"]["compared"] == ["status", "mw"]
+    assert context["columns"]["compared"] == ["status", "qty"]
     assert context["metrics"]["old_key_count"] == 2
     assert context["metrics"]["new_key_count"] == 2
     assert context["metrics"]["common_key_count"] == 2
@@ -58,19 +58,19 @@ def test_added_removed_and_changed_rows_are_summarized():
     old = pd.DataFrame(
         {
             "id": [1, 2, 3],
-            "status": ["active", "active", "retired"],
-            "mw": [100.0, 50.0, 25.0],
+            "status": ["active", "active", "discontinued"],
+            "qty": [100.0, 50.0, 25.0],
         }
     )
     new = pd.DataFrame(
         {
             "id": [2, 3, 4],
             "status": ["active", "active", "new"],
-            "mw": [55.0, 25.0, 10.0],
+            "qty": [55.0, 25.0, 10.0],
         }
     )
 
-    context = diff_tables_by_key(old, new, keys=["id"], subject="asset_snapshot", engine="pandas")
+    context = diff_tables_by_key(old, new, keys=["id"], subject="product_snapshot", engine="pandas")
 
     assert context["metrics"]["old_key_count"] == 3
     assert context["metrics"]["new_key_count"] == 3
@@ -84,33 +84,33 @@ def test_added_removed_and_changed_rows_are_summarized():
     assert context["samples"]["removed_keys"] == [{"id": 1}]
     assert len(context["samples"]["changed_rows"]) == 2
     assert context["samples"]["changed_rows"][0]["key"] == {"id": 2}
-    assert context["samples"]["changed_rows"][0]["changes"] == {"mw": {"old": 50.0, "new": 55.0}}
-    assert {item["column"] for item in context["metrics"]["changed_column_counts"]} == {"mw", "status"}
+    assert context["samples"]["changed_rows"][0]["changes"] == {"qty": {"old": 50.0, "new": 55.0}}
+    assert {item["column"] for item in context["metrics"]["changed_column_counts"]} == {"qty", "status"}
     assert "top_changed_columns" in _finding_types(context)
 
 
 def test_multi_column_key_comparison():
     old = pd.DataFrame(
         {
-            "asset_id": ["A", "A", "B"],
+            "product_id": ["A", "A", "B"],
             "snapshot_date": ["2026-01-01", "2026-01-02", "2026-01-01"],
             "status": ["on", "on", "off"],
         }
     )
     new = pd.DataFrame(
         {
-            "asset_id": ["A", "A", "B"],
+            "product_id": ["A", "A", "B"],
             "snapshot_date": ["2026-01-01", "2026-01-02", "2026-01-01"],
             "status": ["on", "off", "off"],
         }
     )
 
-    context = diff_tables_by_key(old, new, keys=["asset_id", "snapshot_date"], engine="pandas")
+    context = diff_tables_by_key(old, new, keys=["product_id", "snapshot_date"], engine="pandas")
 
     assert context["metrics"]["changed_key_count"] == 1
     assert context["samples"]["changed_rows"] == [
         {
-            "key": {"asset_id": "A", "snapshot_date": "2026-01-02"},
+            "key": {"product_id": "A", "snapshot_date": "2026-01-02"},
             "changed_column_count": 1,
             "changed_columns": ["status"],
             "changes": {"status": {"old": "on", "new": "off"}},

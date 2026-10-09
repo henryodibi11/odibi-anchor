@@ -114,9 +114,9 @@ For each function under test, design cases using this matrix:
 |---|---|---|---|
 | Schema drift | DataFrame missing a column | Clear error, not silent NULL | Upstream changes happen |
 | Type coercion | "1,234.5" in numeric column | Correct parse or NULL | Excel sources always have this |
-| Date formats | "01/15/2024", "2024-01-15", "Jan 15, 2024" | All parse correctly | ISO sources vary |
-| Large values | Capacity = 999,999 MW | No overflow | Catches numeric limits |
-| Special characters | Project name with quotes, unicode | No SQL injection or encoding error | Real data has these |
+| Date formats | "01/15/2024", "2024-01-15", "Jan 15, 2024" | All parse correctly | Source systems vary |
+| Large values | Order total = 999,999,999.99 | No overflow | Catches numeric limits |
+| Special characters | Product name with quotes, unicode | No SQL injection or encoding error | Real data has these |
 
 **Record as acceptance_criteria:**
 - Number of test cases per function

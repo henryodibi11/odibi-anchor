@@ -121,8 +121,8 @@ diff_ctx = anchor("diff", old_df, new_df, keys=["id"])
 ### Compare production table versions
 ```python
 ctx = anchor("schema_diff",
-         "analytics_dev.data_engineering_gold.gold_v1",
-         "analytics_dev.data_engineering_gold.gold_v2",
+         "example_catalog.gold.gold_v1",
+         "example_catalog.gold.gold_v2",
          spark=spark,
          old_subject="gold_v1",
          new_subject="gold_v2")

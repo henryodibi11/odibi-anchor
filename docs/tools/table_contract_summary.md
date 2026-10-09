@@ -74,7 +74,7 @@ def table_contract_summary(
         # ... additional metrics
     },
     "schema": [
-        {"column": "asset_id", "dtype": "string", "position": 0},
+        {"column": "store_id", "dtype": "string", "position": 0},
         ...
     ],
     "profile": {
@@ -83,7 +83,7 @@ def table_contract_summary(
     },
     "candidate_keys": {
         "provided_key": {
-            "columns": ["asset_id"],
+            "columns": ["store_id"],
             "is_unique": True,
             "status": "unique",
             "duplicate_count": 0,
@@ -113,12 +113,12 @@ import pandas as pd
 from odibi_anchor.tables import table_contract_summary
 
 df = pd.DataFrame({
-    "asset_id": ["A1", "A2", "A3"],
-    "region": ["ERCOT", "MISO", "PJM"],
-    "capacity_mw": [100.0, 250.5, 300.0],
+    "store_id": ["S1", "S2", "S3"],
+    "region": ["NORTH", "SOUTH", "WEST"],
+    "avg_order_total": [42.50, 61.25, 38.90],
 })
 
-ctx = table_contract_summary(df, subject="gold.energy.assets")
+ctx = table_contract_summary(df, subject="gold.retail.stores")
 print(ctx["summary"])
 print(f"Rows: {ctx['metrics']['row_count']}")
 ```
@@ -128,8 +128,8 @@ print(f"Rows: {ctx['metrics']['row_count']}")
 ```python
 ctx = table_contract_summary(
     df,
-    subject="silver.energy.readings",
-    candidate_key_columns=["asset_id", "date"],
+    subject="silver.retail.pos_readings",
+    candidate_key_columns=["store_id", "date"],
 )
 
 pk = ctx["candidate_keys"]["provided_key"]
@@ -197,7 +197,7 @@ md = render_contract_report(ctx, show_samples=True)
 ```python
 import json
 
-ctx = table_contract_summary(df, subject="gold.energy.assets")
+ctx = table_contract_summary(df, subject="gold.retail.stores")
 
 # Option 1: Full JSON (most structured)
 prompt = f"Table contract:\n```json\n{json.dumps(ctx, indent=2)}\n```"

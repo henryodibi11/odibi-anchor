@@ -123,8 +123,8 @@ if not result["passed"]:
 ```python
 result = duplicate_key_context(
     df,
-    keys=["asset_id", "reading_date"],
-    subject="silver.energy.readings",
+    keys=["store_id", "reading_date"],
+    subject="silver.retail.pos_readings",
 )
 ```
 

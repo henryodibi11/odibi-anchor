@@ -269,11 +269,11 @@ class TestAnalyzePandas:
         assert result["matching_left_rows"] == 2
 
     def test_multi_key_composite(self):
-        left = pd.DataFrame({"market": ["PJM", "PJM", "MISO"], "state": ["PA", "OH", "MI"]})
-        right = pd.DataFrame({"market": ["PJM", "MISO", "ERCOT"], "state": ["PA", "MI", "TX"]})
-        result = _analyze_pandas(left, right, ["market", "state"], ["market", "state"], sample_limit=10)
+        left = pd.DataFrame({"channel": ["WEB", "WEB", "STORE"], "state": ["PA", "OH", "MI"]})
+        right = pd.DataFrame({"channel": ["WEB", "STORE", "MARKETPLACE"], "state": ["PA", "MI", "TX"]})
+        result = _analyze_pandas(left, right, ["channel", "state"], ["channel", "state"], sample_limit=10)
 
-        assert result["overlap_count"] == 2  # PJM|PA and MISO|MI
+        assert result["overlap_count"] == 2  # WEB|PA and STORE|MI
         assert result["matching_left_rows"] == 2
 
     def test_matching_left_rows_pct(self):

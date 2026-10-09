@@ -779,7 +779,7 @@ def resolve_project(root: str | Path) -> str:
         root: Absolute path to the project root.
 
     Returns:
-        Short project name (e.g., "example-project", "queue-automation").
+        Short project name (e.g., "example-project", "order-analytics").
         Falls back to the last path component if no routing match.
     """
     root_str = str(root)

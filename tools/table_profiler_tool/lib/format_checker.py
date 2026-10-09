@@ -63,7 +63,7 @@ _BOOL_GROUPS: list[frozenset[str]] = [
     frozenset({"enabled", "disabled"}),
 ]
 
-# Regex for values with embedded units (e.g. "100.5MW", "200 kW", "45%")
+# Regex for values with embedded units (e.g. "100.5kg", "200 lb", "45%")
 # Excludes leading currency symbols — those are handled by semantic_typer
 _UNITS_RE = re.compile(r"^\d+(?:\.\d+)?\s*[A-Za-z%]+$")
 # Currency pattern: must start with $, £, €, ¥  OR end with known currency code
@@ -317,7 +317,7 @@ def _prefix_overlap_detected(
     """Return True if minority and dominant separator groups share >= threshold of first-token prefixes.
 
     When the two groups share no common prefixes, they belong to different naming
-    conventions (e.g. ERCOT 'ISA-3D2' vs MISO 'Cycle 3') rather than the same
+    conventions (e.g. 'PROMO-3D2' vs 'Wave 3') rather than the same
     code series formatted inconsistently.  In that case the separator difference
     is not a meaningful format problem.
 
@@ -383,7 +383,7 @@ def _check_inconsistent_code_format(sample: list[str], col: str) -> list[FormatI
 
     # Guard: if minority-separator values share no common first-token prefixes
     # with dominant-separator values, the two groups belong to different naming
-    # conventions (e.g. ERCOT 'ISA-3D2' vs MISO 'Cycle 3') rather than the
+    # conventions (e.g. 'PROMO-3D2' vs 'Wave 3') rather than the
     # same code series with inconsistent formatting.  Suppress in that case.
     dom_vals = [v for v in code_vals
                 if (m := sep_re.search(v)) and m.group(1) == dominant]
@@ -420,7 +420,7 @@ def _check_inconsistent_code_format(sample: list[str], col: str) -> list[FormatI
 
 
 def _check_numeric_with_units(sample: list[str], col: str) -> list[FormatIssue]:
-    """Flag values that mix numeric content with unit suffixes (100.5MW, 45%).
+    """Flag values that mix numeric content with unit suffixes (100.5kg, 45%).
 
     Excludes pure currency values (e.g. $100, 100 USD) which are a valid
     semantic type rather than a format inconsistency.

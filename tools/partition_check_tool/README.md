@@ -29,10 +29,10 @@ sys.path.insert(0, "/Workspace/Users/user@example.com/odibi_anchor/src")
 from odibi_anchor.bootstrap import init
 anchor, ROOT, MANIFEST = init()
 
-ctx = anchor("partition_check", "analytics_dev.data_engineering_reference.guide_utility")
+ctx = anchor("partition_check", "example_catalog.reference.store_directory")
 ```
 
-Replace `analytics_dev.data_engineering_reference.guide_utility` with your table.
+Replace `example_catalog.reference.store_directory` with your table.
 
 ---
 
@@ -118,7 +118,7 @@ sys.path.insert(0, "/Workspace/Users/user@example.com/odibi_anchor/src")
 from tools.partition_check_tool.partition_check_impl import partition_check_context
 
 # Requires an active SparkSession — runs on Databricks only
-ctx = partition_check_context("analytics_dev.data_engineering_reference.guide_utility")
+ctx = partition_check_context("example_catalog.reference.store_directory")
 
 ctx["summary"]
 # "⚠️ 5 small files (100%). OPTIMIZE recommended — estimated 3-6x query speedup."

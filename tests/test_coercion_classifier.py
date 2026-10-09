@@ -27,7 +27,7 @@ class TestClassifyPair:
         assert _classify_pair("ACTIVE", "Active") == "case"
 
     def test_unicode_zero_width_space(self):
-        assert _classify_pair("PJM\u200b", "PJM") == "unicode"
+        assert _classify_pair("NORTH\u200b", "NORTH") == "unicode"
 
     def test_unicode_feff(self):
         assert _classify_pair("\ufeffvalue", "value") == "unicode"
@@ -42,7 +42,7 @@ class TestClassifyPair:
         assert _classify_pair("05/14/2026", "2026-05-14") == "date_format"
 
     def test_genuine(self):
-        assert _classify_pair("Wind", "Solar") == "genuine"
+        assert _classify_pair("Apparel", "Electronics") == "genuine"
 
     def test_priority_whitespace_before_case(self):
         """Whitespace check happens before case check."""
@@ -120,36 +120,36 @@ class TestCoercionCheckContext:
 
 
 class TestCoercionCheckIntegration:
-    """Integration tests with real queue automation data."""
+    """Integration tests with synthetic weekly order-export workbooks."""
 
     @pytest.fixture
-    def idb_data(self):
+    def export_data(self):
         pytest.importorskip("openpyxl")
         import os
         fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
-        old_path = os.path.join(fixtures, "CRM_data_2026_05_19.xlsx")
-        new_path = os.path.join(fixtures, "CRM_data_2026_05_29_GOLD.xlsx")
+        old_path = os.path.join(fixtures, "orders_export_2026_05_19.xlsx")
+        new_path = os.path.join(fixtures, "orders_export_2026_05_29_GOLD.xlsx")
         if not os.path.exists(old_path) or not os.path.exists(new_path):
             pytest.skip("Fixture files not available")
-        old = pd.read_excel(old_path, sheet_name="INTERCONNECTIONS DB")
-        new = pd.read_excel(new_path, sheet_name="INTERCONNECTIONS DB")
+        old = pd.read_excel(old_path, sheet_name="ORDERS")
+        new = pd.read_excel(new_path, sheet_name="ORDERS")
         return old, new
 
-    def test_requested_cod_year_no_coercion(self, idb_data):
-        """Requested COD Year diffs are null transitions, not coercion."""
-        old, new = idb_data
+    def test_requested_delivery_year_no_coercion(self, export_data):
+        """Requested Delivery Year diffs are null transitions, not coercion."""
+        old, new = export_data
         ctx = coercion_check_context(
-            old, new, keys=["Application ID"],
-            columns=["Requested COD Year"],
+            old, new, keys=["Order ID"],
+            columns=["Requested Delivery Year"],
         )
-        cr = ctx["column_results"].get("Requested COD Year", {})
+        cr = ctx["column_results"].get("Requested Delivery Year", {})
         assert cr["total_mismatches"] == 0
 
-    def test_unicode_mismatches_detected(self, idb_data):
-        """Real data contains unicode/invisible-char mismatches."""
-        old, new = idb_data
+    def test_unicode_mismatches_detected(self, export_data):
+        """The export workbooks contain unicode/invisible-char mismatches."""
+        old, new = export_data
         ctx = coercion_check_context(
-            old, new, keys=["Application ID"],
+            old, new, keys=["Order ID"],
         )
         cat_totals = ctx["metrics"]["category_totals"]
         assert cat_totals.get("unicode", 0) > 0

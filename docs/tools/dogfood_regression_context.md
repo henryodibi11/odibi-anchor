@@ -43,7 +43,7 @@ if ctx["metrics"]["regressions_count"] > 0:
 ```python
 {
     "kind": "dogfood_regression_context",
-    "subject": "exploration_context::silver.queue_positions",
+    "subject": "exploration_context::silver.order_snapshots",
     "summary": "2 improvement(s), 0 regression(s), 0 unchanged vs baseline",
     "metrics": {
         "improvements_count": 2,
@@ -60,7 +60,7 @@ if ctx["metrics"]["regressions_count"] > 0:
             "reason": "value improved from 7 to 3",
         },
     ],
-    "baseline_path": ".dogfood_baselines/exploration_context__silver_queue_positions.json",
+    "baseline_path": ".dogfood_baselines/exploration_context__silver_order_snapshots.json",
     "findings": [...],
     "risks": [...],
     "samples": [],

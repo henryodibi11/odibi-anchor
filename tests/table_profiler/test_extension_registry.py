@@ -44,15 +44,15 @@ class TestRegistration:
 
     def test_register_basic_pattern(self):
         spec = register_semantic_pattern(
-            name="interconnection_number",
-            regex=r"IC-\d{6}",
-            description="Interconnection ID format",
-            examples=["IC-001234", "IC-999999"],
+            name="order_number",
+            regex=r"ORD-\d{6}",
+            description="Order number format",
+            examples=["ORD-001234", "ORD-999999"],
         )
-        assert spec.name == "interconnection_number"
-        assert spec.regex == r"IC-\d{6}"
-        assert spec.description == "Interconnection ID format"
-        assert spec.examples == ["IC-001234", "IC-999999"]
+        assert spec.name == "order_number"
+        assert spec.regex == r"ORD-\d{6}"
+        assert spec.description == "Order number format"
+        assert spec.examples == ["ORD-001234", "ORD-999999"]
 
     def test_register_appears_in_registry(self):
         register_semantic_pattern("test_pat", r"TP-\d+")

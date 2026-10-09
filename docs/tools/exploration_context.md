@@ -54,34 +54,34 @@ def exploration_context(
 ```python
 {
     "kind": "exploration_context",
-    "subject": "silver.queue_positions",
-    "summary": "silver.queue_positions: 290,954 rows, 22 cols, grain=[application_id, snapshot_year, snapshot_month], fresh (18.9d ago). 2 high-null col(s).",
+    "subject": "silver.order_snapshots",
+    "summary": "silver.order_snapshots: 186,420 rows, 18 cols, grain=[order_id, snapshot_year, snapshot_month], fresh (18.9d ago). 2 high-null col(s).",
     "metrics": {
-        "row_count": 290954,
-        "column_count": 22,
+        "row_count": 186420,
+        "column_count": 18,
         "high_null_column_count": 2,
         "unique_columns": [],
         "grain_is_unique": True,
         "has_freshness_signal": True,
     },
-    "columns": ["application_id", "market", ...],
+    "columns": ["order_id", "region", ...],
     "column_profiles": {
-        "application_id": {
+        "order_id": {
             "dtype": "StringType()",
             "null_count": 0,
             "null_pct": 0.0,
-            "distinct_count": 21754,
+            "distinct_count": 15104,
             "is_unique": False,
         },
         ...
     },
     "grain_analysis": {
-        "best_grain": ["application_id", "snapshot_year", "snapshot_month"],
+        "best_grain": ["order_id", "snapshot_year", "snapshot_month"],
         "is_unique": True,
         "duplicate_rate": 0.0,
         "candidates_tested": [
-            {"columns": ["application_id"], "is_unique": False, "duplicate_rate": 0.9271},
-            {"columns": ["application_id", "snapshot_year", "snapshot_month"], "is_unique": True, "duplicate_rate": 0.0},
+            {"columns": ["order_id"], "is_unique": False, "duplicate_rate": 0.919},
+            {"columns": ["order_id", "snapshot_year", "snapshot_month"], "is_unique": True, "duplicate_rate": 0.0},
         ],
     },
     "freshness": {
@@ -91,7 +91,7 @@ def exploration_context(
         "staleness": "18.9d ago",
         "staleness_hours": 454.49,
     },
-    "suggested_keys": ["application_id", "snapshot_year", "snapshot_month"],
+    "suggested_keys": ["order_id", "snapshot_year", "snapshot_month"],
     "findings": [...],
     "risks": [...],
     "samples": [...],
@@ -122,8 +122,8 @@ When `candidate_keys` is provided, only that combination is tested.
 
 ### Why partition hints exist
 
-Many ExampleCo tables use `entity_id + snapshot_year + snapshot_month` as their grain
-(each row is one entity per monthly snapshot). Before v0.2.0, these columns were
+Many warehouse tables use `entity_id + snapshot_year + snapshot_month` as their grain
+(each row is one entity per monthly snapshot, e.g. one order per month in an order snapshot table). Before v0.2.0, these columns were
 categorized only as temporal and competed with date columns for a 3-slot cap. Now they
 are tested explicitly as grain partition dimensions — a higher-priority category.
 
@@ -143,10 +143,10 @@ df = spark.table("catalog.schema.my_table")
 ctx = exploration_context(df, subject="silver.my_table")
 
 print(ctx["summary"])
-# "silver.my_table: 290,954 rows, 22 cols, grain=[app_id, snapshot_year, snapshot_month], fresh (18.9d ago)."
+# "silver.my_table: 186,420 rows, 18 cols, grain=[order_id, snapshot_year, snapshot_month], fresh (18.9d ago)."
 
 print(ctx["suggested_keys"])
-# ["app_id", "snapshot_year", "snapshot_month"]
+# ["order_id", "snapshot_year", "snapshot_month"]
 ```
 
 ### With domain knowledge (provide candidate keys)
@@ -154,8 +154,8 @@ print(ctx["suggested_keys"])
 ```python
 ctx = exploration_context(
     df,
-    subject="silver.queue_positions",
-    candidate_keys=["application_id", "snapshot_year", "snapshot_month"],
+    subject="silver.order_snapshots",
+    candidate_keys=["order_id", "snapshot_year", "snapshot_month"],
 )
 # grain_analysis["is_unique"] → True (confirmed unique)
 ```
@@ -174,27 +174,29 @@ ctx = exploration_context(df, subject="raw.invoices")
 report = exploration_context(df, subject="silver.events", output_format="markdown")
 ```
 
-## Real-World Output (dog-food on production data)
+## Illustrative Output (retail order snapshots)
 
-Tested on `analytics_dev.data_engineering_silver.queue_positions` (290,954 rows, 22 columns):
+The following is an illustrative example on a hypothetical `silver.order_snapshots`
+table (one row per order per monthly snapshot). The numbers are invented for
+documentation and do not come from any real dataset:
 
 ```
-Summary: silver.queue_positions: 290,954 rows, 22 cols,
-  grain=[application_id, snapshot_year, snapshot_month], fresh (18.9d ago). 2 high-null col(s).
+Summary: silver.order_snapshots: 186,420 rows, 18 cols,
+  grain=[order_id, snapshot_year, snapshot_month], fresh (18.9d ago). 2 high-null col(s).
 
 Grain Analysis (auto-detected, no candidate_keys provided):
-  application_id alone → 92.71% dup rate (not unique — snapshot table)
-  application_id + snapshot_year + snapshot_month → 0.00% dup rate ✓ UNIQUE
-  application_id + snapshot_year → 85.69% dup rate
-  application_id + snapshot_month → 20.49% dup rate
-  application_id + queue_date → 91.51% dup rate
-  application_id + in_service_date → 89.64% dup rate
-  application_id + cod_date → 87.90% dup rate
+  order_id alone → 91.90% dup rate (not unique — snapshot table)
+  order_id + snapshot_year + snapshot_month → 0.00% dup rate ✓ UNIQUE
+  order_id + snapshot_year → 84.37% dup rate
+  order_id + snapshot_month → 19.82% dup rate
+  order_id + order_date → 91.90% dup rate
+  order_id + delivered_date → 89.41% dup rate
+  order_id + ship_date → 88.75% dup rate
 
 Freshness: _extracted_at, latest 2026-04-22 14:59:10 (18.9d ago)
 
 Risks:
-  • 2 columns exceed 50% null rate: poi, project_status_constructed
+  • 2 columns exceed 50% null rate: gift_message, return_reason
 ```
 
 The grain is found on the second candidate tested — `_GRAIN_PARTITION_HINTS` correctly

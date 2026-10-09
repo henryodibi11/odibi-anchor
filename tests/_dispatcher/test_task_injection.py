@@ -261,10 +261,10 @@ files_touched: []
         assert result["_task_policy_stage"]["auto_problem"] is None
 
     def test_task_can_seed_problem_once_and_resume_it(self, tmp_path):
-        state = SimpleNamespace(active_problem=None, active_project="queue-automation")
+        state = SimpleNamespace(active_problem=None, active_project="order-analytics")
         kwargs = {
-            "goal": "Choose the first queue bottleneck to address",
-            "background": "Queue jobs exceed the agreed processing window.",
+            "goal": "Choose the first export bottleneck to address",
+            "background": "Order export jobs exceed the agreed processing window.",
             "create_problem": True,
         }
 
@@ -289,11 +289,11 @@ files_touched: []
         created = problem_action(
             tmp_path,
             "create",
-            title="Queue latency",
-            project_id="queue",
+            title="Export latency",
+            project_id="exports",
             output_format="dict",
         )
-        state = SimpleNamespace(active_problem=None, active_project="queue")
+        state = SimpleNamespace(active_problem=None, active_project="exports")
 
         result = inject_session_context(
             {"goal": "Continue analysis", "problem": created["problem_id"]},

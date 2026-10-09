@@ -93,7 +93,7 @@ profile_table(
 | `pattern_fingerprint` | str | None | Dominant value fingerprint — use with `filter="pattern:XXX"` |
 | `has_leading_spaces` / `has_trailing_spaces` | bool | Whitespace flags |
 | `has_mixed_case` | bool | Enum case inconsistency |
-| `has_embedded_units` | bool | Values like `"100 MW"` mixing text and numbers |
+| `has_embedded_units` | bool | Values like `"100 kg"` mixing text and numbers |
 | `suspected_fk_target` | str | None | Inferred foreign key target column |
 | `correlated_nulls` | list[str] | Columns whose nulls co-occur with this column's nulls |
 | `format_issues` | list[FormatIssue] | Issues specific to this column |
