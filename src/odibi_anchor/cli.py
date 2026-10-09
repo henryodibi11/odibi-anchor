@@ -126,15 +126,19 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--persona")
     state = commands.add_parser("state", help="inspect or transfer durable Anchor state")
     state_commands = state.add_subparsers(dest="state_command", required=True)
-    for name in ("list", "snapshot", "restore"):
-        command = state_commands.add_parser(name)
+    for name in ("list", "snapshot", "restore", "resume", "abandon"):
+        command = state_commands.add_parser(name, help={
+            "resume": "finish an incomplete restore against its recorded snapshot",
+            "abandon": "move an incomplete restore to a preserved quarantine path",
+        }.get(name))
         command.add_argument("--durable-root", required=True)
         command.add_argument("--authority", required=True)
         command.add_argument("--databricks", action="store_true")
-        if name in {"snapshot", "restore"}:
+        if name != "list":
             command.add_argument("--database", required=True)
             command.add_argument(
                 "--artifacts",
+                required=name in {"resume", "abandon"},
                 help="absolute managed projects directory for v2 snapshot or restore",
             )
     return parser
@@ -190,7 +194,13 @@ def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
 
 
 def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
-    from odibi_anchor.durability import list_snapshots, restore_latest, snapshot_state
+    from odibi_anchor.durability import (
+        abandon_restore,
+        list_snapshots,
+        restore_latest,
+        resume_restore,
+        snapshot_state,
+    )
 
     if ns.state_command == "list":
         return list_snapshots(
@@ -208,6 +218,15 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
         )
     if ns.state_command == "restore":
         return restore_latest(
+            durable_root=ns.durable_root,
+            destination_db=ns.database,
+            destination_artifacts=ns.artifacts,
+            authority_id=ns.authority,
+            databricks=ns.databricks,
+        )
+    if ns.state_command in {"resume", "abandon"}:
+        operation = resume_restore if ns.state_command == "resume" else abandon_restore
+        return operation(
             durable_root=ns.durable_root,
             destination_db=ns.database,
             destination_artifacts=ns.artifacts,

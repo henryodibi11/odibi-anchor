@@ -190,6 +190,16 @@ def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypat
         assert connection.execute("SELECT value FROM facts").fetchone() == ("kept",)
     assert (restored_artifacts / "record.md").read_text() == "# Kept\n"
 
+    for command in ("resume", "abandon"):
+        assert cli.main([
+            "state", command, *common, "--database", str(tmp_path / "other.db"),
+            "--artifacts", str(restored_artifacts),
+        ]) != 0
+        error = json.loads(capsys.readouterr().out)["error"]
+        assert error["error_code"] == "restore_destination_conflict"
+        assert error["context"]["observed"] == "no_owned_restore_record"
+    assert (restored_artifacts / "record.md").read_text() == "# Kept\n"
+
 
 def test_state_list_cli_selects_databricks_transport(monkeypatch, capsys):
     calls = []

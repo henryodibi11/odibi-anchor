@@ -143,9 +143,94 @@ anchor state restore --database /tmp/odibi-anchor/.agent_memory.db \
   --durable-root /Volumes/catalog/schema/anchor --authority enterprise-analytics-ai --databricks
 ```
 
-Initial authority is one active compute replica at a time. Immutable route isolation
-does not make simultaneous writers on separate Databricks computes safe. Multi-replica
-writes require a later lease/CAS service or transactional server database.
+### Restore classification
+
+Preparation reports `restore.classification` and initializes empty local state only on
+confirmed first use:
+
+| Classification | Meaning | Preparation |
+| --- | --- | --- |
+| `restored` | The newest verified snapshot was restored. | Continues. |
+| `local_present` | The local database already exists, so nothing is restored. | Continues. |
+| `no_lineage` | The durable root is confirmed reachable and holds no authority marker or snapshot. | Initializes a new database. |
+| `not_configured` | No durable root is configured for this host. | Initializes a new database. |
+| `durable_root_unavailable` | The local directory or Databricks Volume root cannot be confirmed to exist or be reachable. | Fails closed. |
+| `durable_lineage_missing` | `<durable_root>/<authority_id>/AUTHORITY.json` shows snapshots were published, but no valid snapshot remains. | Fails closed. |
+
+Every successful snapshot publication writes the authority marker if it is absent, including
+the next checkpoint of a lineage created before v0.3.24. The marker sits outside `snapshots/`,
+so older readers ignore it, and its bytes are identical for every writer of the same
+authority. Until a pre-v0.3.24 lineage is checkpointed again, an emptied lineage cannot be told
+apart from first use. Deleting the whole `<durable_root>/<authority_id>` directory, marker
+included, also looks like first use. A local durable root is confirmed only as an existing
+directory, so an unmounted mount point that leaves an empty directory is classified
+`no_lineage`. On Databricks, a Files API `NotFound` on the snapshot directory counts as
+first use only after a Files API metadata request confirms the Volume itself
+(`/Volumes/<catalog>/<schema>/<volume>`). A missing or unreachable Volume is
+`durable_root_unavailable`. A subdirectory that does not exist yet inside an existing Volume is
+first use, so a mistyped subdirectory starts a new lineage at the next checkpoint.
+
+### Restore ownership and recovery
+
+Restore creates the managed projects destination with an exclusive directory creation. It
+records that directory's device and inode in an exclusively created
+`.odibi-anchor-restore-owner.json` marker with a per-invocation nonce, then copies into the
+directory. If the destination already exists or appears before the claim, restore stops with
+`restore_destination_conflict` and changes nothing at the destination. If copying or proof verification fails,
+restore removes only the files and directories it created, and only while the directory
+identity and marker still match. It never deletes a path on the strength of its type or a
+prior absence check.
+
+The database is still published last. Just before publication, restore records the staged
+database's SHA-256 in the marker. If a later failure leaves the owned tree in place, the
+marker stays as the incomplete-restore record. This covers a failed database publication, a
+failed cleanup, and a crash before the marker is removed. Preparation and snapshot then report
+`restore_incomplete` with copy-ready recovery operations:
+
+```bash
+anchor state resume --durable-root /Volumes/catalog/schema/anchor \
+  --authority enterprise-analytics-ai --databricks \
+  --database /tmp/odibi-anchor/.agent_memory.db \
+  --artifacts /tmp/odibi-anchor/workspace/projects
+anchor state abandon --durable-root /Volumes/catalog/schema/anchor \
+  --authority enterprise-analytics-ai --databricks \
+  --database /tmp/odibi-anchor/.agent_memory.db \
+  --artifacts /tmp/odibi-anchor/workspace/projects
+```
+
+The Python equivalents are `odibi_anchor.durability.resume_restore(...)` and
+`abandon_restore(...)` with the same keyword arguments as `restore_latest`. `resume`
+re-verifies the tree against the same recorded snapshot manifest, even if a newer snapshot
+exists. It fills in only absent entries, refuses any differing or unexpected entry, and then
+publishes the database. If the database already holds exactly the bytes this restore
+published, whether it was hard-linked or copied into place, `resume` only removes the marker. A
+partially written copy does not match, so `resume` refuses and the owner must inspect that
+database file; Anchor does not remove it. `abandon` moves the tree, including any foreign entries, to a
+sibling `projects.restore-abandoned-<timestamp>-<nonce>/projects` path and deletes nothing.
+Both refuse when the directory identity, marker, or requested arguments do not match the
+record. `resume` also refuses when a database it did not publish exists. `abandon` refuses when
+this restore already published the database, because `resume` finalizes that case. When
+`resume` cannot succeed, for example because foreign or differing entries are present, the
+error offers only `abandon`. A process crash during copy leaves the same record. `resume` fills
+in entries that were never written, but a partially written file differs from the snapshot, so
+`resume` refuses and `abandon` is the recovery. If the recorded manifest is missing or no longer
+verifies, the error offers only `abandon`; transport errors are raised unchanged so `resume` can
+be retried. Directory ownership uses device and inode numbers, so a
+filesystem that renumbers them across a remount turns the record into an unowned directory, and
+both operations refuse.
+
+These are local filesystem primitives: exclusive creation, identity comparison, and atomic
+rename. They detect concurrent changes and keep cleanup from reaching another writer's
+content, but they are not distributed locks. Path checks and the following operation are not
+one atomic step. Power-loss durability depends on the host filesystem honoring `fsync`. The
+Databricks Files API offers no compare-and-swap. A concurrent upload of identical bytes is
+accepted after a byte-for-byte readback, and anything else fails closed.
+
+Initial authority is one active compute replica at a time. Use one active writer per durable
+authority, and do not restore while another agent, process, thread, or person can create or
+modify the destination. Immutable route isolation does not make simultaneous writers on
+separate Databricks computes safe. Multi-replica writes require a later lease/CAS service or
+transactional server database.
 
 Within one explicit `work` authority, assessed evidence-backed `workbench` observations
 may become advisory `all`-project candidates and are retrieved alongside exact-project

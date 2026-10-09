@@ -345,8 +345,19 @@ def prepare_portfolio_runtime(
     durable_root = environment.get("ANCHOR_DURABLE_ROOT")
     is_databricks = adapter == "databricks"
     if durable_root is not None and not is_databricks and not Path(durable_root).is_dir():
-        raise FileNotFoundError(
-            "configured durable_root is unavailable; refusing to initialize or reuse local state"
+        from odibi_anchor._recovery import attach_recovery
+
+        raise attach_recovery(
+            FileNotFoundError(
+                "configured durable_root is unavailable; refusing to initialize or reuse local state"
+            ),
+            error_code="durable_root_unavailable",
+            context={
+                "classification": "durable_root_unavailable",
+                "durable_root": durable_root,
+                "databricks": False,
+                "observed": "not_a_directory",
+            },
         )
     if durable_root is not None:
         from odibi_anchor.durability import qualify_durability
@@ -358,9 +369,18 @@ def prepare_portfolio_runtime(
             databricks=is_databricks,
         )
     home.mkdir(parents=True, exist_ok=True)
-    restore: dict[str, Any] = {"status": "not_applicable", "reason": "local database already exists"}
+    restore: dict[str, Any] = {
+        "status": "not_applicable", "reason": "local database already exists",
+        "classification": "local_present",
+    }
     projects = home / "workspace" / "projects"
     snapshots: list[dict[str, Any]] = []
+    if durable_root is not None and projects.exists():
+        from odibi_anchor.durability import _incomplete_restore_error
+
+        incomplete = _incomplete_restore_error(projects)
+        if incomplete is not None:
+            raise incomplete
     if durable_root is not None and database.exists() != projects.exists():
         from odibi_anchor.durability import list_snapshots
 
@@ -370,7 +390,9 @@ def prepare_portfolio_runtime(
                 authority_id=authority_id,
                 databricks=is_databricks,
             )["snapshots"]
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            if getattr(exc, "error_code", None) == "durable_root_unavailable":
+                raise
             snapshots = []
         latest_is_v2 = bool(
             snapshots and snapshots[-1].get("format") == "odibi-anchor-durable-snapshot-v2"
@@ -387,6 +409,8 @@ def prepare_portfolio_runtime(
                 restore_latest,
             )
 
+            # Only confirmed first use initializes empty state; an unreachable root, a
+            # lineage whose snapshots vanished, or an unfinished restore fails closed.
             try:
                 restore = timed_call(
                     "restore", restore_latest,
@@ -396,10 +420,16 @@ def prepare_portfolio_runtime(
                     authority_id=authority_id,
                     databricks=is_databricks,
                 )
-            except (FileNotFoundError, DurableSnapshotUnavailable):
-                restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
+            except DurableSnapshotUnavailable:
+                restore = {
+                    "status": "not_applicable", "reason": "no durable snapshot exists",
+                    "classification": "no_lineage",
+                }
         else:
-            restore = {"status": "not_applicable", "reason": "no durable snapshot exists"}
+            restore = {
+                "status": "not_applicable", "reason": "no durable snapshot exists",
+                "classification": "not_configured",
+            }
     from odibi_anchor.durability import ensure_database_authority
 
     ownership = ensure_database_authority(
@@ -678,8 +708,8 @@ def bootstrap_managed_project(
         "restore": {
             key: prepared["restore"][key]
             for key in (
-                "status", "action", "reason", "snapshot_id", "sha256", "format",
-                "integrity_check", "continuity",
+                "status", "action", "classification", "reason", "snapshot_id", "sha256",
+                "format", "integrity_check", "continuity",
             )
             if key in prepared["restore"]
         },
