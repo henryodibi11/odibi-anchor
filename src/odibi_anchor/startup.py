@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from odibi_anchor import __version__
+from odibi_anchor._bootstrap_phases import records_bootstrap_timings, timed_call
 
 _DATABRICKS_SDK_MINIMUM = "0.138.0"
 
@@ -200,7 +201,8 @@ def launch(
 
     from odibi_anchor._dispatcher._project import resolve_route_binding
 
-    route = resolve_route_binding(
+    route = timed_call(
+        "route_binding", resolve_route_binding,
         home, project=requested_project, target_hint=target,
         runtime_instance_id=f"startup:{os.getpid()}",
     )
@@ -226,10 +228,12 @@ def launch(
             "route_binding": route,
             "output_format": output_format,
         }
-        repository_provider = _repository_provider_for_target(target)
+        repository_provider = timed_call(
+            "repository_provider", _repository_provider_for_target, target
+        )
         if repository_provider is not None:
             init_kwargs["repository_provider"] = repository_provider
-        anchor, _root, _manifest = init(**init_kwargs)
+        anchor, _root, _manifest = timed_call("init", init, **init_kwargs)
     finally:
         for name, value in previous.items():
             if value is None:
@@ -384,7 +388,8 @@ def prepare_portfolio_runtime(
             )
 
             try:
-                restore = restore_latest(
+                restore = timed_call(
+                    "restore", restore_latest,
                     durable_root=durable_root,
                     destination_db=database,
                     destination_artifacts=projects,
@@ -487,6 +492,7 @@ def _managed_host_id(
     return str(matches[0])
 
 
+@records_bootstrap_timings
 def bootstrap_managed_project(
     *,
     config_path: str | os.PathLike[str],
@@ -500,7 +506,9 @@ def bootstrap_managed_project(
 
     Existing projects need only their ID. Creation is a separate explicit mode and
     requires an exact existing target; successful creation is durably checkpointed
-    when the selected host configures durable storage.
+    when the selected host configures durable storage. The startup packet's
+    ``timings`` reports each phase's elapsed milliseconds and outcome; a failure
+    carries the same summary as ``exc.bootstrap_timings``.
     """
     from odibi_anchor.portfolio import add_project, load_portfolio_document, resolve_project
 
@@ -509,7 +517,7 @@ def bootstrap_managed_project(
         r"[a-z0-9]+(?:-[a-z0-9]+)*", project_id
     ) is None:
         raise ValueError("project_id must be a canonical lowercase hyphenated project ID")
-    document = load_portfolio_document(config_path)
+    document = timed_call("portfolio_load", load_portfolio_document, config_path)
     portfolio = document["portfolio"]
     selected_host = _managed_host_id(
         portfolio, instruction_root=root, host_id=host_id
@@ -518,7 +526,7 @@ def bootstrap_managed_project(
 
     from odibi_anchor.host_setup import setup_host
 
-    guidance = setup_host(root, adapter=host["adapter"])
+    guidance = timed_call("host_guidance", setup_host, root, adapter=host["adapter"])
 
     def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
         optional_managed_names = {
@@ -550,7 +558,8 @@ def bootstrap_managed_project(
         if project_root is None:
             raise ValueError("project_root is required when create_if_missing is true")
         target = _absolute_directory(project_root, "project_root")
-        expected_environment, _expected_local_state = _runtime_environment({
+        expected_environment, _expected_local_state = timed_call(
+            "local_state_identity", _runtime_environment, {
             "ANCHOR_HOME": host["local_state_root"],
             "ANCHOR_MEMORY_DB": os.path.join(
                 host["local_state_root"], ".agent_memory.db"
@@ -589,7 +598,8 @@ def bootstrap_managed_project(
     elif create_if_missing:
         raise ValueError(f"managed project already exists: {project_id}")
     else:
-        expected_environment, _expected_local_state = _runtime_environment(
+        expected_environment, _expected_local_state = timed_call(
+            "local_state_identity", _runtime_environment,
             resolve_project(
                 portfolio, host_id=selected_host, project_id=project_id
             )["environment"],
@@ -597,7 +607,8 @@ def bootstrap_managed_project(
         )
         refuse_environment_conflicts(expected_environment)
 
-    prepared = prepare_portfolio_runtime(
+    prepared = timed_call(
+        "runtime_preparation", prepare_portfolio_runtime,
         config_path=config_path,
         host_id=selected_host,
         project_id=project_id,
@@ -611,7 +622,7 @@ def bootstrap_managed_project(
         project_root=prepared["target_root"],
         output_format="dict",
     )
-    orientation = anchor("orient", output_format="dict")
+    orientation = timed_call("orient", anchor, "orient", output_format="dict")
     if not isinstance(orientation, Mapping) or orientation.get("kind") != "orientation":
         raise RuntimeError("Odibi Anchor orientation returned an invalid structured result")
     status = orientation.get("status")
@@ -631,7 +642,8 @@ def bootstrap_managed_project(
         from odibi_anchor.durability import snapshot_state
 
         home = Path(prepared["environment"]["ANCHOR_HOME"])
-        durable_checkpoint = snapshot_state(
+        durable_checkpoint = timed_call(
+            "durable_checkpoint", snapshot_state,
             source_db=prepared["environment"]["ANCHOR_MEMORY_DB"],
             source_artifacts=home / "workspace" / "projects",
             durable_root=durable_root,

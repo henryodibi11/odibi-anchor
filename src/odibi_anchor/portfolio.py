@@ -24,6 +24,7 @@ _IS_WINDOWS = os.name == "nt"
 _ADAPTERS = frozenset({"amp", "claude", "databricks", "chatgpt"})
 _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
 _PROJECT_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_PACKAGE_VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 _SECRET = re.compile(r"(?:^|_)(?:secret|token|password|passwd|credential|api_key|private_key)(?:$|_)", re.I)
 _PERSONA_FORBIDDEN = frozenset(
     {
@@ -71,8 +72,19 @@ def portfolio_schema() -> dict[str, Any]:
         "hosts": {
             "key": "safe_id",
             "required": ["adapter", "local_state_root"],
-            "optional": ["instruction_root", "durable_root"],
+            "optional": ["instruction_root", "durable_root", "package_version"],
             "adapters": sorted(_ADAPTERS),
+            "package_version": {
+                "format": "exact stable release MAJOR.MINOR.PATCH, for example 0.3.24",
+                "default": "latest stable release from the package index",
+                "precedence": [
+                    "ANCHOR_PACKAGE_VERSION launcher init global",
+                    "ANCHOR_PACKAGE_VERSION environment variable",
+                    "hosts.<id>.package_version",
+                    "latest stable release",
+                ],
+                "effect": "the managed Databricks launcher requires installed == pin and skips the index",
+            },
         },
         "projects": {
             "key": "safe_id",
@@ -192,12 +204,24 @@ def _structural(portfolio: Any) -> dict[str, Any]:
     for host_id, host_value in hosts.items():
         _safe_id(host_id, "host ID")
         host = _table(host_value, f"hosts.{host_id}")
-        _check_keys(host, {"adapter", "local_state_root", "instruction_root", "durable_root"}, f"hosts.{host_id}")
+        _check_keys(
+            host,
+            {"adapter", "local_state_root", "instruction_root", "durable_root", "package_version"},
+            f"hosts.{host_id}",
+        )
         if "adapter" in host and (not isinstance(host["adapter"], str) or host["adapter"] not in _ADAPTERS):
             raise ValueError(f"hosts.{host_id}.adapter is unsupported")
         for key in ("local_state_root", "instruction_root", "durable_root"):
             if key in host:
                 _absolute(host[key], f"hosts.{host_id}.{key}")
+        if "package_version" in host and (
+            not isinstance(host["package_version"], str)
+            or not _PACKAGE_VERSION.fullmatch(host["package_version"])
+        ):
+            raise ValueError(
+                f"hosts.{host_id}.package_version must be an exact stable release "
+                "MAJOR.MINOR.PATCH such as 0.3.24"
+            )
 
     projects = _table(root.get("projects", {}), "projects")
     roots_by_host: dict[str, dict[str, str]] = {}
@@ -293,6 +317,11 @@ def validate_portfolio(portfolio: Any, *, host_id: str | None = None) -> dict[st
                     else "An absolute path is configured.",
                 }
             )
+        if "package_version" in host:
+            configured.append({
+                "field": f"hosts.{key}.package_version",
+                "reason": "An exact package pin is configured; the launcher skips the latest-stable check.",
+            })
         state_root = host.get("local_state_root")
         if (
             host.get("adapter") == "databricks"
@@ -429,7 +458,7 @@ def _render(portfolio: dict[str, Any], *, comments: bool = False) -> bytes:
     for host_id in sorted(root.get("hosts", {})):
         host = root["hosts"][host_id]
         lines += ["", f"[hosts.{_quote(host_id)}]"]
-        for key in ("adapter", "local_state_root", "instruction_root", "durable_root"):
+        for key in ("adapter", "local_state_root", "instruction_root", "durable_root", "package_version"):
             if key in host:
                 lines.append(f"{key} = {_quote(host[key])}")
     for project_id in sorted(root.get("projects", {})):
