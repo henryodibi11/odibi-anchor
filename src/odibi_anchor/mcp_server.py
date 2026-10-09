@@ -12,6 +12,7 @@ Environment variables:
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ from odibi_anchor._dispatcher._request_adapter import (
     execute_request,
     normalize_request,
 )
+from odibi_anchor._recovery import attach_recovery
 from odibi_anchor._utils._output_hints import estimate_tokens
 
 # ─── Server instance ─────────────────────────────────────────────────────────
@@ -289,107 +291,150 @@ def _boot() -> Any:
 
 
 # ─── DataFrame resolver ─────────────────────────────────────────────────────
-_table_cache: dict[str, Any] = {}
+# MCP callers cannot send DataFrames, so the gateway resolves table references, but
+# only for parameters that an action takes as a table. Every other argument reaches
+# the dispatcher unchanged, as it does in-process and through the CLI (issue #28).
+_DATA_FILE_EXTENSIONS = (".csv", ".parquet", ".json")
+_TABLE = "table"  # must arrive as a DataFrame: data file via pandas, dotted name via Spark
+_TABLE_OR_NAME = "table_or_name"  # the action reads table names itself: data files only
+_TABLE_MAPPING = "table_mapping"  # name -> table reference, each resolved as _TABLE
+
+# Request locations, as named by normalize_request, that accept tables per action.
+_TABLE_PARAMETERS: dict[str, dict[str, str]] = {
+    "profile_table": {"args[0]": _TABLE_OR_NAME},
+    "investigate": {"args[0]": _TABLE_OR_NAME},
+    "microscope": {"args[0]": _TABLE},
+    "case_file": {"args[0]": _TABLE},
+    "quality": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "validate": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "duplicate": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "contract": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "apply_transform": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "coerce_fix": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "suggest_rules": {"args[0]": _TABLE, "kwargs.df": _TABLE},
+    "diff": {"args[0]": _TABLE, "args[1]": _TABLE, "kwargs.old_df": _TABLE, "kwargs.new_df": _TABLE},
+    "schema_diff": {"args[0]": _TABLE, "args[1]": _TABLE, "kwargs.old_df": _TABLE, "kwargs.new_df": _TABLE},
+    "coerce_check": {"args[0]": _TABLE, "args[1]": _TABLE, "kwargs.old_df": _TABLE, "kwargs.new_df": _TABLE},
+    "reconcile": {"args[0]": _TABLE, "args[1]": _TABLE},
+    "evolve": {"args[0]": _TABLE, "args[1]": _TABLE, "kwargs.df": _TABLE},
+    "pre_join": {"args[0]": _TABLE, "args[1]": _TABLE, "kwargs.left_df": _TABLE, "kwargs.right_df": _TABLE},
+    "pre_merge": {
+        "args[0]": _TABLE, "kwargs.source_df": _TABLE,
+        "args[1]": _TABLE_OR_NAME, "kwargs.target": _TABLE_OR_NAME,
+    },
+    "watermark": {
+        "args[0]": _TABLE_OR_NAME, "args[1]": _TABLE_OR_NAME,
+        "kwargs.source": _TABLE_OR_NAME, "kwargs.target": _TABLE_OR_NAME,
+    },
+    "diagnose_empty": {"args[0]": _TABLE, "kwargs.result_df": _TABLE, "kwargs.upstreams": _TABLE_MAPPING},
+    "debug": {
+        "args[0]": _TABLE, "kwargs.result_df": _TABLE, "kwargs.upstreams": _TABLE_MAPPING,
+        "kwargs.target": _TABLE_OR_NAME,
+    },
+    "explain_row": {"args[0]": _TABLE, "kwargs.output_df": _TABLE, "kwargs.upstream": _TABLE_MAPPING},
+    "trace_row": {"args[0]": _TABLE, "kwargs.output_df": _TABLE, "kwargs.upstream": _TABLE_MAPPING},
+}
+
+# path -> ((st_mtime_ns, st_size, st_ino), DataFrame); a stat change forces a re-read.
+_table_cache: dict[str, tuple[tuple[int, int, int], Any]] = {}
+
+
+def _read_data_file(path: str, ext: str) -> Any:
+    """Read a csv/parquet/json file with pandas, reusing it while its stat identity holds."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        identity = None  # remote URL or missing file: read uncached and let pandas report
+    else:
+        identity = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        cached = _table_cache.get(path)
+        if cached is not None and cached[0] == identity:
+            return cached[1]
+    import pandas as pd
+
+    readers = {".csv": pd.read_csv, ".parquet": pd.read_parquet, ".json": pd.read_json}
+    df = readers[ext](path)
+    if identity is not None:
+        _table_cache[path] = (identity, df)
+    return df
 
 
 def _resolve(table_ref: str) -> Any:
-    """Resolve a table reference to a DataFrame.
+    """Resolve a reference that must reach the action as a DataFrame.
 
-    Resolution order:
-        1. In-memory cache (_table_cache)
-        2. Pandas reader (csv / parquet / json) when the ref has a data-file
-           extension — checked FIRST so file paths never pay the ~2s pyspark
-           import cost just because the path contains a dot.
-        3. Spark catalog (extensionless ``catalog.schema.table`` refs, if a
-           SparkSession is active).
+    A data-file extension is read with pandas (no pyspark import); otherwise a dotted
+    ``catalog.schema.table`` name is read from an active SparkSession. Spark tables are
+    not cached because they carry no file identity to validate.
     """
-    if table_ref in _table_cache:
-        return _table_cache[table_ref]
-
-    df: Any = None
     ext = os.path.splitext(table_ref)[1].lower()
-
-    # File path — read with pandas directly (no pyspark import).
-    if ext in (".csv", ".parquet", ".json"):
-        import pandas as pd
-
-        readers = {
-            ".csv": pd.read_csv,
-            ".parquet": pd.read_parquet,
-            ".json": pd.read_json,
-        }
-        df = readers[ext](table_ref)
-
-    # Otherwise a dotted catalog ref → Spark catalog (lazy pyspark import).
-    elif "." in table_ref:
+    if ext in _DATA_FILE_EXTENSIONS:
+        return _read_data_file(table_ref, ext)
+    if "." in table_ref:
         try:
             from pyspark.sql import SparkSession
 
             spark = SparkSession.getActiveSession()
             if spark is not None:
-                df = spark.table(table_ref)
+                return spark.table(table_ref)
         except Exception:
             pass
-
-    if df is None:
-        raise ValueError(
-            f"Cannot resolve '{table_ref}': not in cache, extension "
-            f"'{ext}' is not csv/parquet/json, and no active Spark table matches."
-        )
-
-    _table_cache[table_ref] = df
-    return df
+    raise ValueError(
+        f"Cannot resolve '{table_ref}': extension '{ext}' is not csv/parquet/json, "
+        "and no active Spark table matches."
+    )
 
 
 def _resolve_or_passthrough(table_ref: str) -> Any:
-    """Resolve a file-path ref (csv/parquet/json) to a DataFrame; pass any other
-    ref (e.g. a Delta ``catalog.schema.table`` name) through unchanged.
-
-    Used for merge/upsert targets: a file target should be read into a DataFrame
-    (so file-based use and testing work without a SparkSession), while a real
-    Delta table name must reach the tool as a string so it reads via Spark.
-    """
+    """Read a data-file reference; pass any other reference (e.g. a Delta table name)
+    through unchanged for actions that read table names themselves."""
     ext = os.path.splitext(table_ref)[1].lower()
-    if ext in (".csv", ".parquet", ".json"):
-        return _resolve(table_ref)
+    if ext in _DATA_FILE_EXTENSIONS:
+        return _read_data_file(table_ref, ext)
     return table_ref
 
 
-def _resolve_upstreams(mapping: dict[str, str]) -> dict[str, Any]:
+def _resolve_upstreams(mapping: dict[str, Any]) -> dict[str, Any]:
     """Resolve a dict of name → table_ref into name → DataFrame."""
-    return {name: _resolve(ref) for name, ref in mapping.items()}
+    return {name: _resolve(ref) if isinstance(ref, str) else ref for name, ref in mapping.items()}
 
 
-_TABLE_ARGUMENTS = {
-    "table", "df", "old_df", "new_df", "result_df", "output_df",
-    "source_df", "target_df", "left_df", "right_df",
-}
-
-
-def _resolve_request_value(value: Any, location: str) -> Any:
-    """Preserve the MCP gateway's positional, table, target, and upstream resolution."""
-    if location.startswith("args[") and isinstance(value, str):
-        try:
-            return _resolve(value)
-        except ValueError:
+def _resolve_request_value(action: str, value: Any, location: str) -> Any:
+    """Resolve allowlisted table parameters for ``action``; pass everything else through."""
+    kind = _TABLE_PARAMETERS.get(action, {}).get(location)
+    if kind is None:
+        return value
+    try:
+        if kind == _TABLE_MAPPING:
+            return _resolve_upstreams(value) if isinstance(value, dict) else value
+        if not isinstance(value, str):
             return value
-    key = location.removeprefix("kwargs.")
-    if key in _TABLE_ARGUMENTS and isinstance(value, str):
-        try:
-            return _resolve(value)
-        except ValueError:
-            return value
-    if key == "target" and isinstance(value, str):
-        try:
+        if kind == _TABLE_OR_NAME:
             return _resolve_or_passthrough(value)
-        except ValueError:
-            return value
-    if key in {"upstream", "upstreams"} and isinstance(value, dict):
-        try:
-            return _resolve_upstreams(value)
-        except ValueError:
-            return value
-    return value
+        return _resolve(value)
+    except ValueError:
+        return value
+    except ImportError as exc:
+        parameter = location.removeprefix("kwargs.")
+        missing = exc.name or "a reader dependency"
+        raise attach_recovery(
+            RuntimeError(
+                f"Table parameter '{parameter}' of action '{action}' names a data file, but "
+                f"reading it requires {missing}, which is not importable in this Anchor "
+                f"environment ({exc}). Classification: missing optional dependency; the "
+                "request was not dispatched. Install the missing module in the Anchor "
+                "environment (pandas is provided by the odibi-anchor[pandas] extra), or "
+                "pass a table reference the action can read without it."
+            ),
+            error_code="table_input_dependency_unavailable",
+            context={
+                "action": action,
+                "parameter": parameter,
+                "location": location,
+                "value": value if isinstance(value, str) else None,
+                "missing_module": exc.name,
+                "classification": "missing_optional_dependency",
+            },
+        ) from exc
 
 
 def _fmt(result: Any) -> str:
@@ -549,8 +594,11 @@ def anchor_execute(
     Args:
         action: Action name (e.g. 'profile_table', 'quality', 'task', 'gate', 'memory')
         args: JSON string of keyword arguments.
-              Example: '{"table": "catalog.schema.table", "level": "quick"}'
+              Example: '{"arg0": "catalog.schema.table", "level": "quick"}'
               For actions with positional args, use special keys like "arg0", "arg1".
+              Only the table parameters of data actions (e.g. quality ``df``) turn a
+              csv/parquet/json path or catalog name into a DataFrame; every other value,
+              such as a touched path, reaches the action unchanged.
         response_version: Response envelope version, 1 or 2.
         response_detail: `compact` returns decision-critical task fields; `full`
             returns the complete task result. Non-task actions are unchanged.
@@ -559,13 +607,13 @@ def anchor_execute(
 
     Examples:
         # Data profiling
-        anchor_execute("profile_table", '{"table": "main.default.orders", "level": "quick"}')
+        anchor_execute("profile_table", '{"arg0": "main.default.orders", "level": "quick"}')
 
         # Planning task
         anchor_execute("task", '{"arg0": "Fix null handling", "goal": "...", "mode": "implementation"}')
 
         # Quality gate
-        anchor_execute("quality", '{"table": "staging.clean.users", "keys": ["user_id"]}')
+        anchor_execute("quality", '{"df": "staging.clean.users", "keys": ["user_id"]}')
 
         # Capture and assess evidence-backed reusable learning
         anchor_execute("learning", '{"arg0":"capture","observation_type":"reusable_practice","summary":"...","signal_key":"example.signal","evidence":[...]}')
@@ -607,7 +655,9 @@ def anchor_execute(
                             raise ValueError(f"duplicate keyword representation: {key}")
                         keyword_args[key] = value
                     payload["kwargs"] = keyword_args
-                request = normalize_request(payload, resolver=_resolve_request_value)
+                request = normalize_request(
+                    payload, resolver=functools.partial(_resolve_request_value, action.strip()),
+                )
             except Exception as exc:
                 if response_version == 2:
                     return _fmt({"ok": False, "error": error_information(exc)})
@@ -661,7 +711,10 @@ def _cw_execute_with_telemetry(action: str, args: str | None, response_detail: s
                                 raise ValueError(f"duplicate keyword representation: {key}")
                             keyword_args[key] = value
                         payload["kwargs"] = keyword_args
-                    request = normalize_request(payload, resolver=_resolve_request_value)
+                    request = normalize_request(
+                        payload,
+                        resolver=functools.partial(_resolve_request_value, action.strip()),
+                    )
             except Exception as exc:
                 envelope = {"ok": False, "error": error_information(exc)}
             else:

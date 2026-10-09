@@ -715,6 +715,228 @@ class TestResolve:
         assert mcp_server._resolve_or_passthrough(ref) == ref
 
 
+# ─── Issue #28: operation- and parameter-aware table resolution ─────────────
+
+_DATA_FILE_EXTENSIONS = (".json", ".csv", ".parquet")
+_TABULAR_CONTENT = {
+    ".json": '[{"id": 1, "v": "a"}, {"id": 2, "v": "b"}]',
+    ".csv": "id,v\n1,a\n2,b\n",
+    ".parquet": "PAR1 placeholder bytes; parquet reads are faked below",
+}
+
+
+def _capture_dispatch(monkeypatch) -> list:
+    calls = []
+
+    def dispatch(action, *args, **kwargs):
+        calls.append((action, args, kwargs))
+        return {"dispatched": action}
+
+    monkeypatch.setattr(mcp_server, "_boot", lambda: dispatch)
+    monkeypatch.setattr(mcp_server, "_table_cache", {})
+    return calls
+
+
+def _forbid_pandas_reads(monkeypatch) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("a non-table argument was read as a table")
+
+    for reader in ("read_csv", "read_json", "read_parquet"):
+        monkeypatch.setattr(pd, reader, forbidden)
+
+
+def _fake_parquet_reader(monkeypatch) -> list:
+    reads = []
+
+    def read_parquet(path, *_args, **_kwargs):
+        reads.append(path)
+        return pd.DataFrame({"id": [1, 2], "v": ["a", "b"]})
+
+    monkeypatch.setattr(pd, "read_parquet", read_parquet)
+    return reads
+
+
+def _install_fake_spark(monkeypatch) -> list:
+    tables = []
+
+    class Session:
+        def table(self, name):
+            tables.append(name)
+            return pd.DataFrame({"id": [1]})
+
+    session = Session()
+    pyspark = type(sys)("pyspark")
+    pyspark_sql = type(sys)("pyspark.sql")
+    pyspark_sql.SparkSession = SimpleNamespace(getActiveSession=lambda: session)
+    pyspark.sql = pyspark_sql
+    monkeypatch.setitem(sys.modules, "pyspark", pyspark)
+    monkeypatch.setitem(sys.modules, "pyspark.sql", pyspark_sql)
+    return tables
+
+
+class TestTypedTableResolution:
+    @pytest.mark.parametrize("pandas_state", ["present", "absent"])
+    @pytest.mark.parametrize("ext", _DATA_FILE_EXTENSIONS)
+    def test_touched_preserves_data_file_paths(self, tmp_path, monkeypatch, ext, pandas_state):
+        existing = tmp_path / "results" / f"manifest{ext}"
+        existing.parent.mkdir()
+        existing.write_text(_TABULAR_CONTENT[ext])
+        missing = f"benchmarks/local-models/results/campaign/2026-10/manifest{ext}"
+        calls = _capture_dispatch(monkeypatch)
+        if pandas_state == "absent":
+            monkeypatch.setitem(sys.modules, "pandas", None)
+        else:
+            _forbid_pandas_reads(monkeypatch)
+
+        for path in (str(existing), missing):
+            output = json.loads(mcp_server.anchor_execute(
+                "touched", json.dumps({"args": [path]}), response_version=2,
+            ))
+            assert output == {"ok": True, "result": {"dispatched": "touched"}}
+        legacy = json.loads(mcp_server.anchor_execute("touched", json.dumps({"arg0": missing})))
+
+        assert legacy == {"dispatched": "touched"}
+        assert calls == [
+            ("touched", (str(existing),), {}),
+            ("touched", (missing,), {}),
+            ("touched", (missing,), {}),
+        ]
+
+    def test_non_tabular_json_is_never_parsed_for_non_table_parameters(self, tmp_path, monkeypatch):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text('{"files": {"a.py": {"sha": "x"}}, "version": 3}')
+        calls = _capture_dispatch(monkeypatch)
+        _forbid_pandas_reads(monkeypatch)
+
+        requests = [
+            ("touched", {"args": [str(manifest)], "created": True}),
+            ("impact", {"target": str(manifest)}),
+            ("test", {"target": str(manifest)}),
+            ("save_snap", {"args": [{"decisions": []}, str(manifest)]}),
+        ]
+        for action, payload in requests:
+            output = json.loads(mcp_server.anchor_execute(
+                action, json.dumps(payload), response_version=2,
+            ))
+            assert output["ok"] is True
+
+        assert calls == [
+            ("touched", (str(manifest),), {"created": True}),
+            ("impact", (), {"target": str(manifest)}),
+            ("test", (), {"target": str(manifest)}),
+            ("save_snap", ({"decisions": []}, str(manifest)), {}),
+        ]
+
+    @pytest.mark.parametrize("ext", _DATA_FILE_EXTENSIONS)
+    def test_explicit_table_parameters_still_resolve(self, tmp_path, monkeypatch, ext):
+        path = tmp_path / f"orders{ext}"
+        path.write_text(_TABULAR_CONTENT[ext])
+        calls = _capture_dispatch(monkeypatch)
+        parquet_reads = _fake_parquet_reader(monkeypatch)
+
+        mcp_server.anchor_execute("quality", json.dumps({"df": str(path), "keys": ["id"]}))
+        mcp_server.anchor_execute("profile_table", json.dumps({"arg0": str(path)}))
+        mcp_server.anchor_execute("pre_merge", json.dumps({
+            "args": [str(path)], "target": "catalog.schema.target", "keys": ["id"],
+        }))
+
+        received = [calls[0][2]["df"], calls[1][1][0], calls[2][1][0]]
+        for frame in received:
+            assert isinstance(frame, pd.DataFrame)
+            assert list(frame.columns) == ["id", "v"]
+            assert frame["id"].tolist() == [1, 2]
+        assert calls[0][2]["keys"] == ["id"]
+        assert calls[2][2]["target"] == "catalog.schema.target"
+        assert parquet_reads == ([str(path)] if ext == ".parquet" else [])
+
+    @pytest.mark.parametrize("ext", _DATA_FILE_EXTENSIONS)
+    def test_table_parameter_without_pandas_is_a_structured_error(self, tmp_path, monkeypatch, ext):
+        path = tmp_path / f"orders{ext}"
+        path.write_text(_TABULAR_CONTENT[ext])
+        calls = _capture_dispatch(monkeypatch)
+        monkeypatch.setitem(sys.modules, "pandas", None)
+
+        output = json.loads(mcp_server.anchor_execute(
+            "quality", json.dumps({"df": str(path)}), response_version=2,
+        ))
+
+        assert output["ok"] is False
+        error = output["error"]
+        assert error["type"] == "RuntimeError"
+        assert error["error_code"] == "table_input_dependency_unavailable"
+        assert error["context"]["action"] == "quality"
+        assert error["context"]["parameter"] == "df"
+        assert error["context"]["missing_module"] == "pandas"
+        assert "'df'" in error["message"] and "pandas" in error["message"]
+        with pytest.raises(RuntimeError, match=r"'args\[0\]' of action 'diff'") as raised:
+            mcp_server.anchor_execute("diff", json.dumps({"args": [str(path), str(path)]}))
+        assert raised.value.context["parameter"] == "args[0]"
+        assert not isinstance(raised.value, ImportError)
+        assert calls == []
+
+    def test_missing_reader_dependency_is_a_structured_error(self, tmp_path, monkeypatch):
+        path = tmp_path / "orders.parquet"
+        path.write_bytes(b"PAR1")
+        calls = _capture_dispatch(monkeypatch)
+
+        def read_parquet(*_args, **_kwargs):
+            raise ImportError("Missing optional dependency 'pyarrow'.", name="pyarrow")
+
+        monkeypatch.setattr(pd, "read_parquet", read_parquet)
+        output = json.loads(mcp_server.anchor_execute(
+            "debug", json.dumps({"upstreams": {"source": str(path)}}), response_version=2,
+        ))
+
+        assert output["error"]["error_code"] == "table_input_dependency_unavailable"
+        assert output["error"]["context"]["parameter"] == "upstreams"
+        assert output["error"]["context"]["missing_module"] == "pyarrow"
+        assert calls == []
+
+    def test_dotted_non_table_arguments_never_reach_spark(self, monkeypatch):
+        calls = _capture_dispatch(monkeypatch)
+        spark_tables = _install_fake_spark(monkeypatch)
+
+        mcp_server.anchor_execute("task", json.dumps({
+            "arg0": "Fix the parser. Then add tests.",
+            "goal": "Ship v0.3.24.",
+            "known_facts": ["File: src/odibi_anchor/mcp_server.py"],
+        }))
+        mcp_server.anchor_execute("touched", json.dumps({"arg0": "src/odibi_anchor/mcp_server.py"}))
+        mcp_server.anchor_execute("apply_sql", json.dumps({
+            "arg0": "SELECT * FROM main.sales.orders", "target": "main.sales.view",
+        }))
+        mcp_server.anchor_execute("microscope", json.dumps({"args": ["main.sales.orders", "col.name"]}))
+
+        assert calls[0][1] == ("Fix the parser. Then add tests.",)
+        assert calls[1][1] == ("src/odibi_anchor/mcp_server.py",)
+        assert calls[2][1:] == (("SELECT * FROM main.sales.orders",), {"target": "main.sales.view"})
+        assert isinstance(calls[3][1][0], pd.DataFrame)
+        assert calls[3][1][1] == "col.name"
+        assert spark_tables == ["main.sales.orders"]
+
+    def test_table_cache_invalidates_after_file_rewrite(self, tmp_path, monkeypatch):
+        path = tmp_path / "orders.csv"
+        path.write_text("id\n1\n")
+        calls = _capture_dispatch(monkeypatch)
+
+        def quality_frame():
+            mcp_server.anchor_execute("quality", json.dumps({"df": str(path)}))
+            return calls[-1][2]["df"]
+
+        first = quality_frame()
+        assert quality_frame() is first
+        original = path.stat().st_mtime_ns
+        path.write_text("id\n9\n")  # same size: only the modification time identifies it
+        os.utime(path, ns=(original + 1_000_000_000, original + 1_000_000_000))
+        rewritten = quality_frame()
+        path.write_text("id\n1\n2\n3\n")
+        grown = quality_frame()
+
+        assert first["id"].tolist() == [1]
+        assert rewritten["id"].tolist() == [9]
+        assert grown["id"].tolist() == [1, 2, 3]
+
+
 # ─── End-to-end tool invocation ──────────────────────────────────────────────
 
 @pytest.fixture
@@ -1496,7 +1718,7 @@ class TestGatewayCompatibility:
             mcp_server, "_resolve_or_passthrough",
             lambda _value: (_ for _ in ()).throw(ValueError("unavailable")),
         )
-        output = mcp_server.anchor_execute("status", '{"target":"missing.csv"}')
+        output = mcp_server.anchor_execute("pre_merge", '{"target":"missing.csv"}')
         assert json.loads(output) == {"target": "missing.csv"}
         assert captured["target"] == "missing.csv"
 
