@@ -178,7 +178,7 @@ REMOVED_NATIVE_NAMES = {
 def test_instructions_are_concise_provider_neutral_routing_contract():
     text = (ROOT / ".assistant_instructions.md").read_text(encoding="utf-8")
     lowered = text.casefold()
-    assert len(text.encode()) < 26_000
+    assert len(text.encode()) < 18_000  # ratchet: procedure belongs in references
     assert all(word in lowered for word in ("outcome", "preserve", "proportion", "evidence", "stop"))
     prohibited = ("aliases.json", "runtime alias", "mcp_cw_", "/workspace/users/")
     assert not any(fragment in lowered for fragment in prohibited)

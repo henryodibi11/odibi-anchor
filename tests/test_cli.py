@@ -144,11 +144,17 @@ def test_portfolio_cli_scaffold_validate_resolve(tmp_path, capsys):
         "--instruction-root", str(tmp_path),
     ]
     assert cli.main(args) == 0
-    capsys.readouterr()
+    scaffold = json.loads(capsys.readouterr().out)["result"]["envelope"]
+    assert scaffold["outcome"] == "succeeded"
+    assert scaffold["effects"]["verified_readback"] is True
+    assert scaffold["effects"]["readback"]["method"] == "portfolio_document_sha256"
 
     assert cli.main(["portfolio", "validate", "--config", str(config), "--host", "local"]) == 0
-    validation = json.loads(capsys.readouterr().out)["result"]["validation"]
+    validated = json.loads(capsys.readouterr().out)["result"]
+    validation = validated["validation"]
     assert validation["status"] == "valid"
+    assert validated["envelope"]["effects"] is None
+    assert validated["envelope"]["retry_safety"] == "read_only"
     assert cli.main([
         "portfolio", "resolve", "--config", str(config), "--host", "local", "--project", "alpha"
     ]) == 0
@@ -185,7 +191,13 @@ def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypat
         "state", "restore", *common, "--database", str(restored),
         "--artifacts", str(restored_artifacts),
     ]) == 0
-    capsys.readouterr()
+    envelope = json.loads(capsys.readouterr().out)["result"]["envelope"]
+    assert envelope["action"] == "state" and envelope["selector"] == "restore"
+    assert envelope["outcome"] == "succeeded"
+    assert envelope["effects"]["changed"] is True
+    assert envelope["effects"]["verified_readback"] is True
+    assert envelope["effects"]["readback"]["method"] == "destination_db_sha256"
+    assert envelope["undo"]["status"] == "irreversible"
     with sqlite3.connect(restored) as connection:
         assert connection.execute("SELECT value FROM facts").fetchone() == ("kept",)
     assert (restored_artifacts / "record.md").read_text() == "# Kept\n"
@@ -198,6 +210,9 @@ def test_state_cli_snapshots_lists_and_restores_without_boot(tmp_path, monkeypat
         error = json.loads(capsys.readouterr().out)["error"]
         assert error["error_code"] == "restore_destination_conflict"
         assert error["context"]["observed"] == "no_owned_restore_record"
+        assert error["envelope"]["outcome"] == "failed"
+        assert error["envelope"]["error"]["error_code"] == "restore_destination_conflict"
+        assert error["envelope"]["effects"]["changed"] is None
     assert (restored_artifacts / "record.md").read_text() == "# Kept\n"
 
 

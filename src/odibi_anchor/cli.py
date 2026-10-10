@@ -15,7 +15,6 @@ from odibi_anchor._dispatcher._request_adapter import (
     RequestError,
     decode_json_document,
     error_information,
-    execute_request,
     normalize_request,
 )
 
@@ -306,6 +305,81 @@ def _state_command(ns: argparse.Namespace) -> dict[str, Any]:
     raise RequestError("unsupported state command")
 
 
+_MUTATING_OPERATIONS = frozenset({
+    "portfolio.scaffold", "portfolio.add-project", "portfolio.prepare",
+    "state.snapshot", "state.restore", "state.resume", "state.abandon",
+})
+_OPERATION_UNDO = {
+    "state.snapshot": "snapshot publications are immutable; the live database is unchanged",
+    "state.restore": "Anchor never deletes restored state; the durable snapshot is unchanged",
+    "state.resume": "the finalized restore is not rolled back; the durable snapshot is unchanged",
+    "state.abandon": "the abandoned tree is preserved at quarantine_path; restore again with next_operation",
+    "portfolio.scaffold": "no supported portfolio removal command exists; ask the owner",
+    "portfolio.add-project": "no supported project removal command exists; ask the owner",
+    "portfolio.prepare": "prepared runtime registration is not withdrawn by a command",
+}
+
+
+def _readback(operation: str, ns: argparse.Namespace, result: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-read the exact state an operation wrote; never infer success from the result alone."""
+    import hashlib
+    import os
+
+    if operation in {"portfolio.scaffold", "portfolio.add-project"} and isinstance(result.get("sha256"), str):
+        from odibi_anchor.portfolio import load_portfolio_document
+
+        document = load_portfolio_document(ns.config)
+        observed = document["sha256"] == result["sha256"]
+        if operation == "portfolio.add-project":
+            observed = observed and result.get("project_id") in document["portfolio"].get("projects", {})
+        return {"method": "portfolio_document_sha256", "observed": observed}
+    if operation == "state.restore" and isinstance(result.get("restored_sha256"), str):
+        with open(result["destination_db"], "rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        return {"method": "destination_db_sha256", "observed": digest == result["restored_sha256"]}
+    if operation == "state.resume" and result.get("destination_db"):
+        return {"method": "destination_db_exists", "observed": os.path.isfile(result["destination_db"])}
+    if operation == "state.abandon" and result.get("quarantine_path"):
+        return {
+            "method": "quarantine_preserved",
+            "observed": os.path.isdir(result["quarantine_path"])
+            and not os.path.lexists(result["destination_artifacts"]),
+        }
+    return None
+
+
+def _enveloped(operation: str, ns: argparse.Namespace, result: Any) -> Any:
+    """Attach the standard result envelope to a non-dispatcher CLI operation result."""
+    from odibi_anchor._dispatcher._envelope import ENVELOPE_KEY, build_operation_envelope
+
+    if not isinstance(result, dict):
+        return result
+    mutating = operation in _MUTATING_OPERATIONS
+    try:
+        readback = _readback(operation, ns, result) if mutating else None
+    except (OSError, ValueError) as exc:
+        readback = {"method": "readback_failed", "observed": False, "error": type(exc).__name__}
+    undo = (
+        {"status": "irreversible", "copy_ready": None, "reason": _OPERATION_UNDO[operation]}
+        if operation in _OPERATION_UNDO else None
+    )
+    result[ENVELOPE_KEY] = build_operation_envelope(
+        operation, result, mutating=mutating, readback=readback, undo=undo,
+    )
+    return result
+
+
+def _operation_error(operation: str, exc: Exception) -> dict[str, Any]:
+    from odibi_anchor._dispatcher._envelope import build_operation_failure_envelope
+
+    return {
+        **error_information(exc),
+        "envelope": build_operation_failure_envelope(
+            operation, exc, mutating=operation in _MUTATING_OPERATIONS,
+        ),
+    }
+
+
 def _boot(root: str | None):
     # Bootstrap is historically chatty. Keep the CLI's machine stream pristine.
     from odibi_anchor.bootstrap import init
@@ -326,8 +400,10 @@ def _request(raw: Any, dispatcher: Any, *, shared: bool) -> tuple[dict[str, Any]
         normalized = replace(normalized, kwargs={**normalized.kwargs, "output_format": "dict"})
     except RequestError as exc:
         return {"ok": False, "error": {"type": "input", "message": error_information(exc)["message"]}}, EXIT_INPUT
+    from odibi_anchor._dispatcher._envelope import execute_with_envelope
+
     with contextlib.redirect_stdout(sys.stderr):
-        response = execute_request(dispatcher, normalized)
+        response = execute_with_envelope(dispatcher, normalized)
     response["metadata"] = {"schema_version": SCHEMA_VERSION, "process_state_shared": shared}
     if response["ok"]:
         return response, 0
@@ -480,17 +556,24 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, RuntimeError, ValueError) as exc:
             return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
     if ns.command == "portfolio":
+        operation = f"portfolio.{ns.portfolio_command}"
         try:
-            return _emit({"ok": True, "result": _portfolio_command(ns)})
+            return _emit({"ok": True, "result": _enveloped(operation, ns, _portfolio_command(ns))})
         except RequestError as exc:
             return _emit({"ok": False, "error": {"type": "input", "message": str(exc)}}, EXIT_INPUT)
         except (OSError, RuntimeError, ValueError) as exc:
-            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
+            return _emit({"ok": False, "error": _operation_error(operation, exc)}, EXIT_ACTION)
     if ns.command == "state":
+        operation = f"state.{ns.state_command}"
+        if ns.state_command == "list":
+            try:
+                return _emit({"ok": True, "result": _state_command(ns)})
+            except (OSError, RuntimeError, ValueError) as exc:
+                return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
         try:
-            return _emit({"ok": True, "result": _state_command(ns)})
+            return _emit({"ok": True, "result": _enveloped(operation, ns, _state_command(ns))})
         except (OSError, RuntimeError, ValueError) as exc:
-            return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
+            return _emit({"ok": False, "error": _operation_error(operation, exc)}, EXIT_ACTION)
     if ns.command == "install-guidance":
         try:
             from odibi_anchor.startup import install_guidance

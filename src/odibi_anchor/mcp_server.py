@@ -35,10 +35,10 @@ from fastmcp import FastMCP
 from pydantic import BeforeValidator, StrictInt
 
 from odibi_anchor._dispatcher._dispatch_table import ACTION_GROUPS, DISPATCH_SIGS
+from odibi_anchor._dispatcher._envelope import compact_task_result, execute_with_envelope
 from odibi_anchor._dispatcher._request_adapter import (
     decode_json_document,
     error_information,
-    execute_request,
     normalize_request,
 )
 from odibi_anchor._recovery import attach_recovery
@@ -52,14 +52,6 @@ _CW = None
 _ROOT = None
 _ROUTE_BINDING = None
 _GATEWAY_LOCK = threading.RLock()
-
-_COMPACT_TASK_KEYS = (
-    "kind", "version", "subject", "summary", "status", "mode", "task_window_id", "readiness",
-    "intent", "background", "scope", "resources", "context", "constraints",
-    "context_plan", "verification", "guardrails", "risks", "findings",
-    "required_skills", "suggested_next_actions", "task_profile", "work_item_policy",
-    "artifact_contract", "capture_guidance", "memory_context", "operating_protocol", "agent_context",
-)
 
 _TELEMETRY_STAGES = (
     "gateway_lock_wait", "bootstrap", "normalization_resolution", "dispatch",
@@ -532,21 +524,16 @@ def _refresh_after_project_change(
 
 
 def _compact_task_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Project a full task result to the decision-critical MCP response contract.
+    """Project a full task result to the budgeted decision-critical contract.
 
     Args:
         result: Complete task execution context returned by the dispatcher.
 
     Returns:
-        Compact transport projection with explicit lossless retrieval guidance.
+        Compact projection (within ``COMPACT_TASK_TOKEN_BUDGET`` estimated tokens) that
+        always keeps the result envelope and lists every omitted section.
     """
-    compact = {key: result[key] for key in _COMPACT_TASK_KEYS if key in result}
-    compact["transport"] = {
-        "response_detail": "compact",
-        "full_response_available": True,
-        "omitted_sections": sorted(set(result) - set(compact)),
-    }
-    return compact
+    return compact_task_result(result)
 
 
 def _prepare_response(
@@ -663,7 +650,7 @@ def anchor_execute(
                     return _fmt({"ok": False, "error": error_information(exc)})
                 raise
             if response_version == 2:
-                envelope = execute_request(anchor, request)
+                envelope = execute_with_envelope(anchor, request)
                 if envelope["ok"]:
                     try:
                         envelope["result"] = _prepare_response(
@@ -719,7 +706,7 @@ def _cw_execute_with_telemetry(action: str, args: str | None, response_detail: s
                 envelope = {"ok": False, "error": error_information(exc)}
             else:
                 with telemetry.stage("dispatch"):
-                    envelope = execute_request(anchor, request)
+                    envelope = execute_with_envelope(anchor, request)
                 if envelope["ok"]:
                     try:
                         with telemetry.stage("response_preparation"):

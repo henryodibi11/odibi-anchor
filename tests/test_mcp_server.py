@@ -1535,33 +1535,38 @@ class TestGatewayCompatibility:
         assert os.environ["_CW_BOOT_CONFIG_ROOT"] == str(tmp_path / "original-config")
 
     def test_task_response_is_compact_by_default_and_full_on_request(self, monkeypatch):
+        from odibi_anchor._dispatcher._envelope import COMPACT_TASK_TOKEN_BUDGET
+        from odibi_anchor._utils._output_hints import estimate_tokens
+
         full = {
-            key: {"value": key}
-            for key in mcp_server._COMPACT_TASK_KEYS
+            "kind": "task_execution_context", "status": "ready", "task_window_id": "ltw_1",
+            "readiness": {"status": "ready", "score": 90, "missing_details": []},
+            "task_profile": {"execution_mode": "read_only", "risk": "medium"},
+            "memory_context": {"selection_count": 1, "selections": [
+                {"selection_id": "sel_1", "memory_id": "mem_1", "summary": "bounded"},
+            ]},
+            "agent_context": {"next_operation": {"action": "gate", "copy_ready": 'anchor("gate")'}},
+            "operating_protocol": {"phase": "execution", "detail": ["many"] * 400},
+            "artifact_contract": {"artifacts": ["large"] * 400},
+            "plan": ["large plan"] * 400,
+            "handoff": {"prompt_brief": "large duplicate" * 400},
+            "envelope": {"outcome": "succeeded", "version": 1},
         }
-        full.update({
-            "plan": ["large plan"],
-            "discovery": {"recommended_context_generators": ["many"]},
-            "hints": {"prompting_hints": ["many"]},
-            "handoff": {"prompt_brief": "large duplicate"},
-        })
         monkeypatch.setattr(mcp_server, "_boot", lambda: lambda *_a, **_k: full)
 
         compact_text = mcp_server.anchor_execute("task")
         compact = json.loads(compact_text)
         full_text = mcp_server.anchor_execute("task", response_detail="full")
 
-        assert set(mcp_server._COMPACT_TASK_KEYS) <= set(compact)
-        assert compact["artifact_contract"] == full["artifact_contract"]
-        assert compact["capture_guidance"] == full["capture_guidance"]
+        assert estimate_tokens(compact_text) <= COMPACT_TASK_TOKEN_BUDGET
+        assert compact["envelope"] == full["envelope"]
         assert compact["task_window_id"] == full["task_window_id"]
-        assert compact["memory_context"] == full["memory_context"]
-        assert compact["operating_protocol"] == full["operating_protocol"]
-        assert compact["agent_context"] == full["agent_context"]
+        assert compact["memory_context"]["selections"][0]["selection_id"] == "sel_1"
+        assert compact["next_operation"]["copy_ready"] == 'anchor("gate")'
         assert compact["transport"]["response_detail"] == "compact"
-        assert set(compact["transport"]["omitted_sections"]) == {
-            "discovery", "handoff", "hints", "plan",
-        }
+        assert {"agent_context", "artifact_contract", "handoff", "operating_protocol", "plan"} <= set(
+            compact["transport"]["omitted_sections"]
+        )
         assert json.loads(full_text) == full
         assert len(compact_text) < len(full_text)
 

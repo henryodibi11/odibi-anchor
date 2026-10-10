@@ -539,6 +539,16 @@ def init(
             nb_path = result.get("metrics", {}).get("notebook_path")
             if nb_path:
                 _SESSION_STATE.notebook_path = nb_path
+            # Report what this call actually did; the identity exists only now.
+            result["status"] = "configured"
+            result["session_id"] = _SESSION_STATE.session_id
+            result["reset"] = {
+                "task_policy_state": True,
+                "files_changed_cleared": True,
+                "skills_loaded_cleared": True,
+                "timings_retained": [timing["action"] for timing in orientation_timings],
+                "notebook_created": bool(result.get("metrics", {}).get("notebook_created")),
+            }
         return result
 
     def _task_dispatch(*task_args, **task_kwargs):
@@ -1623,6 +1633,16 @@ def init(
 
         Run anchor("help") for full API reference, or anchor("help", "action_name") for details.
         """
+        from odibi_anchor._dispatcher._envelope import dispatch_with_envelope
+
+        return dispatch_with_envelope(
+            _anchor_core, _action, args, kwargs,
+            session_state=_SESSION_STATE, session_timings=_SESSION_TIMINGS,
+            contracts=_ACTION_CONTRACTS, registry=_tool_registry,
+            files_changed=_SESSION_FILES_CHANGED, root=str(ROOT), memory_db=_DEFAULT_DB_PATH,
+        )
+
+    def _anchor_core(_action, *args, **kwargs):
         action = _action
         frame = _SESSION_FRAME_holder[0]
         current_source_fingerprint = _source_fingerprint(_RUNTIME_PATHS.resource_root)
@@ -2423,19 +2443,24 @@ def init(
         return _final
 
     # ── Run the boot sequence ────────────────────────────────────────────────
+    # The human status banner is diagnostics, never agent output: keep stdout
+    # reserved for structured results on every transport.
+    import contextlib as _contextlib
+
     from odibi_anchor._dispatcher._boot import run_boot as _run_boot
 
-    _boot_result = _run_boot(
-        root=str(ROOT),
-        anchor_root=ANCHOR_ROOT,
-        state_root=_SESSION_STATE.artifact_root,
-        project_id=_SESSION_STATE.active_project,
-        db_path=_DEFAULT_DB_PATH,
-        boot_memory_limit=_BOOT_MEMORY_LIMIT,
-        frame_enabled=ANCHOR_FRAME_ENABLED,
-        rebind_task=rebind_task,
-        route_binding=route_binding,
-    )
+    with _contextlib.redirect_stdout(sys.stderr):
+        _boot_result = _run_boot(
+            root=str(ROOT),
+            anchor_root=ANCHOR_ROOT,
+            state_root=_SESSION_STATE.artifact_root,
+            project_id=_SESSION_STATE.active_project,
+            db_path=_DEFAULT_DB_PATH,
+            boot_memory_limit=_BOOT_MEMORY_LIMIT,
+            frame_enabled=ANCHOR_FRAME_ENABLED,
+            rebind_task=rebind_task,
+            route_binding=route_binding,
+        )
     _SESSION_STATE.learning_owner_project_id = (
         _boot_result.project if _boot_result.project != "unknown" else None
     )
