@@ -1407,8 +1407,8 @@ def _install_host(
 
 def _changed_since_plan(relative: str) -> HostSetupError:
     return HostSetupError(
-        f"host guidance file {relative} changed after the reconcile plan read it; nothing was "
-        "replaced. Rerun the reconcile dry run and review the new plan."
+        f"host guidance file {relative} changed after the reconcile plan read it; the apply "
+        "stopped and rolled back. Rerun the reconcile dry run and review the new plan."
     )
 
 

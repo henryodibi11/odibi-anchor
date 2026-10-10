@@ -206,6 +206,34 @@ def test_batch_preflights_everything_then_moves_each_project(tmp_path, monkeypat
     }
 
 
+def test_cli_batch_rerun_after_a_partial_batch_reports_each_entry_truthfully(tmp_path, monkeypatch, capsys):
+    """Rerunning a mapping whose first project already moved must still emit an envelope."""
+    sources = {name: tmp_path / "old" / name for name in ("alpha", "beta")}
+    destinations = {name: tmp_path / "projects" / name for name in ("alpha", "beta")}
+    for path in [*sources.values(), *destinations.values()]:
+        path.mkdir(parents=True)
+    deployment = Deployment(tmp_path, monkeypatch, sources)
+    cli = _module("odibi_anchor.cli")
+
+    def run(names):
+        mapping = tmp_path / "moves.json"
+        mapping.write_text(json.dumps({"moves": [
+            {"project": name, "from": str(sources[name]), "to": str(destinations[name])} for name in names
+        ]}), encoding="utf-8")
+        assert cli.main(["portfolio", "move-target", "--config", str(deployment.config), "--host", HOST,
+                         "--mapping", str(mapping)]) == 0
+        return json.loads(capsys.readouterr().out)["result"]
+
+    run(["alpha"])
+    mixed = run(["alpha", "beta"])
+    assert [item["status"] for item in mixed["moves"]] == ["already_migrated", "completed"]
+    assert mixed["envelope"]["effects"]["changed"] is True
+    assert mixed["envelope"]["effects"]["verified_readback"] is True
+    rerun = run(["alpha", "beta"])
+    assert [item["status"] for item in rerun["moves"]] == ["already_migrated", "already_migrated"]
+    assert (rerun["envelope"]["effects"], rerun["envelope"]["retry_safety"]) == (None, "read_only")
+
+
 def test_private_scratch_target_is_a_valid_destination(deployment, targets, tmp_path):
     old, _new = targets
     scratch = tmp_path / "workspace" / "projects" / "_scratch"

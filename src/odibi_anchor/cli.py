@@ -353,7 +353,9 @@ def _readback(operation: str, ns: argparse.Namespace, result: dict[str, Any]) ->
         from odibi_anchor._migration import _file_sha256
 
         moves = result.get("moves") if result.get("kind") == "target_migration_batch" else [result]
-        if not moves or not all(isinstance(move.get("hashes"), dict) for move in moves):
+        # An already_migrated entry (a batch rerun) wrote nothing and carries only preflight hashes.
+        moves = [move for move in moves or [] if move.get("status") in {"completed", "rolled_back"}]
+        if not moves:
             return None
 
         def landed(move: dict[str, Any]) -> bool:
@@ -388,10 +390,14 @@ def _enveloped(operation: str, ns: argparse.Namespace, result: Any) -> Any:
 
     if not isinstance(result, dict):
         return result
-    mutating = _mutating(operation, ns) and result.get("status") != "already_migrated"
+    entries = result.get("moves") if result.get("kind") == "target_migration_batch" else [result]
+    mutating = _mutating(operation, ns) and not (
+        isinstance(entries, list) and entries
+        and all(isinstance(entry, dict) and entry.get("status") == "already_migrated" for entry in entries)
+    )
     try:
         readback = _readback(operation, ns, result) if mutating else None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         readback = {"method": "readback_failed", "observed": False, "error": type(exc).__name__}
     reason = _OPERATION_UNDO.get(operation)
     if operation == "portfolio.move-target" and result.get("status") == "rolled_back":
