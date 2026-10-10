@@ -710,9 +710,112 @@ def _verify_workspace_publication(
         raise HostSetupError("published host guidance verification failed: manifest")
 
 
+def _workspace_metadata(
+    workspace: Any, target: Path, contents: dict[str, bytes], policy: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Observe every guidance directory; missing SDK metadata disables the shortcut.
+
+    Workspace.list is nonrecursive. List the known ancestor directories in parallel,
+    retaining all their immediate entries so additions also invalidate the receipt.
+    Unrelated subtrees (for example reconcile backups) are not recursively scanned.
+    """
+    directories = {parent.as_posix() for name in contents for parent in PurePosixPath(name).parents}
+    with phase("metadata", layer="workspace_api") as details:
+        details["list_calls"] = len(directories)
+        try:
+            listings = _run_bounded([
+                (name, functools.partial(
+                    lambda path: list(workspace.list(path)),
+                    _workspace_api_path(target, None if name == "." else name),
+                )) for name in sorted(directories)
+            ], sub_phase="metadata", policy=policy)
+            inventory: dict[str, Any] = {}
+            root = PurePosixPath(_workspace_api_path(target))
+            for directory, entries in zip(sorted(directories), listings, strict=True):
+                for entry in entries:
+                    path = PurePosixPath(entry.path)
+                    relative = path.relative_to(root).as_posix()
+                    if (path.parent != root / directory or relative in inventory
+                            or _safe_relative(relative) != relative):
+                        return None
+                    kind = getattr(entry.object_type, "value", entry.object_type)
+                    object_id = entry.object_id
+                    if type(object_id) is not int or kind not in {"FILE", "DIRECTORY"}:
+                        return None
+                    metadata = {"object_id": object_id, "object_type": kind}
+                    if kind == "FILE":
+                        for field in ("size", "modified_at"):
+                            value = getattr(entry, field, None)
+                            if type(value) is not int or value < 0:
+                                return None
+                            metadata[field] = value
+                    inventory[relative] = metadata
+            if any(
+                inventory.get(name, {}).get("object_type") != "FILE"
+                or inventory[name].get("size") != len(content)
+                for name, content in contents.items()
+            ):
+                return None
+            details["entry_count"] = len(inventory)
+            return inventory
+        except Exception:
+            # The receipt is optional acceleration, never a reason to bypass the
+            # existing bounded, fail-closed content verification path.
+            details["outcome"] = "unavailable"
+            return None
+
+
+def _guidance_receipt_path(receipt_root: str | os.PathLike[str] | None, target: Path) -> Path | None:
+    if receipt_root is None:
+        return None
+    root = Path(receipt_root)
+    forbidden = (Path("/Workspace"), Path("/Volumes"), Path("/dbfs"), target)
+    if not root.is_absolute():
+        return None
+    try:
+        resolved = root.resolve()
+        if any(prefix == path or prefix in path.parents for path in (root, resolved) for prefix in forbidden):
+            return None
+        directory = resolved / "host-guidance-receipts"
+        if directory.is_symlink():
+            return None
+        return directory / f"{_sha256(str(target).encode())}.json"
+    except OSError:
+        return None
+
+
+def _read_guidance_receipt(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        value = json.loads(_regular_bytes(path, "guidance receipt"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, HostSetupError):
+        return None
+
+
+def _write_guidance_receipt(path: Path | None, binding: dict[str, Any], metadata: dict[str, Any] | None) -> None:
+    if path is None or metadata is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            try:
+                stream.write(_canonical_json({"binding": binding, "metadata": metadata}))
+                stream.flush()
+                os.fsync(stream.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+    except OSError:
+        pass  # Losing a local optimization must not fail an otherwise verified boot.
+
+
 def _setup_databricks_workspace(
     target: Path,
     desired: dict[str, bytes],
+    *, receipt_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     policy = workspace_timeout_policy()
     try:
@@ -721,6 +824,19 @@ def _setup_databricks_workspace(
         import_format = workspace_types.ImportFormat.AUTO
     except Exception as exc:
         raise HostSetupError("Databricks Workspace host setup requires an authenticated SDK") from exc
+
+    from odibi_anchor import __version__
+
+    desired_hashes = {name: _sha256(data) for name, data in desired.items()}
+    expected_manifest = _canonical_json(
+        {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": desired_hashes}
+    )
+    receipt_path = _guidance_receipt_path(receipt_root, target)
+    binding = {"schema": 1, "package_version": __version__, "adapter": "databricks",
+               "target_root": str(target), "manifest_sha256": _sha256(expected_manifest)}
+    receipt = _read_guidance_receipt(receipt_path)
+    metadata_contents = {**desired, _MANIFEST: expected_manifest}
+    metadata_before = None
 
     with phase("read", layer="workspace_api") as read_phase:
         target_path = _workspace_api_path(target)
@@ -743,6 +859,17 @@ def _setup_databricks_workspace(
         if object_type not in {"DIRECTORY", "REPO"}:
             raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
 
+        if receipt_path is not None:
+            metadata_before = _workspace_metadata(workspace, target, metadata_contents, policy)
+        if (metadata_before is not None and receipt is not None
+                and receipt.get("binding") == binding
+                and receipt.get("metadata") == metadata_before):
+            read_phase.update(verification="metadata_receipt", file_count=0, bytes=0)
+            record_phase("verify", outcome="ok", verification="metadata_receipt")
+            record_phase("publish", outcome="not_required", reason="metadata receipt unchanged")
+            return _result(target, "databricks", "unchanged", desired_hashes,
+                           verification="metadata_receipt")
+        read_phase["verification"] = "content"
         manifest_path = _workspace_api_path(target, _MANIFEST)
         [manifest_content] = _run_bounded(
             [(manifest_path, lambda: _workspace_read(workspace, manifest_path))],
@@ -768,7 +895,7 @@ def _setup_databricks_workspace(
             slowest_files=slowest(observations),
             timeout_policy=policy,
         )
-    with phase("verify"):
+    with phase("verify", verification="content"):
         legacy_managed: list[str] = []
         if manifest is None:
             desired, previous, compatible_unmanaged, legacy_managed = _legacy_reconciliation(
@@ -809,17 +936,23 @@ def _setup_databricks_workspace(
         # manifest. Re-reading the same publication doubles Workspace API traffic
         # without adding drift evidence; post-mutation verification remains below.
         record_phase("publish", outcome="not_required", reason="managed files unchanged")
+        if metadata_before is not None and manifest_content == expected_manifest:
+            metadata_after = _workspace_metadata(workspace, target, metadata_contents, policy)
+            if metadata_before == metadata_after:
+                _write_guidance_receipt(receipt_path, binding, metadata_after)
         return _result(
             target, "databricks", "unchanged", hashes, compatible_unmanaged,
             legacy_managed,
         )
 
     with phase("publish", layer="workspace_api"):
-        _publish_workspace(
+        verified_metadata = _publish_workspace(
             workspace, target, desired=desired, obsolete=sorted(set(previous) - set(desired)),
             existing=existing, manifest_content=manifest_content, manifest_bytes=manifest_bytes,
-            import_format=import_format,
+            import_format=import_format, record_metadata=receipt_path is not None,
         )
+    if manifest_bytes == expected_manifest:
+        _write_guidance_receipt(receipt_path, binding, verified_metadata)
 
     status = "upgraded" if manifest is not None or legacy_managed else "installed"
     return _result(
@@ -830,8 +963,8 @@ def _setup_databricks_workspace(
 def _publish_workspace(
     workspace: Any, target: Path, *, desired: dict[str, bytes], obsolete: list[str],
     existing: dict[str, bytes | None], manifest_content: bytes | None, manifest_bytes: bytes,
-    import_format: Any, verify_unchanged: bool = False,
-) -> None:
+    import_format: Any, verify_unchanged: bool = False, record_metadata: bool = False,
+) -> dict[str, Any] | None:
     """Publish desired bytes through the Workspace API, restoring the original on failure.
 
     With ``verify_unchanged`` (reconcile), each file is re-read immediately before it is
@@ -867,7 +1000,15 @@ def _publish_workspace(
         ensure_unchanged(_MANIFEST)
         mutated.append(_MANIFEST)
         _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
+        metadata = (
+            _workspace_metadata(workspace, target, {**desired, _MANIFEST: manifest_bytes}, workspace_timeout_policy())
+            if record_metadata else None
+        )
         _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+        if metadata is not None and metadata == _workspace_metadata(
+            workspace, target, {**desired, _MANIFEST: manifest_bytes}, workspace_timeout_policy(),
+        ):
+            return metadata
     except BaseException as publication_error:
         rollback_errors: list[str] = []
         kept: list[str] = []
@@ -920,6 +1061,7 @@ def _publish_workspace(
                 "Databricks Workspace host guidance publication failed; original state restored"
             ) from publication_error
         raise
+    return None
 
 
 def _workspace_handles() -> tuple[Any, Any]:
@@ -1261,6 +1403,7 @@ def setup_host(
     reconcile: bool = False,
     dry_run: bool | None = None,
     approve_replace_edited: bool = False,
+    receipt_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Install packaged host guidance, or reconcile drift with ``reconcile=True``.
 
@@ -1270,6 +1413,8 @@ def setup_host(
     replaces unmanaged edits only with ``approve_replace_edited=True``.
     ``portfolio_config`` records the exact portfolio and host in the host binding
     sidecar read by the managed launcher.
+    ``receipt_root`` optionally retains a local Databricks metadata receipt; omitted
+    or non-local roots always use content verification. Receipts are not published.
     """
     if adapter not in _ADAPTER_FILES:
         raise ValueError("adapter must be one of: amp, chatgpt, claude, databricks")
@@ -1295,7 +1440,7 @@ def setup_host(
             dry_run=effective_dry_run, approve=approve_replace_edited,
         )
     else:
-        result = _install_host(target_root, adapter=adapter)
+        result = _install_host(target_root, adapter=adapter, receipt_root=receipt_root)
     if binding is not None:
         result["host_binding"] = _publish_binding(
             target, binding, workspace_target=workspace_target is not None,
@@ -1305,7 +1450,8 @@ def setup_host(
 
 
 def _install_host(
-    target_root: str | os.PathLike[str], *, adapter: str
+    target_root: str | os.PathLike[str], *, adapter: str,
+    receipt_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     """Reconcile packaged host guidance without overwriting unowned or edited files.
 
@@ -1319,7 +1465,7 @@ def _install_host(
     with phase("package_resources", layer="filesystem"):
         desired = _desired_files(adapter)
     if workspace_target is not None:
-        return _setup_databricks_workspace(target, desired)
+        return _setup_databricks_workspace(target, desired, receipt_root=receipt_root)
     with phase("read", layer="filesystem") as read_phase:
         manifest = _load_manifest(target)
         if manifest is not None and manifest["adapter"] != adapter:
@@ -1534,10 +1680,12 @@ def _result(
     hashes: dict[str, str],
     compatible_unmanaged: list[str] | None = None,
     legacy_managed: list[str] | None = None,
+    *, verification: str = "content",
 ) -> dict[str, Any]:
     return {
         "kind": "host_guidance_setup",
         "status": status,
+        "verification": verification,
         "adapter": adapter,
         "resource_profile": (
             "databricks_workspace_compact" if adapter == "databricks" else "complete"

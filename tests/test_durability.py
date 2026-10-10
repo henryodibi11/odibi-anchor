@@ -1388,6 +1388,96 @@ def test_resume_refuses_tampered_incomplete_tree_without_deleting_it(
     assert not destination_db.exists()
 
 
+@pytest.mark.parametrize("names", [
+    ["a", "a/child"], ["a/child", "a"],
+    ["a/child/", "a"], ["a", "a/child/"],
+    ["a", "a"], ["a/", "a/"],
+])
+def test_artifact_archive_collisions_refused_before_extraction(tmp_path, names):
+    bundle = tmp_path / "collision.tar"
+    with tarfile.open(bundle, "w") as archive:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE if name.endswith("/") else tarfile.REGTYPE
+            archive.addfile(info)
+    destination = tmp_path / "out"
+    with pytest.raises(RuntimeError, match=r"collision|duplicate"):
+        durability._extract_artifact_bundle(bundle, destination)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE])
+def test_artifact_special_entries_refused(tmp_path, kind):
+    bundle = tmp_path / "special.tar"
+    with tarfile.open(bundle, "w") as archive:
+        info = tarfile.TarInfo("special")
+        info.type = kind
+        info.linkname = "outside"
+        archive.addfile(info)
+    with pytest.raises(RuntimeError, match="special entry"):
+        durability._extract_artifact_bundle(bundle, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("limit", ["_MAX_ARTIFACT_MEMBERS", "_MAX_ARTIFACT_BYTES"])
+def test_artifact_limits_refuse_before_creation(tmp_path, monkeypatch, limit):
+    import io
+
+    bundle = tmp_path / "limits.tar"
+    with tarfile.open(bundle, "w") as archive:
+        for name in ("first", "second"):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+    monkeypatch.setattr(durability, limit, 1)
+    with pytest.raises(RuntimeError, match="extraction limits"):
+        durability._extract_artifact_bundle(bundle, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_artifact_directories_may_follow_children_and_destination_is_exclusive(tmp_path):
+    bundle = tmp_path / "ordered.tar"
+    with tarfile.open(bundle, "w") as archive:
+        for name in ("a/b/file", "a/b/", "a/"):
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE if name.endswith("/") else tarfile.REGTYPE
+            archive.addfile(info)
+    destination = tmp_path / "out"
+    assert durability._extract_artifact_bundle(bundle, destination) == {
+        "file_count": 1, "directory_count": 2, "content_size_bytes": 0,
+    }
+    assert (destination / "a/b/file").read_bytes() == b""
+    (destination / "a/b/file").write_text("keep")
+    with pytest.raises(FileExistsError):
+        durability._extract_artifact_bundle(bundle, destination)
+    assert (destination / "a/b/file").read_text() == "keep"
+
+
+def test_artifact_extraction_ancestor_work_scales_linearly(tmp_path, monkeypatch):
+    # Count path ancestor enumeration, not machine speed. The old all-prior-members
+    # collision scan performs n*(n-1)/2 extra enumerations at fixed path depth.
+    original = durability.PurePosixPath.parents
+    counts = []
+    for count in (80, 160):
+        bundle = tmp_path / f"{count}.tar"
+        with tarfile.open(bundle, "w") as archive:
+            for index in range(count):
+                archive.addfile(tarfile.TarInfo(f"project/data/{index}.txt"))
+        calls = 0
+
+        def parents(path):
+            nonlocal calls
+            calls += 1
+            return original.__get__(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(durability.PurePosixPath, "parents", property(parents))
+            result = durability._extract_artifact_bundle(bundle, tmp_path / f"out-{count}")
+        assert result["file_count"] == count
+        counts.append(calls)
+    assert counts[1] <= counts[0] * 2 + 8, counts
+
+
 def test_abandon_quarantines_incomplete_restore_and_allows_fresh_restore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

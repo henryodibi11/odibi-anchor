@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from odibi_anchor import __version__
-from odibi_anchor._bootstrap_phases import records_bootstrap_timings, timed_call
+from odibi_anchor._bootstrap_phases import phase, records_bootstrap_timings, timed_call
 
 _DATABRICKS_SDK_MINIMUM = "0.138.0"
 
@@ -625,7 +625,17 @@ def bootstrap_managed_project(
 
     from odibi_anchor.host_setup import setup_host
 
-    guidance = timed_call("host_guidance", setup_host, root, adapter=host["adapter"])
+    with phase("host_guidance") as guidance_phase:
+        guidance_options: dict[str, Any] = {"adapter": host["adapter"]}
+        if host["adapter"] == "databricks":
+            uid, identity = _databricks_compute_identity()
+            # Keep the cache compute-local but outside the live state tree: creating
+            # that tree here would interfere with subsequent cold restore/migration.
+            guidance_options["receipt_root"] = (
+                f"{host['local_state_root']}.guidance-{uid}-{identity}"
+            )
+        guidance = setup_host(root, **guidance_options)
+        guidance_phase["verification"] = guidance.get("verification", "content")
 
     def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
         optional_managed_names = {
@@ -784,6 +794,7 @@ def bootstrap_managed_project(
             "status": guidance.get("status"),
             "verified_files": guidance.get("verified_file_count"),
             "verified_skills": guidance.get("verified_skill_count"),
+            **({"verification": guidance["verification"]} if "verification" in guidance else {}),
         },
         "local_state": prepared["local_state"],
         "restore": {

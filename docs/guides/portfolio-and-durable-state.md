@@ -26,6 +26,28 @@ verified v2 snapshot. Never append ephemeral UIDs to the portfolio yourself. Nev
 SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository` and
 `artifact_namespace` are optional metadata; exact host/project targets are routing authority.
 
+### Guidance verification on Databricks
+
+Cold boots verify the manifest and every managed guidance file's content. After successful
+content verification, Anchor can retain a compute-local metadata receipt beside the runtime
+state root, isolated by effective UID and account fingerprint. It is never published to
+Workspace or included in durable project snapshots. Standalone `setup_host` uses content
+verification unless explicitly given a local `receipt_root`.
+
+The receipt binds the package version, adapter, target root and manifest hash to Workspace
+FILE object IDs, sizes and modification timestamps. Metadata must agree before and after
+full verification to create a receipt. A warm boot lists the guidance directories and, when
+their complete immediate-entry inventory agrees, skips content downloads. SDK `workspace.list`
+is not recursive: this requires one bounded call per guidance directory, run concurrently.
+Unrelated subtrees, such as reconciliation backups, are not recursively scanned.
+
+Missing, added or changed entries, incomplete metadata, an unreadable receipt or a changed
+binding fall back to full content verification and its existing drift refusals. The startup
+packet's `guidance.verification` and host-guidance timings explicitly report `content` or
+`metadata_receipt`; metadata agreement is **not a new cryptographic content verification**.
+Servers that omit required metadata retain full verification. Losing local compute state
+also removes the receipt, so the next compute verifies content again.
+
 To bound snapshot accumulation, opt into portfolio-wide automatic retention through the
 guarded public API. Do not edit the TOML or snapshot storage directly:
 
