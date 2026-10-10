@@ -160,7 +160,12 @@ Applying the plan:
 
 1. backs up every replaced or deleted file, the previous manifest and a `BACKUP.json` receipt to
    `<instruction-root>/.odibi-anchor-host-backups/<utc>/`, then reads each backup back;
-2. reinstalls from the active package, with the same rollback as plain setup;
+2. reinstalls from the active package, with the same rollback as plain setup. Each file must
+   still hold the bytes the plan read. Locally, each file is moved aside atomically and compared;
+   on the Workspace API, it is re-read just before it is written. If a file changed, the apply
+   stops, puts back everything it had replaced, keeps the newer bytes, and asks you to rerun the
+   dry run. The Workspace API has no compare-and-swap, so a write in the moment between that read
+   and Anchor's write can still be missed;
 3. verifies every hash and the manifest.
 
 Bootstrap never reconciles. It stays fail-closed, and it never replaces an edited file. The

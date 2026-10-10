@@ -137,9 +137,10 @@ def test_v2_snapshot_restores_project_artifacts_and_empty_directories(tmp_path: 
         durable_root=durable,
         authority_id="work",
     )
-    from odibi_anchor import _bootstrap_phases
-
-    with _bootstrap_phases.recording() as recorder, _bootstrap_phases.phase("runtime_preparation"):
+    # Record through the exact recorder copy durability is bound to: another test module purges
+    # every "odibi_anchor" key (including the shared phase state) from sys.modules at collection.
+    phases = durability._record_phase.__globals__
+    with phases["recording"]() as recorder, phases["phase"]("runtime_preparation"):
         restored = durability.restore_latest(
             durable_root=durable,
             destination_db=restored_db,

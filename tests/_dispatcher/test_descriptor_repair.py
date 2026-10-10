@@ -304,10 +304,15 @@ def test_cli_repair_descriptor_dry_run_and_approve(deployment, capsys) -> None:
     assert cli.main(arguments) == 0
     planned = json.loads(capsys.readouterr().out)
     assert planned["ok"] is True and planned["result"]["status"] == "plan"
+    assert planned["result"]["envelope"]["effects"] is None
     assert deployment.descriptor.read_bytes() == PLAIN.encode()
 
     assert cli.main([*arguments, "--approve"]) == 0
-    assert json.loads(capsys.readouterr().out)["result"]["status"] == "repaired"
+    repaired = json.loads(capsys.readouterr().out)["result"]
+    assert repaired["status"] == "repaired"
+    assert repaired["envelope"]["retry_safety"] == "not_idempotent"
+    assert repaired["envelope"]["effects"]["changed"] is True
+    assert repaired["envelope"]["effects"]["verified_readback"] is True
 
     assert cli.main([*arguments, "--approve"]) == cli.EXIT_ACTION
     refused = json.loads(capsys.readouterr().out)

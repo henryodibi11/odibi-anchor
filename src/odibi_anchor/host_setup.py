@@ -830,24 +830,41 @@ def _setup_databricks_workspace(
 def _publish_workspace(
     workspace: Any, target: Path, *, desired: dict[str, bytes], obsolete: list[str],
     existing: dict[str, bytes | None], manifest_content: bytes | None, manifest_bytes: bytes,
-    import_format: Any,
+    import_format: Any, verify_unchanged: bool = False,
 ) -> None:
-    """Publish desired bytes through the Workspace API, restoring the original on failure."""
+    """Publish desired bytes through the Workspace API, restoring the original on failure.
+
+    With ``verify_unchanged`` (reconcile), each file is re-read immediately before it is
+    replaced and a change since the plan refuses; the Workspace API has no compare-and-swap,
+    so this narrows the window to one read and one write rather than closing it.
+    """
     manifest_path = _workspace_api_path(target, _MANIFEST)
     before = {**existing, _MANIFEST: manifest_content}
     mutation_order = [*desired, *obsolete, _MANIFEST]
     mutated: list[str] = []
+    conflicted: set[str] = set()
+
+    def ensure_unchanged(relative: str) -> None:
+        if verify_unchanged and _workspace_read(
+            workspace, _workspace_api_path(target, relative)
+        ) != before.get(relative):
+            conflicted.add(relative)
+            raise _changed_since_plan(relative)
+
     try:
         for relative, content in desired.items():
             if existing.get(relative) == content:
                 continue
+            ensure_unchanged(relative)
             mutated.append(relative)
             _workspace_write(
                 workspace, _workspace_api_path(target, relative), content, import_format
             )
         for relative in obsolete:
+            ensure_unchanged(relative)
             mutated.append(relative)
             _workspace_delete(workspace, _workspace_api_path(target, relative))
+        ensure_unchanged(_MANIFEST)
         mutated.append(_MANIFEST)
         _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
         _verify_workspace_publication(workspace, target, desired, manifest_bytes)
@@ -864,6 +881,8 @@ def _publish_workspace(
             except BaseException:
                 rollback_errors.append(relative)
         for relative in dict.fromkeys(mutation_order):
+            if relative in conflicted:
+                continue  # never touched; it holds the newer bytes that caused the refusal
             try:
                 if _workspace_read(
                     workspace, _workspace_api_path(target, relative)
@@ -877,6 +896,8 @@ def _publish_workspace(
                 "Databricks Workspace host guidance publication and rollback failed for: "
                 f"{failed}"
             ) from publication_error
+        if conflicted:
+            raise  # the specific refusal: a file changed after the plan read it
         if isinstance(publication_error, Exception):
             raise HostSetupError(
                 "Databricks Workspace host guidance publication failed; original state restored"
@@ -1148,13 +1169,17 @@ def _reconcile_host(
         _publish_workspace(
             workspace, target, desired=desired, obsolete=obsolete, existing=existing,
             manifest_content=manifest_content, manifest_bytes=manifest_bytes,
-            import_format=import_format,
+            import_format=import_format, verify_unchanged=True,
         )
         verified_manifest = _workspace_read(workspace, _workspace_api_path(target, _MANIFEST))
     else:
         backup_root = _backup_local(target, stamp, {**backups, _BACKUP_RECEIPT: receipt})
         _publish_local(
             target, adapter, desired=desired, obsolete=obsolete, manifest_bytes=manifest_bytes,
+            expected={
+                **{relative: existing.get(relative) for relative in [*desired, *obsolete]},
+                _MANIFEST: manifest_content,
+            },
         )
         verified_manifest = _regular_bytes(target / _MANIFEST, f"published {_MANIFEST}")
     if verified_manifest is None or _parse_manifest(verified_manifest)["files"] != hashes:
@@ -1363,11 +1388,29 @@ def _install_host(
     return _result(target, adapter, status, hashes, compatible_unmanaged, legacy_managed)
 
 
+def _changed_since_plan(relative: str) -> HostSetupError:
+    return HostSetupError(
+        f"host guidance file {relative} changed after the reconcile plan read it; nothing was "
+        "replaced. Rerun the reconcile dry run and review the new plan."
+    )
+
+
 def _publish_local(
     target: Path, adapter: str, *, desired: dict[str, bytes], obsolete: list[str],
-    manifest_bytes: bytes,
+    manifest_bytes: bytes, expected: dict[str, bytes | None] | None = None,
 ) -> None:
-    """Stage, swap and verify desired bytes locally, restoring the original on failure."""
+    """Stage, swap and verify desired bytes locally, restoring the original on failure.
+
+    With ``expected`` (reconcile), each displaced file is compared after its atomic move
+    aside; a mismatch raises and the rollback below restores the moved bytes unchanged.
+    """
+
+    def check_displaced(relative: str, saved: Path | None) -> None:
+        if expected is not None and (
+            None if saved is None else saved.read_bytes()
+        ) != expected.get(relative):
+            raise _changed_since_plan(relative)
+
     staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
     backup = staging / "backup"
     published: list[tuple[Path, Path | None]] = []
@@ -1386,6 +1429,7 @@ def _publish_local(
             preserve_staging = True
             os.replace(destination, saved)
             published.append((destination, saved))
+            check_displaced(relative, saved)
         for relative in [*desired, _MANIFEST]:
             destination = _destination(target, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1396,6 +1440,7 @@ def _publish_local(
                 preserve_staging = True
                 os.replace(destination, saved)
             published.append((destination, saved))
+            check_displaced(relative, saved)
             os.replace(staging / "new" / relative, destination)
         _verify_publication(target, desired, manifest_bytes)
         preserve_staging = False

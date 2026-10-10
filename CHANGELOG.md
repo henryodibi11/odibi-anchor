@@ -29,7 +29,7 @@ and #30, deterministic host discovery, and the lifecycle friction found while se
   records a validated host binding that the launcher prefers over the default search.
   `setup-host --reconcile` classifies each managed guidance file (`current`, `released_version`,
   `unmanaged_edit`, `missing`), dry runs by default, and applies with backups; edited files need
-  explicit approval. Drift at bootstrap reports every file and points to the reconcile plan.
+  explicit approval. An apply refuses any file that changed after the plan read it. Drift at bootstrap reports every file and points to the reconcile plan.
   Released guidance bytes come from `_released_guidance_hashes.json`; regenerate it with
   `python scripts/generate_released_guidance_hashes.py --write` after each release tag.
 - **Fresh-compute doctor.** `anchor doctor --fresh-compute --config --host --project` walks
@@ -37,7 +37,8 @@ and #30, deterministic host discovery, and the lifecycle friction found while se
   exact next operation. `doctor()` now has a top-level `status` (`ready` or `attention`).
 - **Result envelope.** Every dispatcher dict result carries one additive `envelope` key (v1) with
   `outcome`, `effects`, `retry_safety`, `obligations`, `next_operation` and `error`, identical
-  across in-process, CLI and MCP calls. MCP compact responses are budgeted; the boot banner goes
+  across in-process, CLI and MCP calls; an approved `repair-descriptor` and a non-dry-run
+  `move-target` report their writes and re-hash the files they wrote. MCP compact responses are budgeted; the boot banner goes
   to stderr; the mandatory contract shrank from about 26 KB to under 18 KB with every rule kept.
 - **Snapshot descriptor integrity.** v2 manifests and `snapshot_state` report
   `descriptor_integrity` per project without blocking.

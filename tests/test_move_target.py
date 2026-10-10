@@ -423,6 +423,8 @@ def test_cli_move_target_emits_structured_json(deployment, targets, capsys):
     assert cli.main([*base, "--dry-run"]) == 0
     preview = json.loads(capsys.readouterr().out)
     assert preview["ok"] is True and preview["result"]["status"] == "ready"
+    assert preview["result"]["envelope"]["effects"] is None
+    assert preview["result"]["envelope"]["retry_safety"] == "read_only"
     assert cli.main([*base[:-2], "--to", str(old.parent / "missing")]) == cli.EXIT_ACTION
     refused = json.loads(capsys.readouterr().out)
     assert refused["error"]["error_code"] == "target_migration_blocked"
@@ -430,7 +432,13 @@ def test_cli_move_target_emits_structured_json(deployment, targets, capsys):
     assert cli.main(["portfolio", "move-target", "--config", str(deployment.config), "--host", HOST]) == cli.EXIT_INPUT
     capsys.readouterr()
     assert cli.main(base) == 0
-    assert json.loads(capsys.readouterr().out)["result"]["status"] == "completed"
+    moved = json.loads(capsys.readouterr().out)["result"]
+    assert moved["status"] == "completed"
+    # A completed move is a write: the envelope reports it and re-hashes what it wrote.
+    assert moved["envelope"]["retry_safety"] == "not_idempotent"
+    assert moved["envelope"]["effects"]["changed"] is True
+    assert moved["envelope"]["effects"]["verified_readback"] is True
+    assert moved["envelope"]["undo"]["status"] == "irreversible"
 
 
 def _crash_before_receipt(artifact: Path):

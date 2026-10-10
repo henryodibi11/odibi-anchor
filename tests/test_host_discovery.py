@@ -393,6 +393,50 @@ def test_approved_reconcile_backs_up_reinstalls_and_verifies(drifted_host, tmp_p
     assert setup_host(drifted_host, adapter="databricks", reconcile=True)["status"] == "unchanged"
 
 
+def test_reconcile_refuses_an_edit_made_after_the_plan_and_keeps_it(drifted_host, monkeypatch):
+    readme = drifted_host / ".assistant" / "README.md"
+    real_backup = module._backup_local
+
+    def backup_then_user_edit(*args, **kwargs):
+        root = real_backup(*args, **kwargs)
+        readme.write_text("team edit\nUSER EDIT 2\n")  # lands between backup and publish
+        return root
+
+    monkeypatch.setattr(module, "_backup_local", backup_then_user_edit)
+    with pytest.raises(HostSetupError, match="changed after the reconcile plan read it"):
+        setup_host(
+            drifted_host, adapter="databricks", reconcile=True, dry_run=False,
+            approve_replace_edited=True,
+        )
+
+    assert readme.read_text() == "team edit\nUSER EDIT 2\n"
+    assert (drifted_host / ".assistant" / "agent_bootstrap.py").read_bytes() == LEGACY_LAUNCHER
+    assert not list(drifted_host.glob(".anchor-host-stage-*"))
+
+
+def test_workspace_reconcile_refuses_an_edit_made_after_the_plan(tmp_path, monkeypatch):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    api_root = WORKSPACE_ROOT.removeprefix("/Workspace")
+    setup_host(WORKSPACE_ROOT, adapter="databricks")
+    edited = f"{api_root}/.assistant/README.md"
+    workspace.files[edited] = b"team edit\n"
+    real_backup = module._backup_workspace
+
+    def backup_then_user_edit(*args, **kwargs):
+        root = real_backup(*args, **kwargs)
+        workspace.files[edited] = b"team edit\nUSER EDIT 2\n"
+        return root
+
+    monkeypatch.setattr(module, "_backup_workspace", backup_then_user_edit)
+    with pytest.raises(HostSetupError, match="changed after the reconcile plan read it"):
+        setup_host(
+            WORKSPACE_ROOT, adapter="databricks", reconcile=True, dry_run=False,
+            approve_replace_edited=True,
+        )
+
+    assert workspace.files[edited] == b"team edit\nUSER EDIT 2\n"
+
+
 def test_released_version_drift_applies_without_edit_approval(tmp_path, monkeypatch):
     resources = _resources(tmp_path)
     monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)

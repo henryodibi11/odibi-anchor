@@ -317,13 +317,25 @@ _OPERATION_UNDO = {
     "portfolio.scaffold": "no supported portfolio removal command exists; ask the owner",
     "portfolio.add-project": "no supported project removal command exists; ask the owner",
     "portfolio.prepare": "prepared runtime registration is not withdrawn by a command",
+    "portfolio.repair-descriptor": "the original bytes are preserved at backup_path; no undo command exists",
+    "portfolio.move-target": "rollback is refused once the receipt exists; move back with a new move-target",
 }
+
+
+def _mutating(operation: str, ns: argparse.Namespace) -> bool:
+    """Whether this invocation may write: an approved repair or a move that is not a dry run."""
+    if operation == "portfolio.repair-descriptor":
+        return bool(ns.approve)
+    if operation == "portfolio.move-target":
+        return not ns.dry_run
+    return operation in _MUTATING_OPERATIONS
 
 
 def _readback(operation: str, ns: argparse.Namespace, result: dict[str, Any]) -> dict[str, Any] | None:
     """Re-read the exact state an operation wrote; never infer success from the result alone."""
     import hashlib
     import os
+    from pathlib import Path
 
     if operation in {"portfolio.scaffold", "portfolio.add-project"} and isinstance(result.get("sha256"), str):
         from odibi_anchor.portfolio import load_portfolio_document
@@ -333,6 +345,22 @@ def _readback(operation: str, ns: argparse.Namespace, result: dict[str, Any]) ->
         if operation == "portfolio.add-project":
             observed = observed and result.get("project_id") in document["portfolio"].get("projects", {})
         return {"method": "portfolio_document_sha256", "observed": observed}
+    if operation == "portfolio.repair-descriptor" and isinstance(result.get("post_sha256"), str):
+        with open(result["descriptor_path"], "rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        return {"method": "descriptor_sha256", "observed": digest == result["post_sha256"]}
+    if operation == "portfolio.move-target":
+        from odibi_anchor._migration import _file_sha256
+
+        moves = result.get("moves") if result.get("kind") == "target_migration_batch" else [result]
+        if not moves or not all(isinstance(move.get("hashes"), dict) for move in moves):
+            return None
+        return {"method": "portfolio_and_descriptor_sha256", "observed": all(
+            _file_sha256(Path(move["config_path"])) == move["hashes"]["after"]["portfolio_sha256"]
+            and _file_sha256(Path(move["artifact_root"]) / "PROJECT.md")
+            == move["hashes"]["after"]["descriptor_sha256"]
+            for move in moves
+        )}
     if operation == "state.restore" and isinstance(result.get("restored_sha256"), str):
         with open(result["destination_db"], "rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
@@ -354,7 +382,7 @@ def _enveloped(operation: str, ns: argparse.Namespace, result: Any) -> Any:
 
     if not isinstance(result, dict):
         return result
-    mutating = operation in _MUTATING_OPERATIONS
+    mutating = _mutating(operation, ns) and result.get("status") != "already_migrated"
     try:
         readback = _readback(operation, ns, result) if mutating else None
     except (OSError, ValueError) as exc:
@@ -369,13 +397,13 @@ def _enveloped(operation: str, ns: argparse.Namespace, result: Any) -> Any:
     return result
 
 
-def _operation_error(operation: str, exc: Exception) -> dict[str, Any]:
+def _operation_error(operation: str, ns: argparse.Namespace, exc: Exception) -> dict[str, Any]:
     from odibi_anchor._dispatcher._envelope import build_operation_failure_envelope
 
     return {
         **error_information(exc),
         "envelope": build_operation_failure_envelope(
-            operation, exc, mutating=operation in _MUTATING_OPERATIONS,
+            operation, exc, mutating=_mutating(operation, ns),
         ),
     }
 
@@ -562,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         except RequestError as exc:
             return _emit({"ok": False, "error": {"type": "input", "message": str(exc)}}, EXIT_INPUT)
         except (OSError, RuntimeError, ValueError) as exc:
-            return _emit({"ok": False, "error": _operation_error(operation, exc)}, EXIT_ACTION)
+            return _emit({"ok": False, "error": _operation_error(operation, ns, exc)}, EXIT_ACTION)
     if ns.command == "state":
         operation = f"state.{ns.state_command}"
         if ns.state_command == "list":
@@ -573,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return _emit({"ok": True, "result": _enveloped(operation, ns, _state_command(ns))})
         except (OSError, RuntimeError, ValueError) as exc:
-            return _emit({"ok": False, "error": _operation_error(operation, exc)}, EXIT_ACTION)
+            return _emit({"ok": False, "error": _operation_error(operation, ns, exc)}, EXIT_ACTION)
     if ns.command == "install-guidance":
         try:
             from odibi_anchor.startup import install_guidance

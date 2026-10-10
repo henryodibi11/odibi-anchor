@@ -365,7 +365,11 @@ def test_test_request_id_returns_retained_result_without_rerunning(lifecycle):
     first = anchor("test", target=["test_counted.py"], request_id="run-1", output_format="dict")
     second = anchor("test", target=["test_counted.py"], request_id="run-1", output_format="dict")
     assert first["request"]["replayed"] is False and second["request"]["replayed"] is True
-    assert second["metrics"] == first["metrics"]
+    # output_tokens_estimate sizes each response, and the replay flag makes it one byte longer.
+    def run_metrics(result):
+        return {key: value for key, value in result["metrics"].items() if key != "output_tokens_estimate"}
+
+    assert run_metrics(second) == run_metrics(first)
     assert counter.read_text().count("run") == 1
     with pytest.raises(ValueError, match="different test arguments") as caught:
         anchor("test", target=["test_pkg.py"], request_id="run-1", output_format="dict")
