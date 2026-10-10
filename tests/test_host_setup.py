@@ -991,3 +991,21 @@ def test_databricks_guidance_timings_report_sub_phases_and_slowest_files(tmp_pat
         "phase": "publish", "elapsed_ms": 0.0, "outcome": "not_required",
         "reason": "managed files unchanged",
     }
+
+
+def test_workspace_receipt_still_works_under_a_permissive_umask(tmp_path, monkeypatch):
+    """With umask 002 a default-mode receipt root would be group-writable and never trusted."""
+    import os
+
+    _resources_root, _workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    state = tmp_path / "local-state"
+    previous = os.umask(0o002)
+    try:
+        results = [setup_host(target, adapter="databricks", receipt_root=state)["verification"]
+                   for _boot in range(3)]
+    finally:
+        os.umask(previous)
+
+    assert results == ["content", "content", "metadata_receipt"]
+    assert not state.stat().st_mode & 0o022

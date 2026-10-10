@@ -818,7 +818,10 @@ def _write_guidance_receipt(path: Path | None, binding: dict[str, Any], metadata
     try:
         # A successful first boot leaves only this cheap local marker. Metadata
         # seeding is worth doing only if the compute is used for another boot.
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Create the root and the receipt directory private: under a permissive umask a
+        # default-mode root would be group-writable and disable receipts permanently.
+        path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, exist_ok=True)
         if metadata is None:
             return
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:

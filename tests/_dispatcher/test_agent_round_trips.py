@@ -301,6 +301,11 @@ def test_poll_refuses_a_result_when_a_file_changed_and_was_restored_mid_run(tmp_
                 break
             time.sleep(0.02)
     assert refused.value.error_code == "test_files_changed_during_run"  # type: ignore[attr-defined]
+    # A polled retry would be refused the same way; the recovery is a synchronous rerun.
+    assert "gitignore" in str(refused.value)
+    rerun = refused.value.next_operation["kwargs"]  # type: ignore[attr-defined]
+    assert {"wait_seconds", "poll", "request_id"}.isdisjoint(rerun)
+    assert rerun["workflow_criterion"] == "ok"
     assert anchor("workflow", output_format="dict")["state"]["measurements"] == {}
 
 

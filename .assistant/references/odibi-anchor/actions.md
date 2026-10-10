@@ -22,7 +22,9 @@ identical across in-process, CLI and MCP calls. Existing result keys are unchang
   `running`. Only `succeeded` is a clean success. `running` comes only from a test started with
   `wait_seconds` that outlived the wait: it is not test evidence; copy
   `next_operation.copy_ready` (same arguments and `request_id`, plus `poll=True`) until a final
-  result arrives. A poll is refused if target files changed during the run, even if restored.
+  result arrives. A poll is refused if a tracked or unignored target file changed during the
+  run, even if restored (gitignored files are not checked); suites that write unignored outputs
+  such as `.coverage` should gitignore them or run without `wait_seconds`.
 - `state`: `project`, `target`, `task_window_id`, lifecycle `phase`, bound `workflow`
   (id, phase, progress, generation when known) and `open_obligations`.
 - `effects` (mutating calls only, else `null`): `changed` (`null` after a failure),

@@ -459,11 +459,23 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
                     raise invalid("file bytes changed while pytest ran; use a new request_id",
                                   "test_request_id_conflict")
                 if "stat_sha256" in retained and stat_fingerprint() != retained["stat_sha256"]:
-                    raise invalid(
+                    # Retrying the same polled run would be refused again when the tests write
+                    # unignored outputs themselves, so offer the synchronous rerun instead.
+                    synchronous = {key: value for key, value in arguments.items() if key != "args"}
+                    raise attach_recovery(ValueError(
                         "target files changed while pytest ran (even if their bytes were restored), "
-                        "so the result cannot be attributed to the current files; use a new request_id",
-                        "test_files_changed_during_run",
-                    )
+                        "so the result cannot be attributed to the current files. If the tests "
+                        "themselves write files that are not gitignored (for example .coverage or "
+                        "generated outputs), add those paths to .gitignore or run the tests without "
+                        "wait_seconds."
+                    ), error_code="test_files_changed_during_run",
+                        context={"executed": False, "request_id": request_id},
+                        next_operations=[dispatcher_operation(
+                            "test", *arguments.get("args", []), kwargs=synchronous,
+                            reason="rerun synchronously; a polled run cannot attribute results "
+                                   "while target files change",
+                            retry_safety="not_idempotent",
+                        )])
                 return complete(retained, finish_test_steps(retained["steps"], raw))
             except Exception as exc:
                 retained["error"] = exc
