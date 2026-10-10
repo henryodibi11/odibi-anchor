@@ -9,7 +9,7 @@ descriptor's ``project_type`` is not part of that authority, so it is checked fo
 consistency with the bound route: ``managed`` must target its own artifact root.
 
 Body-only edits pass. Route changes and damage go through supported operations
-(``project move-target`` for a target change, ``project repair-descriptor`` for
+(``anchor portfolio move-target`` for a target change, ``project repair-descriptor`` for
 damage), both of which require the project owner.
 """
 
@@ -23,7 +23,7 @@ from typing import Any
 from odibi_anchor._dispatcher._descriptor import DESCRIPTOR_NAME, read_descriptor
 
 SUPPORTED_OPERATIONS = {
-    "project move-target": "move the project's target with owner approval (route field change)",
+    "anchor portfolio move-target": "move the project's target with owner approval (route field change)",
     "project repair-descriptor": (
         "owner-approved, portfolio-authorized repair of damaged route frontmatter"
     ),
@@ -92,7 +92,7 @@ def check_descriptor_route_protection(session_state: Any, *, changed_paths: Iter
             f"(managed_descriptor_route_change): {', '.join(changed)} no longer match the "
             f"accepted route of '{project_id}' (descriptor {status}). Route changes are not "
             "delivered through task edits; only body edits are. Restore the accepted route "
-            "fields, or stop and ask the project owner to use `project move-target` (target "
+            "fields, or stop and ask the project owner to use `anchor portfolio move-target` (target "
             "change) or `project repair-descriptor` (damage)."
         ),
         error_code="managed_descriptor_route_change",

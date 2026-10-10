@@ -133,6 +133,19 @@ def _parser() -> argparse.ArgumentParser:
     repair.add_argument("--project", required=True)
     repair.add_argument("--expected-sha256", required=True)
     repair.add_argument("--approve", action="store_true")
+    move = portfolio_commands.add_parser(
+        "move-target", help="journaled, hash-verified move of one or more project targets",
+    )
+    move.add_argument("--config", required=True)
+    move.add_argument("--host", required=True)
+    move.add_argument("--project")
+    move.add_argument("--from", dest="from_target")
+    move.add_argument("--to", dest="to_target")
+    move.add_argument("--mapping", help='batch JSON file {"moves": [{"project", "from", "to"}]}')
+    move_mode = move.add_mutually_exclusive_group()
+    move_mode.add_argument("--dry-run", action="store_true")
+    move_mode.add_argument("--resume", action="store_true")
+    move_mode.add_argument("--rollback", action="store_true")
     state = commands.add_parser("state", help="inspect or transfer durable Anchor state")
     state_commands = state.add_subparsers(dest="state_command", required=True)
     for name in ("list", "snapshot", "restore", "resume", "abandon"):
@@ -178,6 +191,27 @@ def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
             project_id=ns.project, authority_id=ns.authority,
             local_state_root=ns.local_state_root, instruction_root=ns.instruction_root,
             durable_root=ns.durable_root,
+        )
+    if ns.portfolio_command == "move-target":
+        from odibi_anchor._migration import load_mapping, move_target, move_targets
+
+        single = (ns.project, ns.from_target, ns.to_target)
+        if ns.mapping is not None:
+            if any(value is not None for value in single) or ns.resume or ns.rollback:
+                raise RequestError("--mapping excludes --project/--from/--to, --resume and --rollback")
+            try:
+                moves = load_mapping(ns.mapping)
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise RequestError(f"invalid --mapping file: {exc}") from exc
+            return move_targets(
+                config_path=ns.config, host_id=ns.host, moves=moves, dry_run=ns.dry_run,
+            )
+        if any(value is None for value in single):
+            raise RequestError("move-target requires --project, --from and --to (or --mapping)")
+        return move_target(
+            config_path=ns.config, host_id=ns.host, project_id=ns.project,
+            from_target=ns.from_target, to_target=ns.to_target,
+            dry_run=ns.dry_run, resume=ns.resume, rollback=ns.rollback,
         )
     document = load_portfolio_document(ns.config)
     if ns.portfolio_command == "show":
@@ -395,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
     if ns.command == "portfolio":
         try:
             return _emit({"ok": True, "result": _portfolio_command(ns)})
+        except RequestError as exc:
+            return _emit({"ok": False, "error": {"type": "input", "message": str(exc)}}, EXIT_INPUT)
         except (OSError, RuntimeError, ValueError) as exc:
             return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
     if ns.command == "state":

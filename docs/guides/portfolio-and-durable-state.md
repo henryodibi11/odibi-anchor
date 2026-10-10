@@ -324,7 +324,7 @@ Task edits cannot change the route. If `PROJECT.md` is in a task's changed set, 
 its route fields with the task's accepted route: the bound project ID, target root, and artifact
 root. A `managed` descriptor must target its own artifact root. A route change or damaged
 frontmatter blocks the gate with `managed_descriptor_route_change`, whose context names the
-supported operations: `project move-target` for a target change and `project repair-descriptor`
+supported operations: `anchor portfolio move-target` for a target change and `project repair-descriptor`
 for damage. Body-only edits pass. Any write to `PROJECT.md` still marks a running dispatcher's
 routing stale, so continue from a fresh process with `task_rebind` before gating.
 
@@ -335,3 +335,89 @@ Durable snapshots report descriptor integrity without blocking. Each v2 manifest
 existing checkpoint is reused, and `restore_latest` returns the restored manifest's list. It is
 `null` for a snapshot written before v0.3.26. The key is part of the manifest body, so
 `manifest_sha256` covers it. Older readers verify that checksum and ignore keys they do not know.
+
+## Moving a project target
+
+A launched project's target is bound into its continuity owner (`continuity/v1/OWNER.json`),
+its accepted tasks, workflows and memory receipts. `project set_target` therefore refuses with
+`project_retarget_requires_migration` once a project has launched. The supported move is
+`anchor portfolio move-target`. It changes the portfolio entry `projects.<id>.targets.<host>`
+and the managed `PROJECT.md` route line together, starts a new continuity epoch, and never
+changes `artifact_root` or rewrites historical records. Relative `touched` paths keep resolving
+against the current `target_root`.
+
+Preview first, then apply the same command without `--dry-run`:
+
+```bash
+anchor portfolio move-target --config /absolute/private/path/anchor.toml \
+  --host databricks-work --project uc-tools \
+  --from /Workspace/Users/name/uc-tools \
+  --to /Workspace/Users/name/projects/uc-tools --dry-run
+```
+
+The Python equivalent is `odibi_anchor.move_target(config_path=..., host_id=...,
+project_id=..., from_target=..., to_target=..., dry_run=False, resume=False, rollback=False)`.
+Run it on the host whose local state holds the project; on a fresh compute, run
+`anchor portfolio prepare` first so the latest snapshot is restored.
+
+The read-only preflight reports the portfolio, descriptor and `OWNER.json` SHA-256 and the
+expected post-move hashes. It refuses with `target_migration_blocked` and a `classification`:
+
+- `state_mismatch`: the targets match neither accepted start state below, local state is absent,
+  or the descriptor is damaged. A damaged descriptor is never rewritten; repair it first.
+- `destination_unsuitable`: `--to` is missing, not a directory, a symlink or under a symlink, is
+  another project's target, or lies inside `ANCHOR_HOME`, the configured local state root, the
+  durable root or an artifact root. Private targets such as `projects/_scratch` are valid.
+- `not_quiescent`: an accepted task window is still open or a workflow for the project is not
+  completed or cancelled. The context lists the exact IDs.
+- `concurrent_change`: the portfolio or descriptor changed after preflight. Nothing is
+  overwritten.
+
+Two start states are accepted: portfolio and descriptor both name `--from`, or the portfolio was
+already moved to `--to` by hand while the descriptor still names `--from` (the portfolio is then
+left as it is). When everything already names `--to`, the command reports `already_migrated` and
+writes nothing.
+
+Each move is journaled in `<artifact_root>/migrations/<migration-id>.json`. The journal is
+created exclusively and advanced only by compare-and-swap, with an append-only history. Its
+first act is to keep create-only copies of the original portfolio and descriptor bytes beside
+it. The steps run in this order, and each one checks the store's current hash against the
+recorded pre-state and the expected post-state:
+
+1. Durable snapshot (when a durable root is configured).
+2. Descriptor route update and `continuity/v1` renamed to `continuity/archive/<migration-id>`.
+   When the portfolio already names `--to`, continuity is archived first, so no split state can
+   reach the old continuity owner.
+3. Journal state `portfolio_pending`, then a durable snapshot that contains it.
+4. Compare-and-swap write of the portfolio target.
+5. Create-only receipt `<migration-id>.receipt.json`, then a post-move snapshot.
+
+If the process stops part-way, the next bootstrap of a split route raises
+`route_target_conflict` with `classification: migration_pending` and copy-ready operations. This
+includes a fresh compute that restored the step 3 snapshot before the portfolio write. A new
+move of the same project raises `target_migration_incomplete`. Finish or reverse it with the same
+arguments plus `--resume` or `--rollback`. Rollback checks every store before its first write,
+then restores the saved bytes under the same hash checks. It is refused, with nothing changed, once
+a receipt file exists or once the project has been launched on the new target (which starts a new
+epoch); finish with `--resume` and reverse a completed move with a new move in the other
+direction. Quiescence is checked again just before the first route change. An epoch archived on a different compute stays archived after rollback, because its
+owner names that compute's home; the next launch starts a new epoch. Whenever a store matches
+neither its expected pre-state nor its post-state, the command stops with the exact hashes and
+does not guess.
+
+Batch mode reads an explicit mapping file and preflights every move before writing:
+
+```bash
+anchor portfolio move-target --config /absolute/private/path/anchor.toml \
+  --host databricks-work --mapping /absolute/private/path/moves.json --dry-run
+```
+
+```json
+{"moves": [{"project": "uc-tools", "from": "/Workspace/Users/name/uc-tools",
+            "to": "/Workspace/Users/name/projects/uc-tools"}]}
+```
+
+Each project still has its own journal; a failure stops the batch at that project and reports
+which moves completed. After a move, a historical workflow bound to the old target reports
+`workflow_bound_to_prior_target` with the receipt ID instead of a bare `unavailable`. The hash
+checks are optimistic concurrency for one writer, like restore, not a distributed lock.

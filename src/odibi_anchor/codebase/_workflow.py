@@ -422,6 +422,46 @@ def _schema(connection: sqlite3.Connection, *, create: bool = False) -> None:
             raise WorkflowError("integrity", "workflow schema was modified")
 
 
+def _owner_mismatch(workflow_id: str, bound: dict[str, Any], owner: dict[str, Any]) -> WorkflowError:
+    """Name a prior target and its migration receipt; otherwise the bare authority mismatch.
+
+    The diagnosis never grants access. Besides the target it tolerates an unattested home
+    relocation: a restored post-migration snapshot has no live continuity owner, so restore
+    records no relocation for the older home.
+    """
+    differing = {key for key in _OWNER_KEYS if bound.get(key) != owner.get(key)}
+    managed = ("workspace", "projects", str(owner["project_id"]))
+    relocated_home = all(
+        Path(str(identity.get("artifact_root", ""))).parts[-3:] == managed
+        and Path(str(identity["artifact_root"])).parents[2] == Path(str(identity.get("anchor_home", "")))
+        for identity in (bound, owner)
+    )
+    if "target_root" in differing and (
+        differing == {"target_root"}
+        or (differing <= {"target_root", "anchor_home", "artifact_root"} and relocated_home)
+    ):
+        from odibi_anchor._migration import migration_receipt_for
+        from odibi_anchor._recovery import attach_recovery
+
+        receipt = migration_receipt_for(
+            owner["artifact_root"], owner["project_id"], bound["target_root"], owner["target_root"]
+        )
+        if receipt is not None:
+            return attach_recovery(
+                WorkflowError(
+                    "unavailable",
+                    f"workflow {workflow_id} is bound to prior target {bound['target_root']}; see "
+                    f"migration receipt {receipt['migration_id']}. Its records are immutable "
+                    "history and cannot be advanced from the current target.",
+                ),
+                error_code="workflow_bound_to_prior_target",
+                context={"workflow_id": workflow_id, "prior_target": bound["target_root"],
+                         "current_target": owner["target_root"], "project_id": owner["project_id"],
+                         **receipt},
+            )
+    return WorkflowError("unavailable", "workflow does not match this exact authority")
+
+
 def _events(connection: sqlite3.Connection, workflow_id: str, owner: dict[str, Any]) -> list[dict[str, Any]]:
     from odibi_anchor.codebase._authority_relocation import load_relocations, rebase_identity
 
@@ -433,8 +473,9 @@ def _events(connection: sqlite3.Connection, workflow_id: str, owner: dict[str, A
     for index, row in enumerate(rows):
         event = json.loads(row["event_json"])
         state = event["state"]
-        if rebase_identity(state["owner"], relocations, owner["anchor_home"]) != owner:
-            raise WorkflowError("unavailable", "workflow does not match this exact authority")
+        bound = rebase_identity(state["owner"], relocations, owner["anchor_home"])
+        if bound != owner:
+            raise _owner_mismatch(workflow_id, bound, owner)
         if (row["generation"] != index or state["generation"] != index
                 or state["workflow_id"] != workflow_id or state["schema_version"] != VERSION
                 or row["previous_sha256"] != previous or event["previous_sha256"] != previous

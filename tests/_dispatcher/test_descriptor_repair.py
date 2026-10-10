@@ -345,7 +345,7 @@ def test_gate_blocks_route_changes_and_damage(deployment, edit, changed) -> None
     exc: Any = caught.value
     assert exc.error_code == "managed_descriptor_route_change"
     assert exc.context["changed_fields"] == changed
-    assert set(exc.context["supported_operations"]) == {"project move-target", "project repair-descriptor"}
+    assert set(exc.context["supported_operations"]) == {"anchor portfolio move-target", "project repair-descriptor"}
     assert str(exc).startswith("BLOCKED:")
 
 

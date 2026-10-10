@@ -870,7 +870,7 @@ def test_route_target_conflict_classifies_probable_move_or_ambiguous(
             "requested_target_exists": True,
         },
         "owner_decision_required": True,
-        "supported_move_available": False,
+        "supported_move_available": True,
     }
     assert caught.value.next_operations == []  # type: ignore[attr-defined]
     assert "stop and ask the project owner" in str(caught.value)
