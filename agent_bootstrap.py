@@ -94,7 +94,41 @@ ANCHOR_REPO = Path(__file__).resolve().parent
 ANCHOR_SRC = (ANCHOR_REPO / "src").resolve()
 EXPECTED_BOOTSTRAP = ANCHOR_SRC / "odibi_anchor" / "bootstrap.py"
 if not EXPECTED_BOOTSTRAP.is_file():
-    raise RuntimeError(f"Not a Odibi Anchor source checkout: missing {EXPECTED_BOOTSTRAP}")
+    # Host setup also installs this file at a host instruction root, next to the managed
+    # launcher. Both share one name; only the managed launcher works without src/.
+    _managed_launcher = ANCHOR_REPO / ".assistant" / "agent_bootstrap.py"
+    _copy_ready = (
+        f"runpy.run_path({str(_managed_launcher)!r}, "
+        "init_globals={'ANCHOR_PROJECT_ID': '<project-id>'})"
+    )
+    _misused = RuntimeError(
+        f"{Path(__file__).resolve()} is the Odibi Anchor source-checkout launcher, but "
+        f"{EXPECTED_BOOTSTRAP} is missing, so this directory is not a source checkout. "
+        + (
+            f"Use the managed launcher instead: {_copy_ready}"
+            if _managed_launcher.is_file()
+            else f"The managed launcher {_managed_launcher} is also missing; install host "
+            "guidance with `anchor setup-host <adapter> --target <instruction-root>` first."
+        )
+    )
+    _misused.error_code = "source_launcher_outside_checkout"  # type: ignore[attr-defined]
+    _misused.context = {  # type: ignore[attr-defined]
+        "launcher": str(Path(__file__).resolve()),
+        "expected_source": str(EXPECTED_BOOTSTRAP),
+        "managed_launcher": str(_managed_launcher),
+        "managed_launcher_exists": _managed_launcher.is_file(),
+    }
+    if _managed_launcher.is_file():
+        _misused.next_operation = {  # type: ignore[attr-defined]
+            "operation": "run_managed_launcher",
+            "copy_ready": _copy_ready,
+            "reason": "The managed launcher bootstraps installed Odibi Anchor from a host root.",
+            "requires_owner": False,
+            "retry_safety": "idempotent",
+        }
+        _misused.next_operations = [_misused.next_operation]  # type: ignore[attr-defined]
+        _misused.copy_ready = _copy_ready  # type: ignore[attr-defined]
+    raise _misused
 
 _expected_package = ANCHOR_SRC / "odibi_anchor"
 for _name, _module in tuple(sys.modules.items()):

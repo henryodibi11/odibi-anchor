@@ -1,16 +1,19 @@
 """Idempotent installation of packaged guidance into an explicit host root."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib
 import json
 import os
+import shlex
 import shutil
 import stat
 import tempfile
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
 
@@ -30,6 +33,16 @@ _T = TypeVar("_T")
 _PHASE = "host_guidance"
 _MANIFEST = ".odibi-anchor-host-guidance.json"
 _MANIFEST_VERSION = 1
+# The host binding and reconcile backups live outside the v1 manifest on purpose:
+# older Anchor versions only inspect manifest and packaged paths, so they never
+# report these names as unmanaged collisions.
+_BINDING = ".odibi-anchor-host-binding.json"
+_BINDING_VERSION = 1
+_BACKUPS = ".odibi-anchor-host-backups"
+_BACKUP_RECEIPT = "BACKUP.json"
+_RELEASED_TABLE = "_released_guidance_hashes.json"
+_RELEASED_TABLE_FORMAT = "odibi-anchor-released-guidance-hashes-v1"
+_CLASSIFICATIONS = ("current", "released_version", "unmanaged_edit", "missing")
 _ADAPTER_FILES = {
     "amp": "AGENTS.md",
     "claude": "CLAUDE.md",
@@ -89,6 +102,230 @@ class HostSetupError(RuntimeError):
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _released_table() -> dict[str, dict[str, list[str]]]:
+    """Return path -> digest -> [first, last] released version for packaged guidance."""
+    path = Path(__file__).with_name(_RELEASED_TABLE)
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HostSetupError(f"released guidance hash table is unreadable: {path}") from exc
+    if not isinstance(value, dict) or value.get("format") != _RELEASED_TABLE_FORMAT or not isinstance(
+        value.get("files"), dict
+    ):
+        raise HostSetupError(f"released guidance hash table has an unsupported schema: {path}")
+    table = {relative: dict(digests) for relative, digests in value["files"].items()}
+    for relative, digests in _LEGACY_MANAGED_HASHES.items():
+        for digest in digests:
+            table.setdefault(relative, {}).setdefault(digest, ["legacy", "legacy"])
+    return table
+
+
+def _released_versions(relative: str, digest: str) -> list[str] | None:
+    """Return the released version span that shipped these exact bytes, if any."""
+    key = relative
+    if relative.startswith(".claude/skills/"):
+        key = ".assistant/skills/" + relative.removeprefix(".claude/skills/")
+    span = _released_table().get(key, {}).get(digest)
+    return list(span) if span is not None else None
+
+
+def _classify(
+    relative: str, content: bytes | None, desired: dict[str, bytes], expected: str | None,
+) -> dict[str, Any]:
+    """Classify one managed path against the active package, manifest and released bytes."""
+    wanted = desired.get(relative)
+    entry: dict[str, Any] = {
+        "path": relative,
+        "manifest_sha256": expected,
+        "package_sha256": None if wanted is None else _sha256(wanted),
+        "actual_sha256": None,
+        "manifest_match": False,
+        "released_versions": None,
+    }
+    if content is None:
+        entry.update(classification="missing", action="install" if wanted is not None else "forget")
+        return entry
+    actual = _sha256(content)
+    released = _released_versions(relative, actual)
+    entry.update(actual_sha256=actual, manifest_match=actual == expected, released_versions=released)
+    if wanted is not None and content == wanted:
+        entry.update(classification="current", action="keep")
+    else:
+        anchor_bytes = actual == expected or released is not None
+        entry.update(
+            classification="released_version" if anchor_bytes else "unmanaged_edit",
+            action="replace" if wanted is not None else "delete",
+        )
+    return entry
+
+
+def _reconcile_command(
+    target: Path, adapter: str, *, apply: bool = False, approve: bool = False,
+) -> str:
+    words = ["anchor", "setup-host", adapter, "--target", target.as_posix(), "--reconcile"]
+    if apply:
+        words.append("--apply")
+    if approve:
+        words.append("--approve-replace-edited")
+    return shlex.join(words)
+
+
+def _reconcile_operation(target: Path, adapter: str) -> dict[str, Any]:
+    return {
+        "operation": "setup_host.reconcile",
+        "arguments": {
+            "target_root": target.as_posix(), "adapter": adapter, "reconcile": True, "dry_run": True,
+        },
+        "copy_ready": _reconcile_command(target, adapter),
+        "reason": (
+            "Inspect the read-only reconcile plan; applying it backs up every replaced file "
+            "first, and unmanaged edits additionally require explicit approval."
+        ),
+        "requires_owner": False,
+        "retry_safety": "read_only",
+    }
+
+
+def _drift_error(target: Path, adapter: str, entries: list[dict[str, Any]]) -> HostSetupError:
+    """Report every drifted managed file with its classification instead of a flat refusal."""
+    from odibi_anchor._recovery import attach_recovery
+
+    first = entries[0]
+    if first["manifest_sha256"] is None:
+        headline = f"unmanaged destination collision: {first['path']}"
+    else:
+        headline = (
+            f"modified managed file: {first['path']} (expected {first['manifest_sha256']}, "
+            f"actual {first['actual_sha256'] or 'missing'})"
+        )
+    counts = {
+        name: sum(entry["classification"] == name for entry in entries) for name in _CLASSIFICATIONS
+    }
+    summary = ", ".join(f"{name}={count}" for name, count in counts.items() if count)
+    listing = "; ".join(f"{entry['path']}: {entry['classification']}" for entry in entries)
+    operation = _reconcile_operation(target, adapter)
+    return attach_recovery(
+        HostSetupError(
+            f"{headline}. Host guidance drift (host_guidance_drift): {len(entries)} file(s) differ "
+            f"from the managed manifest or active package ({summary}): {listing}. Setup stopped "
+            "before publication and changed nothing. Supported next step: inspect the reconcile "
+            f"plan with `{operation['copy_ready']}`. Do not hand-edit, copy or delete managed files."
+        ),
+        error_code="host_guidance_drift",
+        context={
+            "target_root": target.as_posix(),
+            "adapter": adapter,
+            "manifest_path": (target / _MANIFEST).as_posix(),
+            "classification_counts": counts,
+            "files": entries,
+        },
+        next_operations=[operation],
+    )
+
+
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _binding_error(message: str, *, code: str, context: dict[str, Any]) -> HostSetupError:
+    from odibi_anchor._recovery import attach_recovery
+
+    return attach_recovery(HostSetupError(message), error_code=code, context=context)
+
+
+def _resolve_binding(
+    target: Path, *, adapter: str, portfolio_config: str | os.PathLike[str], host_id: str | None,
+) -> dict[str, Any]:
+    """Validate that the portfolio names exactly one host whose instruction root is ``target``."""
+    from odibi_anchor.portfolio import load_portfolio_document
+
+    raw = os.fspath(portfolio_config)
+    if not raw or "\n" in raw or "\r" in raw or raw.startswith("~") or not Path(raw).is_absolute():
+        raise ValueError("portfolio_config must be an explicit absolute, single-line path")
+    document = load_portfolio_document(raw)
+    hosts = document["portfolio"].get("hosts", {})
+
+    def matches(settings: Any) -> bool:
+        configured = settings.get("instruction_root") if isinstance(settings, dict) else None
+        if not isinstance(configured, str) or settings.get("adapter") != adapter:
+            return False
+        if target.as_posix().startswith("/Workspace/"):
+            return configured == target.as_posix()
+        return Path(configured).resolve() == target
+
+    context = {"config_path": document["path"], "target_root": target.as_posix(), "host_id": host_id}
+    if host_id is not None:
+        if host_id not in hosts or not matches(hosts[host_id]):
+            raise _binding_error(
+                f"portfolio {document['path']} host {host_id!r} does not declare adapter "
+                f"{adapter} with instruction_root {target.as_posix()}; refusing to bind this host "
+                "root to it",
+                code="host_binding_mismatch", context=context,
+            )
+        selected = host_id
+    else:
+        candidates = sorted(name for name, settings in hosts.items() if matches(settings))
+        if len(candidates) != 1:
+            raise _binding_error(
+                f"portfolio {document['path']} has {len(candidates)} {adapter} hosts whose "
+                f"instruction_root is {target.as_posix()} ({', '.join(candidates) or 'none'}); "
+                "pass the exact host",
+                code="host_binding_mismatch", context={**context, "candidates": candidates},
+            )
+        selected = candidates[0]
+    return {
+        "config_path": document["path"],
+        "host_id": selected,
+        "instruction_root": target.as_posix(),
+        "version": _BINDING_VERSION,
+    }
+
+
+def read_host_binding(instruction_root: str | os.PathLike[str]) -> dict[str, Any] | None:
+    """Read and strictly validate one local host binding sidecar; ``None`` when absent."""
+    root = Path(os.fspath(instruction_root))
+    path = root / _BINDING
+    if not os.path.lexists(path):
+        return None
+    content = _regular_bytes(path, f"host binding {_BINDING}")
+    try:
+        value = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HostSetupError(f"host binding {path} is not valid JSON") from exc
+    expected_keys = {"config_path", "host_id", "instruction_root", "version"}
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected_keys
+        or value["version"] != _BINDING_VERSION
+        or not all(isinstance(value[key], str) and value[key] for key in expected_keys - {"version"})
+        or content != _canonical_json(value)
+    ):
+        raise HostSetupError(f"host binding {path} is malformed or non-canonical")
+    config = value["config_path"]
+    if config.startswith("~") or "\n" in config or not Path(config).is_absolute():
+        raise HostSetupError(f"host binding {path} config_path must be absolute")
+    if Path(value["instruction_root"]).resolve() != root.resolve():
+        raise HostSetupError(
+            f"host binding {path} names instruction root {value['instruction_root']}, not {root}"
+        )
+    return value
+
+
+def _write_binding_local(target: Path, binding: dict[str, Any]) -> None:
+    destination = _destination(target, _BINDING)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{_BINDING}.", dir=target)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(_canonical_json(binding))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
 
 
 def _target_root(value: str | os.PathLike[str]) -> Path:
@@ -546,6 +783,7 @@ def _setup_databricks_workspace(
             ):
                 desired.pop(_CUSTOM_INSTRUCTIONS)
                 compatible_unmanaged.append(_CUSTOM_INSTRUCTIONS)
+        drift: list[dict[str, Any]] = []
         for relative in sorted(set(previous) | set(desired)):
             content = existing.get(relative)
             expected = previous.get(relative)
@@ -554,21 +792,18 @@ def _setup_databricks_workspace(
                 if expected is None:
                     if relative in desired and actual == _sha256(desired[relative]):
                         continue
-                    raise HostSetupError(f"unmanaged destination collision: {relative}")
-                if actual != expected:
-                    raise HostSetupError(
-                        f"modified managed file: {relative} (expected {expected}, actual {actual})"
-                    )
+                    drift.append(_classify(relative, content, desired, expected))
+                elif actual != expected:
+                    drift.append(_classify(relative, content, desired, expected))
             elif expected is not None:
-                raise HostSetupError(
-                    f"modified managed file: {relative} (expected {expected}, actual missing)"
-                )
+                drift.append(_classify(relative, content, desired, expected))
+        if drift:
+            raise _drift_error(target, "databricks", drift)
 
         hashes = {relative: _sha256(content) for relative, content in desired.items()}
-        manifest_bytes = (json.dumps(
-            {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": hashes},
-            indent=2, sort_keys=True,
-        ) + "\n").encode()
+        manifest_bytes = _canonical_json(
+            {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": hashes}
+        )
     if manifest is not None and previous == hashes:
         # The reads above already verified every managed file against the prior
         # manifest. Re-reading the same publication doubles Workspace API traffic
@@ -580,54 +815,11 @@ def _setup_databricks_workspace(
         )
 
     with phase("publish", layer="workspace_api"):
-        before = {**existing, _MANIFEST: manifest_content}
-        mutation_order = [*desired, *sorted(set(previous) - set(desired)), _MANIFEST]
-        mutated: list[str] = []
-        try:
-            for relative, content in desired.items():
-                if existing.get(relative) == content:
-                    continue
-                mutated.append(relative)
-                _workspace_write(
-                    workspace, _workspace_api_path(target, relative), content, import_format
-                )
-            for relative in sorted(set(previous) - set(desired)):
-                mutated.append(relative)
-                _workspace_delete(workspace, _workspace_api_path(target, relative))
-            mutated.append(_MANIFEST)
-            _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
-            _verify_workspace_publication(workspace, target, desired, manifest_bytes)
-        except BaseException as publication_error:
-            rollback_errors: list[str] = []
-            for relative in reversed(dict.fromkeys(mutated)):
-                path = _workspace_api_path(target, relative)
-                original = before.get(relative)
-                try:
-                    if original is None:
-                        _workspace_delete(workspace, path)
-                    else:
-                        _workspace_write(workspace, path, original, import_format)
-                except BaseException:
-                    rollback_errors.append(relative)
-            for relative in dict.fromkeys(mutation_order):
-                try:
-                    if _workspace_read(
-                        workspace, _workspace_api_path(target, relative)
-                    ) != before.get(relative):
-                        rollback_errors.append(relative)
-                except BaseException:
-                    rollback_errors.append(relative)
-            if rollback_errors:
-                failed = ", ".join(sorted(set(rollback_errors)))
-                raise HostSetupError(
-                    "Databricks Workspace host guidance publication and rollback failed for: "
-                    f"{failed}"
-                ) from publication_error
-            if isinstance(publication_error, Exception):
-                raise HostSetupError(
-                    "Databricks Workspace host guidance publication failed; original state restored"
-                ) from publication_error
-            raise
+        _publish_workspace(
+            workspace, target, desired=desired, obsolete=sorted(set(previous) - set(desired)),
+            existing=existing, manifest_content=manifest_content, manifest_bytes=manifest_bytes,
+            import_format=import_format,
+        )
 
     status = "upgraded" if manifest is not None or legacy_managed else "installed"
     return _result(
@@ -635,7 +827,442 @@ def _setup_databricks_workspace(
     )
 
 
+def _publish_workspace(
+    workspace: Any, target: Path, *, desired: dict[str, bytes], obsolete: list[str],
+    existing: dict[str, bytes | None], manifest_content: bytes | None, manifest_bytes: bytes,
+    import_format: Any,
+) -> None:
+    """Publish desired bytes through the Workspace API, restoring the original on failure."""
+    manifest_path = _workspace_api_path(target, _MANIFEST)
+    before = {**existing, _MANIFEST: manifest_content}
+    mutation_order = [*desired, *obsolete, _MANIFEST]
+    mutated: list[str] = []
+    try:
+        for relative, content in desired.items():
+            if existing.get(relative) == content:
+                continue
+            mutated.append(relative)
+            _workspace_write(
+                workspace, _workspace_api_path(target, relative), content, import_format
+            )
+        for relative in obsolete:
+            mutated.append(relative)
+            _workspace_delete(workspace, _workspace_api_path(target, relative))
+        mutated.append(_MANIFEST)
+        _workspace_write(workspace, manifest_path, manifest_bytes, import_format)
+        _verify_workspace_publication(workspace, target, desired, manifest_bytes)
+    except BaseException as publication_error:
+        rollback_errors: list[str] = []
+        for relative in reversed(dict.fromkeys(mutated)):
+            path = _workspace_api_path(target, relative)
+            original = before.get(relative)
+            try:
+                if original is None:
+                    _workspace_delete(workspace, path)
+                else:
+                    _workspace_write(workspace, path, original, import_format)
+            except BaseException:
+                rollback_errors.append(relative)
+        for relative in dict.fromkeys(mutation_order):
+            try:
+                if _workspace_read(
+                    workspace, _workspace_api_path(target, relative)
+                ) != before.get(relative):
+                    rollback_errors.append(relative)
+            except BaseException:
+                rollback_errors.append(relative)
+        if rollback_errors:
+            failed = ", ".join(sorted(set(rollback_errors)))
+            raise HostSetupError(
+                "Databricks Workspace host guidance publication and rollback failed for: "
+                f"{failed}"
+            ) from publication_error
+        if isinstance(publication_error, Exception):
+            raise HostSetupError(
+                "Databricks Workspace host guidance publication failed; original state restored"
+            ) from publication_error
+        raise
+
+
+def _workspace_handles() -> tuple[Any, Any]:
+    try:
+        workspace_types = importlib.import_module("databricks.sdk.service.workspace")
+        workspace = databricks_workspace_client(workspace_timeout_policy()).workspace
+        return workspace, workspace_types.ImportFormat.AUTO
+    except Exception as exc:
+        raise HostSetupError("Databricks Workspace host setup requires an authenticated SDK") from exc
+
+
+def _workspace_missing_path(workspace: Any, path: str) -> bool:
+    try:
+        workspace.get_status(path)
+    except Exception as exc:
+        if _workspace_missing(exc):
+            return True
+        raise HostSetupError(f"Databricks Workspace path is inaccessible: {path}") from exc
+    return False
+
+
+def _compatible_unmanaged(
+    adapter: str, previous: dict[str, str], desired: dict[str, bytes],
+    existing: dict[str, bytes | None],
+) -> list[str]:
+    """Leave customized, user-owned guidance in place, as plain setup does."""
+    compatible: list[str] = []
+    custom = existing.get(_CUSTOM_INSTRUCTIONS)
+    if (
+        _CUSTOM_INSTRUCTIONS not in previous
+        and custom is not None
+        and custom != desired.get(_CUSTOM_INSTRUCTIONS)
+        and _released_versions(_CUSTOM_INSTRUCTIONS, _sha256(custom)) is None
+        and b"# Odibi Anchor operating contract" in custom
+        and b"agent_bootstrap.py" in custom
+    ):
+        desired.pop(_CUSTOM_INSTRUCTIONS, None)
+        compatible.append(_CUSTOM_INSTRUCTIONS)
+    host_file = _ADAPTER_FILES[adapter]
+    pointer = existing.get(host_file)
+    if (
+        host_file in _POINTERS
+        and host_file not in previous
+        and pointer is not None
+        and pointer != desired.get(host_file)
+        and b".assistant_instructions.md" in pointer
+    ):
+        desired.pop(host_file, None)
+        compatible.append(host_file)
+    return compatible
+
+
+def _approval_error(
+    target: Path, adapter: str, edits: list[dict[str, Any]], planned_backup: str,
+) -> HostSetupError:
+    from odibi_anchor._recovery import attach_recovery
+
+    return attach_recovery(
+        HostSetupError(
+            "host guidance reconcile refused (host_guidance_edit_approval_required): "
+            f"{len(edits)} managed file(s) contain unmanaged edits that match neither the "
+            f"active package, the manifest, nor any released Anchor version: "
+            f"{', '.join(entry['path'] for entry in edits)}. Nothing was written. Replacing them "
+            "requires explicit owner approval; every replaced file is backed up first to "
+            f"{planned_backup}."
+        ),
+        error_code="host_guidance_edit_approval_required",
+        context={
+            "target_root": target.as_posix(),
+            "adapter": adapter,
+            "unmanaged_edits": edits,
+            "planned_backup_root": planned_backup,
+        },
+        next_operations=[{
+            "operation": "setup_host.reconcile",
+            "arguments": {
+                "target_root": target.as_posix(), "adapter": adapter, "reconcile": True,
+                "dry_run": False, "approve_replace_edited": True,
+            },
+            "copy_ready": _reconcile_command(target, adapter, apply=True, approve=True),
+            "reason": "Replace the edited files after the owner reviews the backed-up edits.",
+            "requires_owner": True,
+            "retry_safety": "idempotent",
+        }],
+    )
+
+
+def _backup_local(target: Path, stamp: str, files: dict[str, bytes]) -> Path:
+    """Write every file to an exclusive, verified backup directory before replacement."""
+    # _destination refuses a symlinked or non-directory backup parent.
+    parent = _destination(target, f"{_BACKUPS}/{stamp}").parent
+    parent.mkdir(exist_ok=True)
+    backup_root = parent / stamp
+    backup_root.mkdir()
+    for relative, content in files.items():
+        destination = backup_root.joinpath(*PurePosixPath(relative).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("xb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    for relative, content in files.items():
+        saved = backup_root.joinpath(*PurePosixPath(relative).parts)
+        if _regular_bytes(saved, f"backup {relative}") != content:
+            raise HostSetupError(f"host guidance backup verification failed: {relative}")
+    return backup_root
+
+
+def _backup_workspace(
+    workspace: Any, target: Path, stamp: str, files: dict[str, bytes], import_format: Any,
+) -> Path:
+    backup_relative = f"{_BACKUPS}/{stamp}"
+    if not _workspace_missing_path(workspace, _workspace_api_path(target, backup_relative)):
+        raise HostSetupError(f"host guidance backup already exists: {backup_relative}")
+    for relative, content in files.items():
+        _workspace_write(
+            workspace, _workspace_api_path(target, f"{backup_relative}/{relative}"), content,
+            import_format,
+        )
+    for relative, content in files.items():
+        path = _workspace_api_path(target, f"{backup_relative}/{relative}")
+        if _workspace_read(workspace, path) != content:
+            raise HostSetupError(f"host guidance backup verification failed: {relative}")
+    return target / _BACKUPS / stamp
+
+
+def _reconcile_host(
+    target: Path, adapter: str, *, workspace_target: bool, dry_run: bool, approve: bool,
+) -> dict[str, Any]:
+    """Classify, back up, reinstall and verify every managed file; dry run by default."""
+    from odibi_anchor import __version__
+
+    desired = _desired_files(adapter)
+    workspace: Any = None
+    import_format: Any = None
+    if workspace_target:
+        workspace, import_format = _workspace_handles()
+        target_path = _workspace_api_path(target)
+        try:
+            status = workspace.get_status(target_path)
+        except Exception as exc:
+            raise HostSetupError(f"Databricks Workspace target is inaccessible: {target_path}") from exc
+        raw_type = getattr(status, "object_type", None)
+        if str(getattr(raw_type, "value", raw_type)).upper() not in {"DIRECTORY", "REPO"}:
+            raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
+        manifest_content = _workspace_read(workspace, _workspace_api_path(target, _MANIFEST))
+    else:
+        manifest_file = target / _MANIFEST
+        manifest_content = (
+            _regular_bytes(manifest_file, f"managed manifest {_MANIFEST}")
+            if os.path.lexists(manifest_file)
+            else None
+        )
+    manifest = None if manifest_content is None else _parse_manifest(manifest_content)
+    if manifest is not None and manifest["adapter"] != adapter:
+        raise HostSetupError(
+            f"host guidance manifest adapter mismatch: managed={manifest['adapter']}, requested={adapter}"
+        )
+    previous: dict[str, str] = {} if manifest is None else manifest["files"]
+    paths = sorted(set(previous) | set(desired))
+    if workspace_target:
+        existing = _workspace_read_many(workspace, target, paths)
+    else:
+        existing = {}
+        for relative in paths:
+            destination = _destination(target, relative)
+            existing[relative] = (
+                _regular_bytes(destination, f"destination {relative}")
+                if destination.exists() or destination.is_symlink()
+                else None
+            )
+    compatible = _compatible_unmanaged(adapter, previous, desired, existing)
+    entries = [
+        _classify(relative, existing.get(relative), desired, previous.get(relative))
+        for relative in sorted(set(previous) | set(desired))
+    ]
+    hashes = {relative: _sha256(content) for relative, content in desired.items()}
+    manifest_bytes = _canonical_json(
+        {"version": _MANIFEST_VERSION, "adapter": adapter, "files": hashes}
+    )
+    edits = [entry for entry in entries if entry["classification"] == "unmanaged_edit"]
+    replaced = [entry["path"] for entry in entries if entry["action"] in {"replace", "delete"}]
+    needs_publication = (
+        any(entry["action"] != "keep" for entry in entries) or manifest_content != manifest_bytes
+    )
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    planned_backup = (target / _BACKUPS / stamp).as_posix()
+    plan: dict[str, Any] = {
+        "kind": "host_guidance_reconcile",
+        "status": "planned",
+        "dry_run": dry_run,
+        "adapter": adapter,
+        "target_root": target.as_posix(),
+        "manifest_path": (target / _MANIFEST).as_posix(),
+        "package_version": __version__,
+        "classification_counts": {
+            name: sum(entry["classification"] == name for entry in entries)
+            for name in _CLASSIFICATIONS
+        },
+        "files": entries,
+        "compatible_unmanaged_files": sorted(compatible),
+        "approval_required": [entry["path"] for entry in edits],
+        "approved": approve,
+        "backup": {
+            "root": None,
+            "planned_root": planned_backup if needs_publication else None,
+            "files": replaced + ([_MANIFEST] if needs_publication and manifest_content else []),
+        },
+        "next_operation": {
+            "operation": "review_host_guidance",
+            "path": (target / _ADAPTER_FILES[adapter]).as_posix(),
+        },
+    }
+    if not needs_publication:
+        plan.update(status="unchanged")
+        plan["backup"]["files"] = []
+        return plan
+    if dry_run:
+        plan["next_operation"] = {
+            "operation": "setup_host.reconcile",
+            "arguments": {
+                "target_root": target.as_posix(), "adapter": adapter, "reconcile": True,
+                "dry_run": False, "approve_replace_edited": bool(edits),
+            },
+            "copy_ready": _reconcile_command(target, adapter, apply=True, approve=bool(edits)),
+            "reason": (
+                "Apply the plan: back up every replaced file, reinstall from the active package, "
+                "and verify the manifest and hashes."
+            ),
+            "requires_owner": bool(edits),
+            "retry_safety": "idempotent",
+        }
+        return plan
+    if edits and not approve:
+        raise _approval_error(target, adapter, edits, planned_backup)
+
+    backups: dict[str, bytes] = {}
+    for relative in replaced:
+        content = existing[relative]
+        assert content is not None  # replace/delete actions are only planned for present files
+        backups[relative] = content
+    if manifest_content is not None:
+        backups[_MANIFEST] = manifest_content
+    receipt = _canonical_json({
+        "format": "odibi-anchor-host-guidance-backup-v1",
+        "created_at": stamp,
+        "adapter": adapter,
+        "target_root": target.as_posix(),
+        "package_version": __version__,
+        "files": [
+            {key: entry[key] for key in ("path", "classification", "actual_sha256", "action")}
+            for entry in entries
+            if entry["path"] in backups
+        ],
+        "manifest_sha256": None if manifest_content is None else _sha256(manifest_content),
+    })
+    obsolete = [
+        entry["path"] for entry in entries if entry["action"] == "delete"
+    ]
+    if workspace_target:
+        backup_root = _backup_workspace(
+            workspace, target, stamp, {**backups, _BACKUP_RECEIPT: receipt}, import_format,
+        )
+        _publish_workspace(
+            workspace, target, desired=desired, obsolete=obsolete, existing=existing,
+            manifest_content=manifest_content, manifest_bytes=manifest_bytes,
+            import_format=import_format,
+        )
+        verified_manifest = _workspace_read(workspace, _workspace_api_path(target, _MANIFEST))
+    else:
+        backup_root = _backup_local(target, stamp, {**backups, _BACKUP_RECEIPT: receipt})
+        _publish_local(
+            target, adapter, desired=desired, obsolete=obsolete, manifest_bytes=manifest_bytes,
+        )
+        verified_manifest = _regular_bytes(target / _MANIFEST, f"published {_MANIFEST}")
+    if verified_manifest is None or _parse_manifest(verified_manifest)["files"] != hashes:
+        raise HostSetupError("published host guidance verification failed: manifest")
+    result = _result(target, adapter, "reconciled", hashes, compatible)
+    plan.update(
+        status="reconciled",
+        verified_file_count=result["verified_file_count"],
+        verified_skill_count=result["verified_skill_count"],
+        managed_files=result["managed_files"],
+        next_operation=result["next_operation"],
+    )
+    plan["backup"].update(root=backup_root.as_posix(), planned_root=None, receipt=_BACKUP_RECEIPT)
+    return plan
+
+
+def _publish_binding(
+    target: Path, binding: dict[str, Any], *, workspace_target: bool, dry_run: bool,
+) -> dict[str, Any]:
+    """Record the exact portfolio and host for deterministic launcher discovery."""
+    content = _canonical_json(binding)
+    path = (target / _BINDING).as_posix()
+    if workspace_target:
+        workspace, import_format = _workspace_handles()
+        current = _workspace_read(workspace, _workspace_api_path(target, _BINDING))
+    else:
+        workspace = import_format = None
+        current = (
+            _regular_bytes(target / _BINDING, f"host binding {_BINDING}")
+            if os.path.lexists(target / _BINDING)
+            else None
+        )
+    previous: Any = None
+    if current is not None:
+        try:
+            previous = json.loads(current)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            previous = {"status": "invalid", "sha256": _sha256(current)}
+    status = "created" if current is None else "unchanged" if current == content else "replaced"
+    report = {"path": path, "status": status, "binding": binding, "previous": previous}
+    if dry_run or status == "unchanged":
+        if dry_run and status != "unchanged":
+            report["status"] = f"planned_{status}"
+        return report
+    if workspace_target:
+        _workspace_write(workspace, _workspace_api_path(target, _BINDING), content, import_format)
+        written = _workspace_read(workspace, _workspace_api_path(target, _BINDING))
+    else:
+        _write_binding_local(target, binding)
+        written = _regular_bytes(target / _BINDING, f"host binding {_BINDING}")
+    if written != content:
+        raise HostSetupError(f"host binding verification failed: {path}")
+    return report
+
+
 def setup_host(
+    target_root: str | os.PathLike[str],
+    *,
+    adapter: str,
+    portfolio_config: str | os.PathLike[str] | None = None,
+    host_id: str | None = None,
+    reconcile: bool = False,
+    dry_run: bool | None = None,
+    approve_replace_edited: bool = False,
+) -> dict[str, Any]:
+    """Install packaged host guidance, or reconcile drift with ``reconcile=True``.
+
+    Plain setup never overwrites unowned or edited files and raises
+    ``host_guidance_drift`` with a per-file classification. ``reconcile=True`` is a
+    dry run unless ``dry_run=False``; applying backs up every replaced file and
+    replaces unmanaged edits only with ``approve_replace_edited=True``.
+    ``portfolio_config`` records the exact portfolio and host in the host binding
+    sidecar read by the managed launcher.
+    """
+    if adapter not in _ADAPTER_FILES:
+        raise ValueError("adapter must be one of: amp, chatgpt, claude, databricks")
+    effective_dry_run = reconcile if dry_run is None else dry_run
+    if not reconcile and (effective_dry_run or approve_replace_edited):
+        raise ValueError("dry_run and approve_replace_edited apply only with reconcile=True")
+    if host_id is not None and portfolio_config is None:
+        raise ValueError("host_id requires portfolio_config")
+    workspace_target = (
+        _databricks_target_root(target_root) if adapter == "databricks" else None
+    )
+    target = workspace_target or _target_root(target_root)
+    binding = (
+        None
+        if portfolio_config is None
+        else _resolve_binding(
+            target, adapter=adapter, portfolio_config=portfolio_config, host_id=host_id
+        )
+    )
+    if reconcile:
+        result = _reconcile_host(
+            target, adapter, workspace_target=workspace_target is not None,
+            dry_run=effective_dry_run, approve=approve_replace_edited,
+        )
+    else:
+        result = _install_host(target_root, adapter=adapter)
+    if binding is not None:
+        result["host_binding"] = _publish_binding(
+            target, binding, workspace_target=workspace_target is not None,
+            dry_run=effective_dry_run,
+        )
+    return result
+
+
+def _install_host(
     target_root: str | os.PathLike[str], *, adapter: str
 ) -> dict[str, Any]:
     """Reconcile packaged host guidance without overwriting unowned or edited files.
@@ -643,8 +1270,6 @@ def setup_host(
     ``target_root`` is mandatory and never inferred.  All collisions are validated
     before publication; a manifest records the exact bytes owned by Anchor.
     """
-    if adapter not in _ADAPTER_FILES:
-        raise ValueError("adapter must be one of: amp, chatgpt, claude, databricks")
     workspace_target = (
         _databricks_target_root(target_root) if adapter == "databricks" else None
     )
@@ -700,27 +1325,28 @@ def setup_host(
                 desired.pop(host_file)
                 compatible_unmanaged.append(host_file)
 
+        drift: list[dict[str, Any]] = []
         for relative in sorted(set(previous) | set(desired)):
             destination = _destination(target, relative)
             expected = previous.get(relative)
             if destination.exists() or destination.is_symlink():
-                actual = _sha256(_regular_bytes(destination, f"destination {relative}"))
+                content = _regular_bytes(destination, f"destination {relative}")
+                actual = _sha256(content)
                 if expected is None:
                     if relative in desired and actual == _sha256(desired[relative]):
                         continue
-                    raise HostSetupError(f"unmanaged destination collision: {relative}")
-                if actual != expected:
-                    raise HostSetupError(
-                        f"modified managed file: {relative} (expected {expected}, actual {actual})"
-                    )
+                    drift.append(_classify(relative, content, desired, expected))
+                elif actual != expected:
+                    drift.append(_classify(relative, content, desired, expected))
             elif expected is not None:
-                raise HostSetupError(f"modified managed file: {relative} (expected {expected}, actual missing)")
+                drift.append(_classify(relative, None, desired, expected))
+        if drift:
+            raise _drift_error(target, adapter, drift)
 
         hashes = {relative: _sha256(content) for relative, content in desired.items()}
-        manifest_bytes = (json.dumps(
-            {"version": _MANIFEST_VERSION, "adapter": adapter, "files": hashes},
-            indent=2, sort_keys=True,
-        ) + "\n").encode()
+        manifest_bytes = _canonical_json(
+            {"version": _MANIFEST_VERSION, "adapter": adapter, "files": hashes}
+        )
     unchanged = manifest is not None and previous == hashes
     if unchanged:
         record_phase("publish", outcome="not_required", reason="managed files unchanged")
@@ -729,78 +1355,89 @@ def setup_host(
         )
 
     with phase("publish", layer="filesystem"):
-        staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
-        backup = staging / "backup"
-        published: list[tuple[Path, Path | None]] = []
-        preserve_staging = False
-        try:
-            for relative, content in desired.items():
-                staged = staging / "new" / relative
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(content)
-            staged_manifest = staging / "new" / _MANIFEST
-            staged_manifest.write_bytes(manifest_bytes)
-            for relative in sorted(set(previous) - set(desired)):
-                destination = _destination(target, relative)
+        _publish_local(
+            target, adapter, desired=desired, obsolete=sorted(set(previous) - set(desired)),
+            manifest_bytes=manifest_bytes,
+        )
+    status = "upgraded" if manifest is not None or legacy_managed else "installed"
+    return _result(target, adapter, status, hashes, compatible_unmanaged, legacy_managed)
+
+
+def _publish_local(
+    target: Path, adapter: str, *, desired: dict[str, bytes], obsolete: list[str],
+    manifest_bytes: bytes,
+) -> None:
+    """Stage, swap and verify desired bytes locally, restoring the original on failure."""
+    staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
+    backup = staging / "backup"
+    published: list[tuple[Path, Path | None]] = []
+    preserve_staging = False
+    try:
+        for relative, content in desired.items():
+            staged = staging / "new" / relative
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(content)
+        staged_manifest = staging / "new" / _MANIFEST
+        staged_manifest.write_bytes(manifest_bytes)
+        for relative in obsolete:
+            destination = _destination(target, relative)
+            saved = backup / relative
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            preserve_staging = True
+            os.replace(destination, saved)
+            published.append((destination, saved))
+        for relative in [*desired, _MANIFEST]:
+            destination = _destination(target, relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            saved: Path | None = None
+            if destination.exists():
                 saved = backup / relative
                 saved.parent.mkdir(parents=True, exist_ok=True)
                 preserve_staging = True
                 os.replace(destination, saved)
-                published.append((destination, saved))
-            for relative in [*desired, _MANIFEST]:
-                destination = _destination(target, relative)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                saved: Path | None = None
-                if destination.exists():
-                    saved = backup / relative
-                    saved.parent.mkdir(parents=True, exist_ok=True)
-                    preserve_staging = True
-                    os.replace(destination, saved)
-                published.append((destination, saved))
-                os.replace(staging / "new" / relative, destination)
-            _verify_publication(target, desired, manifest_bytes)
-            preserve_staging = False
-        except BaseException as publication_error:
-            preserve_staging = True
-            tracked_backups = {
-                saved for _destination_path, saved in published if saved is not None
-            }
-            if backup.is_dir():
-                for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
-                    if saved not in tracked_backups:
-                        published.append(
-                            (_destination(target, saved.relative_to(backup).as_posix()), saved)
-                        )
-            rollback_errors: list[str] = []
-            for destination, saved in reversed(published):
-                try:
-                    destination.unlink(missing_ok=True)
-                    if saved is not None and saved.exists():
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(saved, destination)
-                except BaseException as exc:
-                    rollback_errors.append(f"{destination}: {type(exc).__name__}")
-            remaining_backups = (
-                sorted(path for path in backup.rglob("*") if path.is_file())
-                if backup.is_dir()
-                else []
+            published.append((destination, saved))
+            os.replace(staging / "new" / relative, destination)
+        _verify_publication(target, desired, manifest_bytes)
+        preserve_staging = False
+    except BaseException as publication_error:
+        preserve_staging = True
+        tracked_backups = {
+            saved for _destination_path, saved in published if saved is not None
+        }
+        if backup.is_dir():
+            for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
+                if saved not in tracked_backups:
+                    published.append(
+                        (_destination(target, saved.relative_to(backup).as_posix()), saved)
+                    )
+        rollback_errors: list[str] = []
+        for destination, saved in reversed(published):
+            try:
+                destination.unlink(missing_ok=True)
+                if saved is not None and saved.exists():
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(saved, destination)
+            except BaseException as exc:
+                rollback_errors.append(f"{destination}: {type(exc).__name__}")
+        remaining_backups = (
+            sorted(path for path in backup.rglob("*") if path.is_file())
+            if backup.is_dir()
+            else []
+        )
+        if remaining_backups:
+            rollback_errors.append(
+                f"{len(remaining_backups)} recovery backup(s) remain"
             )
-            if remaining_backups:
-                rollback_errors.append(
-                    f"{len(remaining_backups)} recovery backup(s) remain"
-                )
-            if rollback_errors:
-                raise HostSetupError(
-                    "host setup publication and rollback failed; backups preserved at "
-                    f"{staging}: {', '.join(rollback_errors)}"
-                ) from publication_error
-            preserve_staging = False
-            raise
-        finally:
-            if not preserve_staging:
-                _cleanup_staging(staging, adapter)
-    status = "upgraded" if manifest is not None or legacy_managed else "installed"
-    return _result(target, adapter, status, hashes, compatible_unmanaged, legacy_managed)
+        if rollback_errors:
+            raise HostSetupError(
+                "host setup publication and rollback failed; backups preserved at "
+                f"{staging}: {', '.join(rollback_errors)}"
+            ) from publication_error
+        preserve_staging = False
+        raise
+    finally:
+        if not preserve_staging:
+            _cleanup_staging(staging, adapter)
 
 
 def _result(
@@ -838,4 +1475,4 @@ def _result(
     }
 
 
-__all__ = ["HostSetupError", "setup_host"]
+__all__ = ["HostSetupError", "read_host_binding", "setup_host"]

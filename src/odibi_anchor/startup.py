@@ -861,8 +861,428 @@ def _open_tasks(database: Path, project_id: str | None, target: Path | None) -> 
                 "implication": "database could not be inspected read-only"}
 
 
-def doctor(*, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Return secret-free startup facts without creating or changing state."""
+_DESCRIPTOR_READ_LIMIT = 1_048_576
+
+
+def _stop_for_owner(reason: str) -> dict[str, Any]:
+    return {
+        "operation": "stop_and_ask_owner",
+        "reason": reason,
+        "requires_owner": True,
+        "retry_safety": "read_only",
+    }
+
+
+def _error_step(name: str, exc: BaseException, **facts: Any) -> dict[str, Any]:
+    """Describe one blocking failure with its structured recovery, never a guessed fix."""
+    return {
+        "step": name,
+        "status": "blocked",
+        **facts,
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "error_code": getattr(exc, "error_code", None),
+            "context": getattr(exc, "context", None),
+        },
+        "next_operation": getattr(exc, "next_operation", None)
+        or _stop_for_owner("This failure has no supported automatic correction."),
+    }
+
+
+def _launcher_discovery(launcher_root: Path, config: Path, adapter: str) -> dict[str, Any]:
+    """Replay the managed launcher's portfolio precedence read-only for one instruction root."""
+    from odibi_anchor.host_setup import HostSetupError, read_host_binding
+
+    default = launcher_root / ".odibi-anchor" / "anchor.toml"
+    nested = launcher_root.name == ".assistant"
+    record = {
+        "operation": "setup_host.record_portfolio",
+        "copy_ready": (
+            f"anchor setup-host {adapter} --target {launcher_root.as_posix()} "
+            f"--portfolio {config.as_posix()}"
+        ),
+        "reason": "Record this exact portfolio in the host binding sidecar for future launches.",
+        "requires_owner": True,
+        "retry_safety": "idempotent",
+    }
+    facts: dict[str, Any] = {
+        "instruction_root": launcher_root.as_posix(),
+        "default_path": default.as_posix(),
+        "default_exists": default.is_file(),
+        "nested_install": nested,
+    }
+    if "ANCHOR_PORTFOLIO_CONFIG" in os.environ:
+        selected = Path(os.environ["ANCHOR_PORTFOLIO_CONFIG"])
+        source = "ANCHOR_PORTFOLIO_CONFIG environment variable"
+    else:
+        try:
+            binding = read_host_binding(launcher_root)
+        except (HostSetupError, OSError) as exc:
+            return {**facts, "status": "blocked", "source": "host binding sidecar",
+                    "reason": str(exc), "next_operation": record}
+        if binding is not None:
+            selected = Path(binding["config_path"])
+            source = "host binding sidecar"
+            facts["binding"] = binding
+            if default.is_file() and default.resolve() != selected.resolve():
+                return {**facts, "status": "blocked", "source": source,
+                        "selected_path": selected.as_posix(),
+                        "reason": "managed_portfolio_ambiguous: the sidecar and default differ",
+                        "next_operation": record}
+        else:
+            selected = default
+            source = "instruction-root default"
+    matches = selected.is_file() and selected.resolve() == config.resolve()
+    facts.update(source=source, selected_path=selected.as_posix(), selects_config=matches)
+    if matches and not nested:
+        return {**facts, "status": "ok", "next_operation": None}
+    return {
+        **facts,
+        "status": "action_required",
+        "reason": (
+            "nested .assistant install: the launcher's instruction root is itself named .assistant"
+            if nested
+            else "the launcher would not select this portfolio without explicit input"
+        ),
+        "next_operation": record,
+    }
+
+
+def _guidance_step(launcher_root: Path, adapter: str) -> dict[str, Any]:
+    """Classify host guidance with the read-only reconcile dry run."""
+    from odibi_anchor.host_setup import HostSetupError, setup_host
+
+    try:
+        plan = setup_host(launcher_root, adapter=adapter, reconcile=True, dry_run=True)
+    except (HostSetupError, OSError, ValueError) as exc:
+        return _error_step("host_guidance", exc, instruction_root=launcher_root.as_posix())
+    files = plan["files"]
+    # Plain setup during bootstrap installs new files and upgrades files that still match
+    # the manifest; anything else is drift that bootstrap refuses. Legacy hosts without a
+    # manifest are reported conservatively: reconcile classifies their released bytes.
+    pending = [
+        entry["path"] for entry in files
+        if not (
+            entry["classification"] == "current"
+            or (entry["manifest_sha256"] is not None and entry["manifest_match"])
+            or (entry["classification"] == "missing" and entry["manifest_sha256"] is None)
+        )
+    ]
+    facts = {
+        "instruction_root": launcher_root.as_posix(),
+        "reconcile_status": plan["status"],
+        "classification_counts": plan["classification_counts"],
+        "drifted_files": [
+            {key: entry[key] for key in ("path", "classification", "action", "released_versions")}
+            for entry in files if entry["classification"] != "current"
+        ],
+        "approval_required": plan["approval_required"],
+    }
+    if pending:
+        return {"step": "host_guidance", "status": "blocked", **facts,
+                "reason": "bootstrap refuses this drift (host_guidance_drift)",
+                "next_operation": plan["next_operation"]}
+    effect = "none" if plan["status"] == "unchanged" else "bootstrap installs or upgrades unchanged managed files"
+    return {"step": "host_guidance", "status": "ok", **facts, "launch_effect": effect,
+            "next_operation": None}
+
+
+def _snapshot_descriptor(
+    *, durable_root: str, authority_id: str, databricks: bool, snapshot: Mapping[str, Any],
+    project_id: str,
+) -> bytes | None:
+    """Read one project's PROJECT.md from a verified v2 artifact bundle, in memory."""
+    import tarfile
+
+    from odibi_anchor import durability
+
+    artifacts = snapshot["artifacts"]
+
+    def member(bundle: Path) -> bytes | None:
+        digest = hashlib.sha256()
+        with bundle.open("rb") as stream:
+            for block in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(block)
+        if digest.hexdigest() != artifacts["sha256"]:
+            raise RuntimeError(f"artifact bundle hash mismatch: {artifacts['file']}")
+        with tarfile.open(bundle, mode="r:") as archive:
+            try:
+                info = archive.getmember(f"{project_id}/PROJECT.md")
+            except KeyError:
+                return None
+            if not info.isfile() or info.size > _DESCRIPTOR_READ_LIMIT:
+                raise RuntimeError("snapshot PROJECT.md is not a bounded regular file")
+            handle = archive.extractfile(info)
+            return None if handle is None else handle.read()
+
+    if not databricks:
+        return member(Path(durable_root) / authority_id / "snapshots" / artifacts["file"])
+    files = durability._databricks_files_api()
+    remote = durability._remote_child(
+        durability._remote_child(durability._remote_child(durable_root, authority_id), "snapshots"),
+        artifacts["file"],
+    )
+    with tempfile.TemporaryDirectory(prefix="odibi-anchor-doctor-") as temporary:
+        local = Path(temporary) / artifacts["file"]
+        files.download_to(remote, str(local), overwrite=False, use_parallel=False)
+        return member(local)
+
+
+def _lineage_step(
+    environment: Mapping[str, str], local_state: Mapping[str, Any], *, databricks: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Classify durable lineage with existing read helpers; return the latest snapshot if any."""
+    from odibi_anchor import durability
+
+    home = Path(environment["ANCHOR_HOME"])
+    database = Path(environment["ANCHOR_MEMORY_DB"])
+    durable_root = environment.get("ANCHOR_DURABLE_ROOT")
+    authority_id = environment["ANCHOR_AUTHORITY_ID"]
+    projects = home / "workspace" / "projects"
+    facts: dict[str, Any] = {
+        "runtime_root": home.as_posix(),
+        "local_state": dict(local_state),
+        "durable_root": durable_root,
+        "authority_id": authority_id,
+    }
+    migrating = local_state.get("configured_root_status") == "current_identity" and not home.exists()
+    if migrating:
+        facts["launch_effect"] = "bootstrap moves the accessible legacy local state root"
+        database = Path(local_state["configured_root"]) / ".agent_memory.db"
+        projects = Path(local_state["configured_root"]) / "workspace" / "projects"
+    if durable_root is not None and projects.exists():
+        incomplete = durability._incomplete_restore_error(projects)
+        if incomplete is not None:
+            return _error_step("durable_lineage", incomplete, classification="restore_incomplete", **facts), None
+    if database.exists():
+        return {"step": "durable_lineage", "status": "ok", "classification": "local_present", **facts,
+                "next_operation": None}, None
+    if durable_root is None:
+        return {"step": "durable_lineage", "status": "ok", "classification": "not_configured", **facts,
+                "launch_effect": "bootstrap initializes empty local state", "next_operation": None}, None
+    try:
+        snapshots = durability.list_snapshots(
+            durable_root=durable_root, authority_id=authority_id, databricks=databricks,
+        )["snapshots"]
+    except FileNotFoundError as exc:
+        if getattr(exc, "error_code", None) == "durable_root_unavailable":
+            return _error_step("durable_lineage", exc, classification="durable_root_unavailable", **facts), None
+        snapshots = []
+    except Exception as exc:
+        if getattr(exc, "error_code", None) == "durable_root_unavailable":
+            return _error_step("durable_lineage", exc, classification="durable_root_unavailable", **facts), None
+        return _error_step("durable_lineage", exc, classification="durable_lineage_unreadable", **facts), None
+    if not snapshots:
+        files = durability._databricks_files_api() if databricks else None
+        empty = durability._no_snapshots(
+            Path(durable_root), authority_id, files=files, databricks=databricks
+        )
+        if isinstance(empty, durability.DurableSnapshotUnavailable):
+            return {"step": "durable_lineage", "status": "ok", "classification": "no_lineage", **facts,
+                    "launch_effect": "first use: bootstrap initializes empty local state",
+                    "next_operation": None}, None
+        return _error_step("durable_lineage", empty, classification="durable_lineage_missing", **facts), None
+    latest = snapshots[-1]
+    return {
+        "step": "durable_lineage", "status": "ok", "classification": "restored", **facts,
+        "snapshot": {key: latest.get(key) for key in ("snapshot_id", "created_at", "format", "sha256")},
+        "launch_effect": "bootstrap restores this latest verified snapshot",
+        "next_operation": None,
+    }, latest
+
+
+def _route_step(
+    *, project_id: str, portfolio_target: str, artifact_root: Path, lineage: Mapping[str, Any],
+    snapshot: Mapping[str, Any] | None, environment: Mapping[str, str], databricks: bool,
+) -> dict[str, Any]:
+    """Compare the descriptor launch will use with the portfolio target via the route classifier."""
+    from odibi_anchor._dispatcher._descriptor import parse_descriptor_text, read_descriptor
+    from odibi_anchor._dispatcher._project import (
+        _descriptor_target,
+        _route_target_conflict,
+        descriptor_damaged_error,
+        route_path_identity,
+    )
+
+    facts: dict[str, Any] = {
+        "portfolio_target": portfolio_target, "artifact_root": artifact_root.as_posix(),
+    }
+    classification = lineage.get("classification")
+    integrity = None
+    try:
+        if classification == "local_present" and (artifact_root / "PROJECT.md").is_file():
+            integrity = read_descriptor(artifact_root)
+            facts["descriptor_source"] = "local_state"
+        elif classification == "restored" and snapshot is not None and snapshot.get("artifacts"):
+            content = _snapshot_descriptor(
+                durable_root=environment["ANCHOR_DURABLE_ROOT"],
+                authority_id=environment["ANCHOR_AUTHORITY_ID"], databricks=databricks,
+                snapshot=snapshot, project_id=project_id,
+            )
+            facts["descriptor_source"] = f"snapshot:{snapshot['snapshot_id']}"
+            if content is not None:
+                try:
+                    text = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = "\ufffd"
+                # Parse at the path restore will publish: a defaulted project_type is
+                # derived from the descriptor's parent, the runtime artifact root.
+                integrity = parse_descriptor_text(
+                    text, path=str(artifact_root / "PROJECT.md"),
+                    sha256=hashlib.sha256(content).hexdigest(), expected_id=project_id,
+                )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return _error_step("route_comparison", exc, **facts)
+    if integrity is None:
+        facts.setdefault("descriptor_source", "none")
+        return {"step": "route_comparison", "status": "ok", "classification": "unregistered", **facts,
+                "launch_effect": "bootstrap registers the portfolio target", "next_operation": None}
+    facts["descriptor_sha256"] = integrity.sha256
+    if not integrity.intact:
+        return _error_step(
+            "route_comparison",
+            descriptor_damaged_error(integrity, project_id=project_id, artifact_root=artifact_root.as_posix()),
+            classification="descriptor_damaged", **facts,
+        )
+    descriptor_target = _descriptor_target(artifact_root, integrity)
+    facts.update(
+        descriptor_target=descriptor_target,
+        descriptor_project_type=integrity.fields["project_type"],
+        descriptor_defaulted_fields=list(integrity.defaulted_fields),
+    )
+    if route_path_identity(descriptor_target) == route_path_identity(portfolio_target):
+        return {"step": "route_comparison", "status": "ok", "classification": "match", **facts,
+                "next_operation": None}
+    conflict = _route_target_conflict(
+        {"project_id": project_id, "target_root": descriptor_target,
+         "artifact_root": artifact_root.as_posix()},
+        portfolio_target,
+    )
+    return _error_step(
+        "route_comparison", conflict,
+        classification=getattr(conflict, "context", {}).get("classification"), **facts,
+    )
+
+
+def _fresh_compute_plan(*, config_path: str | os.PathLike[str], host_id: str, project_id: str) -> dict[str, Any]:
+    """Walk a fresh compute identity's launch read-only and name each exact next operation."""
+    from odibi_anchor.portfolio import load_portfolio_document, resolve_project
+
+    steps: list[dict[str, Any]] = []
+    plan: dict[str, Any] = {
+        "kind": "fresh_compute_plan",
+        "read_only": True,
+        "writes": "none; remote snapshot reads stage downloads in self-deleting temporary directories",
+        "package": {"name": "odibi-anchor", "version": __version__},
+        "config_path": os.fspath(config_path),
+        "host_id": host_id,
+        "project_id": project_id,
+        "steps": steps,
+    }
+    try:
+        document = load_portfolio_document(config_path)
+        portfolio = document["portfolio"]
+        if host_id not in portfolio.get("hosts", {}):
+            raise ValueError(f"host is not configured: {host_id}")
+        resolved = resolve_project(portfolio, host_id=host_id, project_id=project_id)
+    except (OSError, ValueError) as exc:
+        steps.append(_error_step("portfolio_discovery", exc))
+        steps[-1]["next_operation"] = {
+            "operation": "portfolio.validate",
+            "copy_ready": f"anchor portfolio validate --config {os.fspath(config_path)} --host {host_id}",
+            "reason": "Inspect the exact portfolio, host and project read-only before any change.",
+            "requires_owner": False,
+            "retry_safety": "read_only",
+        }
+        return _finish_plan(plan)
+    host = portfolio["hosts"][host_id]
+    adapter = host["adapter"]
+    databricks = adapter == "databricks"
+    environment_inputs = resolved["environment"]
+    portfolio_target = environment_inputs["ANCHOR_PROJECT_ROOT"]
+    launcher_root = Path(host.get("instruction_root") or portfolio_target)
+    config = Path(document["path"])
+    discovery = _launcher_discovery(launcher_root, config, adapter)
+    steps.append({"step": "portfolio_discovery", "config_sha256": document["sha256"],
+                  "adapter": adapter, **discovery})
+    steps.append(_guidance_step(launcher_root, adapter))
+    try:
+        environment, local_state = _runtime_environment(environment_inputs, adapter=adapter)
+    except (OSError, RuntimeError, ValueError) as exc:
+        steps.append(_error_step("durable_lineage", exc))
+        environment = None
+    lineage: dict[str, Any] | None = None
+    if environment is not None:
+        lineage, snapshot = _lineage_step(environment, local_state, databricks=databricks)
+        steps.append(lineage)
+        if lineage["status"] == "ok":
+            steps.append(_route_step(
+                project_id=project_id, portfolio_target=portfolio_target,
+                artifact_root=Path(environment["ANCHOR_HOME"]) / "workspace" / "projects" / project_id,
+                lineage=lineage, snapshot=snapshot, environment=environment, databricks=databricks,
+            ))
+    if lineage is None or lineage["status"] != "ok":
+        steps.append({"step": "route_comparison", "status": "not_evaluated",
+                      "reason": "durable lineage must be classified first", "next_operation": None})
+    init_globals = {"ANCHOR_PROJECT_ID": project_id}
+    if not discovery.get("selects_config"):
+        init_globals["ANCHOR_PORTFOLIO_CONFIG"] = config.as_posix()
+    launcher = launcher_root / ".assistant" / "agent_bootstrap.py"
+    plan["launch_inputs"] = {
+        "launcher": launcher.as_posix(),
+        "init_globals": init_globals,
+        "copy_ready": f"runpy.run_path({launcher.as_posix()!r}, init_globals={init_globals!r})",
+        "target_root": portfolio_target,
+        "runtime_root": None if environment is None else environment["ANCHOR_HOME"],
+    }
+    return _finish_plan(plan)
+
+
+def _finish_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    steps = plan["steps"]
+    blocked = [step for step in steps if step["status"] == "blocked"]
+    pending = [step for step in steps if step["status"] == "action_required"]
+    launch = plan.get("launch_inputs")
+    status = "blocked" if blocked or launch is None else "action_required" if pending else "ready"
+    steps.append({
+        "step": "launch_inputs",
+        "status": "blocked" if status == "blocked" else "ok",
+        **({} if launch is None else launch),
+        "next_operation": None if status == "blocked" or launch is None else {
+            "operation": "run_managed_launcher",
+            "copy_ready": launch["copy_ready"],
+            "reason": "Bootstrap in the persistent Python process with these exact inputs.",
+            "requires_owner": False,
+            "retry_safety": "idempotent",
+        },
+    })
+    plan["status"] = status
+    first = (blocked or pending or steps[-1:])[0]
+    plan["next_operation"] = first["next_operation"]
+    plan["next_step"] = first["step"]
+    return plan
+
+
+def doctor(
+    *,
+    environment: Mapping[str, str] | None = None,
+    fresh_compute: bool = False,
+    config_path: str | os.PathLike[str] | None = None,
+    host_id: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Return secret-free startup facts without creating or changing state.
+
+    ``fresh_compute=True`` with ``config_path``, ``host_id`` and ``project_id`` returns a
+    read-only plan for launching that project on a fresh compute identity.
+    """
+    if fresh_compute:
+        if config_path is None or host_id is None or project_id is None:
+            raise ValueError("fresh_compute requires config_path, host_id and project_id")
+        return _fresh_compute_plan(config_path=config_path, host_id=host_id, project_id=project_id)
+    if config_path is not None or host_id is not None or project_id is not None:
+        raise ValueError("config_path, host_id and project_id apply only with fresh_compute=True")
     env = os.environ if environment is None else environment
     from odibi_anchor._dispatcher._project import resolve_route_binding, route_binding_diagnostics
     from odibi_anchor._runtime_paths import resolve_resource_root, resolve_runtime_paths

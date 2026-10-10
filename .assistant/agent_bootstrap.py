@@ -267,22 +267,169 @@ def _package_version_policy(config_path: Path, instruction_root: Path) -> dict[s
     return {"policy": "latest_stable", "source": "default"}
 
 
-def _portfolio_search(instruction_root: Path) -> tuple[Path, list[dict[str, object]]]:
-    """Apply the unchanged precedence and describe every candidate in that order."""
+_HOST_BINDING = ".odibi-anchor-host-binding.json"
+_BINDING_SOURCE = "host binding sidecar (<instruction-root>/.odibi-anchor-host-binding.json)"
+_DEFAULT_SOURCE = "instruction-root default (<launcher>/../.odibi-anchor/anchor.toml)"
+
+
+def _nested_install(instruction_root: Path) -> dict[str, object] | None:
+    """Describe a launcher inside a nested ``.assistant/.assistant`` tree; never select from it."""
+    if instruction_root.name != ".assistant":
+        return None
+    parent = instruction_root.parent
+    launcher = parent / ".assistant" / "agent_bootstrap.py"
+    portfolio = parent / ".odibi-anchor" / "anchor.toml"
+    return {
+        "detected": True,
+        "instruction_root": str(instruction_root),
+        "probable_instruction_root": str(parent),
+        "probable_launcher": str(launcher),
+        "probable_launcher_exists": launcher.is_file(),
+        "probable_portfolio": str(portfolio),
+        "probable_portfolio_exists": portfolio.is_file(),
+    }
+
+
+def _nested_install_text(nested: Mapping[str, object] | None) -> str:
+    if not nested:
+        return ""
+    state = "exists" if nested["probable_portfolio_exists"] else "does not exist"
+    return (
+        f" Nested install detected: this launcher's instruction root {nested['instruction_root']} "
+        "is itself named .assistant, so the launcher sits in a nested .assistant/.assistant tree "
+        "and searched portfolio paths below it. The probable intended launcher is "
+        f"{nested['probable_launcher']} (instruction root {nested['probable_instruction_root']}); "
+        f"its default portfolio {nested['probable_portfolio']} {state}."
+    )
+
+
+def _discovery_operations(
+    instruction_root: Path, nested: Mapping[str, object] | None, *paths: str,
+) -> tuple[dict[str, object], ...]:
+    project_id = globals().get("ANCHOR_PROJECT_ID") or os.environ.get("ANCHOR_PROJECT_ID")
+    operations: list[dict[str, object]] = [
+        {
+            "operation": "rerun_launcher_with_portfolio",
+            "copy_ready": _launcher_call(project_id, ANCHOR_PORTFOLIO_CONFIG=path),
+            "reason": "Select the exact existing portfolio explicitly.",
+            "requires_owner": True,
+            "retry_safety": "idempotent",
+        }
+        for path in (paths or ("<absolute path to anchor.toml>",))
+    ]
+    operations.append({
+        "operation": "setup_host.record_portfolio",
+        "copy_ready": (
+            f"anchor setup-host <adapter> --target {instruction_root} "
+            "--portfolio <absolute path to anchor.toml>"
+        ),
+        "reason": "Record the intended portfolio and host in the host binding sidecar.",
+        "requires_owner": True,
+        "retry_safety": "idempotent",
+    })
+    if nested and nested["probable_launcher_exists"]:
+        operations.append({
+            "operation": "run_probable_launcher",
+            "copy_ready": (
+                f"runpy.run_path({str(nested['probable_launcher'])!r}, "
+                f"init_globals={{'ANCHOR_PROJECT_ID': {project_id or '<project-id>'!r}}})"
+            ),
+            "reason": "Run the launcher of the probable intended instruction root instead.",
+            "requires_owner": True,
+            "retry_safety": "idempotent",
+        })
+    return tuple(operations)
+
+
+def _host_binding(instruction_root: Path, nested: Mapping[str, object] | None) -> dict[str, str]:
+    """Strictly validate the sidecar written by ``anchor setup-host --portfolio``."""
+    path = instruction_root / _HOST_BINDING
+
+    def invalid(reason: str) -> BaseException:
+        return _structured(
+            RuntimeError(
+                f"host binding {path} is invalid: {reason}. Refusing to guess a portfolio."
+                + _nested_install_text(nested)
+                + " Supported correction: rerun `anchor setup-host <adapter> --target "
+                f"{instruction_root} --portfolio <absolute path to anchor.toml>`, or rerun this "
+                "launcher with the exact ANCHOR_PORTFOLIO_CONFIG. Do not hand-edit the sidecar."
+            ),
+            error_code="managed_host_binding_invalid",
+            context={
+                "binding_path": str(path), "reason": reason,
+                "instruction_root": str(instruction_root), "nested_install": nested,
+            },
+            next_operations=_discovery_operations(instruction_root, nested),
+        )
+
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise invalid("not a regular file")
+        content = path.read_bytes()
+        value = json.loads(content)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise invalid(f"unreadable JSON ({type(exc).__name__})") from exc
+    keys = {"config_path", "host_id", "instruction_root", "version"}
+    if (
+        not isinstance(value, dict) or set(value) != keys or value["version"] != 1
+        or not all(isinstance(value[key], str) and value[key] for key in keys - {"version"})
+    ):
+        raise invalid("unsupported schema")
+    if content != (json.dumps(value, indent=2, sort_keys=True) + "\n").encode():
+        raise invalid("non-canonical JSON")
+    config = value["config_path"]
+    if config.startswith("~") or "\n" in config or not Path(config).is_absolute():
+        raise invalid("config_path is not an absolute path")
+    if Path(value["instruction_root"]).resolve() != instruction_root:
+        raise invalid(f"it names instruction root {value['instruction_root']}")
+    if Path(config).is_file():
+        try:
+            import tomllib
+
+            hosts = tomllib.loads(Path(config).read_text(encoding="utf-8")).get("hosts")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise invalid(f"its portfolio is unreadable ({type(exc).__name__})") from exc
+        settings = hosts.get(value["host_id"]) if isinstance(hosts, dict) else None
+        configured = settings.get("instruction_root") if isinstance(settings, dict) else None
+        if not isinstance(configured, str) or Path(configured).resolve() != instruction_root:
+            raise invalid(
+                f"portfolio host {value['host_id']!r} does not declare this instruction root"
+            )
+    return value
+
+
+def _portfolio_search(
+    instruction_root: Path,
+) -> tuple[Path, list[dict[str, object]], dict[str, str] | None]:
+    """Select explicit input, then the host binding sidecar, then the instruction-root default.
+
+    The sidecar entry appears only when the sidecar exists, so hosts without one keep the
+    v0.3.24 search exactly. A sidecar that disagrees with an existing default is ambiguous.
+    """
     default = instruction_root / ".odibi-anchor" / "anchor.toml"
+    nested = _nested_install(instruction_root)
+    explicit = "ANCHOR_PORTFOLIO_CONFIG" in globals() or "ANCHOR_PORTFOLIO_CONFIG" in os.environ
+    has_binding = os.path.lexists(instruction_root / _HOST_BINDING)
+    binding = _host_binding(instruction_root, nested) if has_binding and not explicit else None
     candidates: list[tuple[str, object, bool]] = [
         ("ANCHOR_PORTFOLIO_CONFIG init global", globals().get("ANCHOR_PORTFOLIO_CONFIG"),
          "ANCHOR_PORTFOLIO_CONFIG" in globals()),
         ("ANCHOR_PORTFOLIO_CONFIG environment variable", os.environ.get("ANCHOR_PORTFOLIO_CONFIG"),
          "ANCHOR_PORTFOLIO_CONFIG" in os.environ),
-        ("instruction-root default (<launcher>/../.odibi-anchor/anchor.toml)", str(default), True),
     ]
+    if has_binding:
+        candidates.append((_BINDING_SOURCE, binding["config_path"] if binding else None, True))
+    candidates.append((_DEFAULT_SOURCE, str(default), True))
     selected: Path | None = None
     searched: list[dict[str, object]] = []
     for precedence, (source, raw, provided) in enumerate(candidates, start=1):
         entry: dict[str, object] = {"precedence": precedence, "source": source}
+        if source == _BINDING_SOURCE:
+            entry["binding_path"] = str(instruction_root / _HOST_BINDING)
         if not provided:
             entry.update(path=None, status="unset")
+        elif raw is None:
+            entry.update(path=None, status="not_consulted_lower_precedence")
         else:
             path = Path(os.fspath(raw))  # type: ignore[arg-type]
             exists = path.is_file()
@@ -294,7 +441,34 @@ def _portfolio_search(instruction_root: Path) -> tuple[Path, list[dict[str, obje
                 entry["status"] = "not_consulted_lower_precedence"
         searched.append(entry)
     assert selected is not None
-    return selected, searched
+    if binding is not None and default.is_file() and default.resolve() != selected.resolve():
+        searched[-1]["status"] = "conflicts_with_selected"
+        raise _structured(
+            RuntimeError(
+                f"managed portfolio is ambiguous for instruction root {instruction_root}: the host "
+                f"binding sidecar names {selected} (host {binding['host_id']}), but a different "
+                f"portfolio exists at the instruction-root default {default}. Searched in "
+                "precedence order: "
+                + "; ".join(f"{item['precedence']}. {item['source']}: {item['path']}" for item in searched)
+                + "." + _nested_install_text(nested)
+                + " Supported correction: the owner chooses one portfolio, then reruns `anchor "
+                f"setup-host <adapter> --target {instruction_root} --portfolio <chosen>` or passes "
+                "it as ANCHOR_PORTFOLIO_CONFIG. Do not copy, move, delete or hand-edit either "
+                "portfolio or the sidecar."
+            ),
+            error_code="managed_portfolio_ambiguous",
+            context={
+                "instruction_root": str(instruction_root),
+                "binding": dict(binding),
+                "default_path": str(default),
+                "searched_paths": searched,
+                "nested_install": nested,
+            },
+            next_operations=_discovery_operations(
+                instruction_root, nested, str(selected), str(default)
+            ),
+        )
+    return selected, searched, binding
 
 
 if "ANCHOR_SOURCE_CHECKOUT" in globals():
@@ -323,10 +497,24 @@ if _checkout is None:
         os.environ.get("DATABRICKS_RUNTIME_VERSION")
     )
     _phase_started = time.perf_counter()
-    _config_path, _portfolio_searched = _portfolio_search(_instruction_root)
+    _nested = _nested_install(_instruction_root)
+    try:
+        _config_path, _portfolio_searched, _binding = _portfolio_search(_instruction_root)
+    except BaseException as _discovery_error:
+        _record_launcher_phase(
+            "portfolio_discovery", _phase_started, "raised",
+            error_code=getattr(_discovery_error, "error_code", None),
+            nested_install=_nested is not None,
+        )
+        raise
     _record_launcher_phase(
         "portfolio_discovery", _phase_started, "ok" if _config_path.is_file() else "not_found",
         config_path=str(_config_path),
+        source=next(
+            entry["source"] for entry in _portfolio_searched
+            if entry.get("status") in {"selected", "selected_missing"}
+        ),
+        nested_install=_nested is not None,
     )
     _phase_started = time.perf_counter()
     if _is_databricks:
@@ -426,6 +614,7 @@ if _checkout is None:
             instruction_root=_instruction_root,
             create_if_missing=globals().get("ANCHOR_CREATE_PROJECT") is True,
             project_root=globals().get("ANCHOR_PROJECT_ROOT"),
+            **({"host_id": _binding["host_id"]} if _binding is not None else {}),
         )
         anchor = _managed["anchor"]
         ROOT = _managed["root"]
@@ -452,22 +641,29 @@ if _checkout is None:
         from odibi_anchor import launch
 
         _home = os.environ.get("ANCHOR_HOME")
-        if not _home:
+        # A host binding declares a managed host, so its missing portfolio never falls back.
+        if not _home or _binding is not None:
             from odibi_anchor._recovery import attach_recovery
 
             _searched_text = "; ".join(
                 f"{entry['precedence']}. {entry['source']}: "
-                + (f"{entry['path']} ({entry['status']})" if entry["path"] else "unset")
+                + (f"{entry['path']} ({entry['status']})" if entry["path"] else str(entry["status"]))
                 for entry in _portfolio_searched
+            )
+            _fallback = (
+                "the host binding sidecar selected it, so the installed fallback is refused"
+                if _binding is not None
+                else "installed fallback requires one explicit ANCHOR_HOME"
             )
             raise attach_recovery(
                 RuntimeError(
-                    f"managed portfolio is missing at {_config_path}; installed fallback requires "
-                    f"one explicit ANCHOR_HOME. Searched in precedence order: {_searched_text}. "
-                    "Classification: no portfolio exists at the selected path. Supported "
+                    f"managed portfolio is missing at {_config_path}; {_fallback}. Searched in "
+                    f"precedence order: {_searched_text}. Classification: no portfolio exists at "
+                    "the selected path." + _nested_install_text(_nested) + " Supported "
                     "correction: rerun this launcher with the exact absolute portfolio path as "
-                    "the ANCHOR_PORTFOLIO_CONFIG init global or environment variable. Do not "
-                    "copy, move, or hand-edit the portfolio TOML."
+                    "the ANCHOR_PORTFOLIO_CONFIG init global or environment variable, or record "
+                    "it with `anchor setup-host <adapter> --target <instruction-root> --portfolio "
+                    "<path>`. Do not copy, move, or hand-edit the portfolio TOML."
                 ),
                 error_code="managed_portfolio_not_found",
                 context={
@@ -475,16 +671,10 @@ if _checkout is None:
                     "searched_paths": _portfolio_searched,
                     "instruction_root": str(_instruction_root),
                     "launcher": str(_launcher),
+                    "binding": _binding,
+                    "nested_install": _nested,
                 },
-                next_operations=({
-                    "operation": "rerun_launcher_with_portfolio",
-                    "copy_ready": _launcher_call(
-                        _project_id, ANCHOR_PORTFOLIO_CONFIG="<absolute path to anchor.toml>"
-                    ),
-                    "reason": "Select the exact existing portfolio explicitly.",
-                    "requires_owner": True,
-                    "retry_safety": "idempotent",
-                },),
+                next_operations=_discovery_operations(_instruction_root, _nested),
             )
         _target = os.environ.get("ANCHOR_PROJECT_ROOT") or str(_instruction_root)
         anchor = launch(
