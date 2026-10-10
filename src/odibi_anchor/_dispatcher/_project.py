@@ -498,15 +498,48 @@ def _route_target_conflict(
 ) -> ValueError:
     """Classify a requested-versus-descriptor target mismatch from simple disk evidence.
 
-    ``probable_move`` means the descriptor target is absent while the requested target
-    exists; every other combination is ``ambiguous``. Neither grants retarget authority.
+    ``migration_pending`` means an unfinished ``portfolio move-target`` journal names this
+    exact pair, so the conflict is a known intermediate state with resume and rollback
+    operations. Otherwise ``probable_move`` means the descriptor target is absent while the
+    requested target exists; every other combination is ``ambiguous``. None grants
+    retarget authority.
     """
+    from odibi_anchor._migration import pending_migration
     from odibi_anchor._recovery import attach_recovery
 
     requested = _normalize_target(target_hint)
     descriptor_target = active["target_root"]
     descriptor_exists = Path(descriptor_target).exists()
     requested_exists = Path(requested).exists()
+    pending = pending_migration(
+        active["artifact_root"], active["project_id"], requested, descriptor_target
+    )
+    if pending is not None:
+        operations = pending.pop("next_operations")
+        return attach_recovery(
+            ValueError(
+                f"Managed project '{active['project_id']}' conflicts with target hint "
+                f"(route_target_conflict, migration_pending): requested target {requested!r} "
+                f"differs from the intact descriptor target {descriptor_target!r} because "
+                f"target migration {pending['migration_id']} is unfinished "
+                f"(state {pending['state']}). Ask the project owner to resume or roll it back "
+                "with the reported operations. Do not edit PROJECT.md, the portfolio, or "
+                "Anchor state manually."
+            ),
+            error_code="route_target_conflict",
+            context={
+                "project_id": active["project_id"],
+                "requested_target": requested,
+                "descriptor_target": descriptor_target,
+                "artifact_root": active["artifact_root"],
+                "config_path": None,
+                "classification": "migration_pending",
+                "migration": pending,
+                "owner_decision_required": True,
+                "supported_move_available": True,
+            },
+            next_operations=operations,
+        )
     classification = (
         "probable_move" if not descriptor_exists and requested_exists else "ambiguous"
     )
@@ -521,9 +554,10 @@ def _route_target_conflict(
             f"Managed project '{active['project_id']}' conflicts with target hint "
             f"(route_target_conflict, {classification}): requested target {requested!r} "
             f"differs from the intact descriptor target {descriptor_target!r}. "
-            f"{explanation} No supported move-target operation exists in this version; "
-            "stop and ask the project owner. Do not edit PROJECT.md, the portfolio, or "
-            "Anchor state manually."
+            f"{explanation} Do not proceed: stop and ask the project owner. If the move is "
+            "intended, the supported operation is `anchor portfolio move-target` (run it "
+            "with --dry-run first). Do not edit PROJECT.md, the portfolio, or Anchor state "
+            "manually."
         ),
         error_code="route_target_conflict",
         context={
@@ -538,7 +572,7 @@ def _route_target_conflict(
                 "requested_target_exists": requested_exists,
             },
             "owner_decision_required": True,
-            "supported_move_available": False,
+            "supported_move_available": True,
         },
     )
 
@@ -1074,9 +1108,10 @@ def _set_target(
                     f"{current_target!r} to {target_root!r} "
                     "(project_retarget_requires_migration): records bound to the current "
                     "target would be invalidated or could not be verified: "
-                    f"{', '.join(sorted(invalidated))}. The descriptor was not changed. No "
-                    "supported retarget migration exists in this version; stop and ask the "
-                    "project owner. Do not edit PROJECT.md, continuity files, or SQLite manually."
+                    f"{', '.join(sorted(invalidated))}. The descriptor was not changed. Stop "
+                    "and ask the project owner; the supported operation for a launched project "
+                    "is `anchor portfolio move-target` (dry-run first). Do not edit PROJECT.md, "
+                    "continuity files, or SQLite manually."
                 ),
                 error_code="project_retarget_requires_migration",
                 context={
@@ -1088,7 +1123,7 @@ def _set_target(
                     "requested_target": target_root,
                     "invalidated": invalidated,
                     "owner_decision_required": True,
-                    "supported_migration_available": False,
+                    "supported_migration_available": True,
                 },
             )
     updated = render_route_update(
