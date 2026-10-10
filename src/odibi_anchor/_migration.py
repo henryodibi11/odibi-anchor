@@ -1236,11 +1236,12 @@ def move_target(
                          and item.data["intent"]["host_id"] == ctx.host_id
                          and _same_target(item.data["intent"]["from_target"], from_value)
                          and _same_target(item.data["intent"]["to_target"], to_value)]
+            # Replays of a finished journal change no route; say so instead of implying a write.
             if resume and completed and completed[-1].data["state"] == "completed":
-                return _result(ctx, completed[-1], "completed")
+                return {**_result(ctx, completed[-1], "completed"), "write_performed": False}
             if rollback and completed and completed[-1].data["state"] == "rolled_back":
                 _run(ctx, completed[-1], _finish_rollback_snapshot)
-                return _result(ctx, completed[-1], "rolled_back")
+                return {**_result(ctx, completed[-1], "rolled_back"), "write_performed": False}
             raise _blocked(
                 "state_mismatch", "no unfinished migration journal matches this project, host and targets",
                 {**_base_context(ctx, document), "from_target": from_value, "to_target": to_value},

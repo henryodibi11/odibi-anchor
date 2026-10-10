@@ -163,9 +163,12 @@ Applying the plan:
 2. reinstalls from the active package, with the same rollback as plain setup. Each file must
    still hold the bytes the plan read. Locally, each file is moved aside atomically and compared;
    on the Workspace API, it is re-read just before it is written. If a file changed, the apply
-   stops, puts back everything it had replaced, keeps the newer bytes, and asks you to rerun the
-   dry run. The Workspace API has no compare-and-swap, so a write in the moment between that read
-   and Anchor's write can still be missed;
+   stops, leaves that file's newer bytes in place, and asks you to rerun the dry run. Its rollback
+   reverts only files that still hold what Anchor wrote. A file someone else changed during the
+   apply is kept and named in the error: locally it is moved under the staging directory
+   (`.anchor-host-stage-*/concurrent/`) and the original is restored; on the Workspace API it is
+   left in place. The Workspace API has no compare-and-swap, so a write in the moment between a
+   read and Anchor's next write can still be missed;
 3. verifies every hash and the manifest.
 
 Bootstrap never reconciles. It stays fail-closed, and it never replaces an edited file. The

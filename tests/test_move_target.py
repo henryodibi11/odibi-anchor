@@ -440,6 +440,18 @@ def test_cli_move_target_emits_structured_json(deployment, targets, capsys):
     assert moved["envelope"]["effects"]["verified_readback"] is True
     assert moved["envelope"]["undo"]["status"] == "irreversible"
 
+    # Move on to a third target, then replay the finished first journal: it wrote nothing and
+    # its route is not in place, so the envelope must say neither "changed" nor "verified".
+    third = old.parent / "third"
+    third.mkdir()
+    assert cli.main([*base[:-4], "--from", str(new), "--to", str(third)]) == 0
+    capsys.readouterr()
+    assert cli.main([*base, "--resume"]) == 0
+    replay = json.loads(capsys.readouterr().out)["result"]
+    assert replay["status"] == "completed"
+    assert replay["envelope"]["effects"]["changed"] is False
+    assert replay["envelope"]["effects"]["verified_readback"] is False
+
 
 def _crash_before_receipt(artifact: Path):
     return lambda point: point.operation == "os.open" and ".receipt.json." in point.path

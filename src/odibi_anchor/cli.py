@@ -355,12 +355,18 @@ def _readback(operation: str, ns: argparse.Namespace, result: dict[str, Any]) ->
         moves = result.get("moves") if result.get("kind") == "target_migration_batch" else [result]
         if not moves or not all(isinstance(move.get("hashes"), dict) for move in moves):
             return None
-        return {"method": "portfolio_and_descriptor_sha256", "observed": all(
-            _file_sha256(Path(move["config_path"])) == move["hashes"]["after"]["portfolio_sha256"]
-            and _file_sha256(Path(move["artifact_root"]) / "PROJECT.md")
-            == move["hashes"]["after"]["descriptor_sha256"]
-            for move in moves
-        )}
+
+        def landed(move: dict[str, Any]) -> bool:
+            # Compare with the journal's intended state, never with hashes read moments ago:
+            # a completed move must hold the expected post-move bytes, a rollback the pre bytes.
+            intended = move["hashes"]["expected" if move["status"] == "completed" else "before"]
+            return (
+                _file_sha256(Path(move["config_path"])) == intended["portfolio_sha256"]
+                and _file_sha256(Path(move["artifact_root"]) / "PROJECT.md")
+                == intended["descriptor_sha256"]
+            )
+
+        return {"method": "journal_intended_sha256", "observed": all(landed(move) for move in moves)}
     if operation == "state.restore" and isinstance(result.get("restored_sha256"), str):
         with open(result["destination_db"], "rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
@@ -387,10 +393,10 @@ def _enveloped(operation: str, ns: argparse.Namespace, result: Any) -> Any:
         readback = _readback(operation, ns, result) if mutating else None
     except (OSError, ValueError) as exc:
         readback = {"method": "readback_failed", "observed": False, "error": type(exc).__name__}
-    undo = (
-        {"status": "irreversible", "copy_ready": None, "reason": _OPERATION_UNDO[operation]}
-        if operation in _OPERATION_UNDO else None
-    )
+    reason = _OPERATION_UNDO.get(operation)
+    if operation == "portfolio.move-target" and result.get("status") == "rolled_back":
+        reason = "the move was rolled back; apply it again with a new move-target"
+    undo = {"status": "irreversible", "copy_ready": None, "reason": reason} if reason else None
     result[ENVELOPE_KEY] = build_operation_envelope(
         operation, result, mutating=mutating, readback=readback, undo=undo,
     )

@@ -414,6 +414,63 @@ def test_reconcile_refuses_an_edit_made_after_the_plan_and_keeps_it(drifted_host
     assert not list(drifted_host.glob(".anchor-host-stage-*"))
 
 
+def test_reconcile_rollback_preserves_a_concurrent_edit_to_a_published_file(drifted_host, monkeypatch):
+    readme = drifted_host / ".assistant" / "README.md"
+    real_replace, real_backup = module.os.replace, module._backup_local
+
+    def replace_then_user_edit(source, destination):
+        real_replace(source, destination)
+        if Path(destination) == readme and "/new/" in str(source):
+            with readme.open("a") as handle:  # a teammate edits the file Anchor just published
+                handle.write("USER EDIT A\n")
+
+    def backup_then_manifest_edit(*args, **kwargs):
+        root = real_backup(*args, **kwargs)
+        (drifted_host / MANIFEST).write_text((drifted_host / MANIFEST).read_text() + " ")
+        return root
+
+    monkeypatch.setattr(module.os, "replace", replace_then_user_edit)
+    monkeypatch.setattr(module, "_backup_local", backup_then_manifest_edit)
+    with pytest.raises(HostSetupError, match="were preserved") as raised:
+        setup_host(
+            drifted_host, adapter="databricks", reconcile=True, dry_run=False,
+            approve_replace_edited=True,
+        )
+
+    assert readme.read_text() == "team edit\n"  # the original is restored ...
+    (kept,) = [path for path in str(raised.value).split(": ")[-1].split(", ") if "README" in path]
+    assert Path(kept).read_text().endswith("USER EDIT A\n")  # ... and the teammate's edit survives
+
+
+def test_workspace_reconcile_rollback_leaves_a_concurrent_edit_in_place(tmp_path, monkeypatch):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    api_root = WORKSPACE_ROOT.removeprefix("/Workspace")
+    setup_host(WORKSPACE_ROOT, adapter="databricks")
+    edited, manifest = f"{api_root}/.assistant/README.md", f"{api_root}/{MANIFEST}"
+    workspace.files[edited] = b"team edit\n"
+    real_write, real_backup = module._workspace_write, module._backup_workspace
+
+    def write_then_user_edit(client, path, content, import_format):
+        real_write(client, path, content, import_format)
+        if path == edited and content != b"team edit\n":
+            workspace.files[edited] = content + b"USER EDIT A\n"
+
+    def backup_then_manifest_edit(*args, **kwargs):
+        root = real_backup(*args, **kwargs)
+        workspace.files[manifest] = workspace.files[manifest] + b" "
+        return root
+
+    monkeypatch.setattr(module, "_workspace_write", write_then_user_edit)
+    monkeypatch.setattr(module, "_backup_workspace", backup_then_manifest_edit)
+    with pytest.raises(HostSetupError, match="left in place: .assistant/README.md"):
+        setup_host(
+            WORKSPACE_ROOT, adapter="databricks", reconcile=True, dry_run=False,
+            approve_replace_edited=True,
+        )
+
+    assert workspace.files[edited].endswith(b"USER EDIT A\n")
+
+
 def test_workspace_reconcile_refuses_an_edit_made_after_the_plan(tmp_path, monkeypatch):
     _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
     api_root = WORKSPACE_ROOT.removeprefix("/Workspace")

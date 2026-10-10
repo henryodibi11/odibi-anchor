@@ -870,10 +870,21 @@ def _publish_workspace(
         _verify_workspace_publication(workspace, target, desired, manifest_bytes)
     except BaseException as publication_error:
         rollback_errors: list[str] = []
+        kept: list[str] = []
         for relative in reversed(dict.fromkeys(mutated)):
             path = _workspace_api_path(target, relative)
             original = before.get(relative)
+            written = manifest_bytes if relative == _MANIFEST else desired.get(relative)
             try:
+                try:
+                    current = _workspace_read(workspace, path)
+                except Exception:
+                    current = written  # unreadable: restore as before rather than guess
+                if current == original:
+                    continue  # Anchor's step never landed here
+                if current != written:
+                    kept.append(relative)  # someone else wrote after Anchor: keep their bytes
+                    continue
                 if original is None:
                     _workspace_delete(workspace, path)
                 else:
@@ -881,8 +892,8 @@ def _publish_workspace(
             except BaseException:
                 rollback_errors.append(relative)
         for relative in dict.fromkeys(mutation_order):
-            if relative in conflicted:
-                continue  # never touched; it holds the newer bytes that caused the refusal
+            if relative in conflicted or relative in kept:
+                continue  # holds newer bytes from someone else; never overwritten
             try:
                 if _workspace_read(
                     workspace, _workspace_api_path(target, relative)
@@ -895,6 +906,12 @@ def _publish_workspace(
             raise HostSetupError(
                 "Databricks Workspace host guidance publication and rollback failed for: "
                 f"{failed}"
+            ) from publication_error
+        if kept:
+            raise HostSetupError(
+                f"{publication_error}; the original host guidance was restored except files "
+                "changed by someone else during the apply, which were left in place: "
+                f"{', '.join(sorted(kept))}"
             ) from publication_error
         if conflicted:
             raise  # the specific refusal: a file changed after the plan read it
@@ -1403,6 +1420,8 @@ def _publish_local(
 
     With ``expected`` (reconcile), each displaced file is compared after its atomic move
     aside; a mismatch raises and the rollback below restores the moved bytes unchanged.
+    The rollback reverts only paths that still hold what Anchor placed there; anything else
+    found there is moved under ``<staging>/concurrent`` and reported, never deleted.
     """
 
     def check_displaced(relative: str, saved: Path | None) -> None:
@@ -1413,7 +1432,9 @@ def _publish_local(
 
     staging = Path(tempfile.mkdtemp(prefix=".anchor-host-stage-", dir=target))
     backup = staging / "backup"
-    published: list[tuple[Path, Path | None]] = []
+    concurrent = staging / "concurrent"
+    # (destination, displaced original, bytes Anchor placed there or None when it placed nothing)
+    published: list[tuple[Path, Path | None, bytes | None]] = []
     preserve_staging = False
     try:
         for relative, content in desired.items():
@@ -1428,7 +1449,7 @@ def _publish_local(
             saved.parent.mkdir(parents=True, exist_ok=True)
             preserve_staging = True
             os.replace(destination, saved)
-            published.append((destination, saved))
+            published.append((destination, saved, None))
             check_displaced(relative, saved)
         for relative in [*desired, _MANIFEST]:
             destination = _destination(target, relative)
@@ -1439,26 +1460,42 @@ def _publish_local(
                 saved.parent.mkdir(parents=True, exist_ok=True)
                 preserve_staging = True
                 os.replace(destination, saved)
-            published.append((destination, saved))
+            published.append((destination, saved, None))
             check_displaced(relative, saved)
             os.replace(staging / "new" / relative, destination)
+            published[-1] = (destination, saved, desired.get(relative, manifest_bytes))
         _verify_publication(target, desired, manifest_bytes)
         preserve_staging = False
     except BaseException as publication_error:
         preserve_staging = True
         tracked_backups = {
-            saved for _destination_path, saved in published if saved is not None
+            saved for _destination_path, saved, _written in published if saved is not None
         }
         if backup.is_dir():
             for saved in sorted(path for path in backup.rglob("*") if path.is_file()):
                 if saved not in tracked_backups:
                     published.append(
-                        (_destination(target, saved.relative_to(backup).as_posix()), saved)
+                        (_destination(target, saved.relative_to(backup).as_posix()), saved, None)
                     )
         rollback_errors: list[str] = []
-        for destination, saved in reversed(published):
+        preserved: list[str] = []
+        for destination, saved, written in reversed(published):
             try:
-                destination.unlink(missing_ok=True)
+                if os.path.lexists(destination):
+                    try:
+                        current: bytes | None = (
+                            None if destination.is_symlink() else destination.read_bytes()
+                        )
+                    except OSError:
+                        current = None
+                    if current is None or current != written:
+                        # Someone else wrote here after Anchor's step: keep their bytes.
+                        kept = concurrent / destination.relative_to(target)
+                        kept.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(destination, kept)
+                        preserved.append(kept.as_posix())
+                    else:
+                        destination.unlink()
                 if saved is not None and saved.exists():
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(saved, destination)
@@ -1477,6 +1514,11 @@ def _publish_local(
             raise HostSetupError(
                 "host setup publication and rollback failed; backups preserved at "
                 f"{staging}: {', '.join(rollback_errors)}"
+            ) from publication_error
+        if preserved:
+            raise HostSetupError(
+                f"{publication_error}; the original host guidance was restored, and files changed "
+                f"by someone else during the apply were preserved: {', '.join(preserved)}"
             ) from publication_error
         preserve_staging = False
         raise
