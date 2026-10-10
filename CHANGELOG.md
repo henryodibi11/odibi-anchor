@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.29] - 2026-10-10
+
+Hotfix for the Databricks guidance metadata receipt, found by live validation of 0.3.28.
+
+### Fixed
+
+- **The guidance receipt now engages on real Databricks home folders.** The receipt listed the
+  instruction root and refused any entry that was not a plain file or directory. On Databricks the
+  instruction root is usually the user's home folder, full of notebooks and other files that also
+  change between boots, so live boots reported `content` every time and the second and later boots
+  paid for the failed metadata listings (about 6 s of host_guidance against 3.3 s). In the root,
+  only Anchor's own names (`.assistant`, `.assistant_instructions.md`, `agent_bootstrap.py` and the
+  host manifest) now take part; folders under `.assistant` stay strict, and any change to a managed
+  file still falls back to content verification.
+- When a receipt cannot be used, the `metadata` timing phase records the reason.
+
 ## [0.3.28] - 2026-10-10
 
 Faster cold starts and fewer wasted agent round trips.

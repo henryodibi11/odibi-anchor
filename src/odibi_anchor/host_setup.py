@@ -720,8 +720,17 @@ def _workspace_metadata(
     Unrelated subtrees (for example reconcile backups) are not recursively scanned.
     """
     directories = {parent.as_posix() for name in contents for parent in PurePosixPath(name).parents}
+    # The instruction root is shared with the user's own notebooks and files (on Databricks it
+    # is usually their home folder): only Anchor-managed names there take part in the receipt.
+    # Directories below the root are Anchor's own, so any addition there still invalidates it.
+    managed_root_names = {name.split("/", 1)[0] for name in contents}
     with phase("metadata", layer="workspace_api") as details:
         details["list_calls"] = len(directories)
+
+        def unusable(reason: str) -> None:
+            details["reason"] = reason
+            return None
+
         try:
             listings = _run_bounded([
                 (name, functools.partial(
@@ -735,34 +744,37 @@ def _workspace_metadata(
                 for entry in entries:
                     path = PurePosixPath(entry.path)
                     relative = path.relative_to(root).as_posix()
+                    if directory == "." and relative not in managed_root_names:
+                        continue
                     if (path.parent != root / directory or relative in inventory
                             or _safe_relative(relative) != relative):
-                        return None
+                        return unusable(f"unexpected listing entry: {relative}")
                     kind = getattr(entry.object_type, "value", entry.object_type)
                     object_id = entry.object_id
                     if type(object_id) is not int or kind not in {"FILE", "DIRECTORY"}:
-                        return None
+                        return unusable(f"unsupported object type or id for {relative}: {kind}")
                     metadata = {"object_id": object_id, "object_type": kind}
                     if kind == "FILE":
                         for field in ("size", "modified_at"):
                             value = getattr(entry, field, None)
                             if type(value) is not int or value < 0:
-                                return None
+                                return unusable(f"missing {field} for {relative}")
                             metadata[field] = value
                     inventory[relative] = metadata
-            if any(
-                inventory.get(name, {}).get("object_type") != "FILE"
+            missing = next((
+                name for name, content in contents.items()
+                if inventory.get(name, {}).get("object_type") != "FILE"
                 or inventory[name].get("size") != len(content)
-                for name, content in contents.items()
-            ):
-                return None
+            ), None)
+            if missing is not None:
+                return unusable(f"managed file missing or a different size: {missing}")
             details["entry_count"] = len(inventory)
             return inventory
-        except Exception:
+        except Exception as exc:
             # The receipt is optional acceleration, never a reason to bypass the
             # existing bounded, fail-closed content verification path.
             details["outcome"] = "unavailable"
-            return None
+            return unusable(f"metadata listing failed: {type(exc).__name__}")
 
 
 def _private_to_this_identity(path: Path) -> bool:

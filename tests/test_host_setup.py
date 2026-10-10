@@ -1009,3 +1009,61 @@ def test_workspace_receipt_still_works_under_a_permissive_umask(tmp_path, monkey
 
     assert results == ["content", "content", "metadata_receipt"]
     assert not state.stat().st_mode & 0o022
+
+
+def _home_folder_content(workspace, root="/Users/test@example.invalid/anchor-host"):
+    notebook, notes = f"{root}/My analysis", f"{root}/notes.txt"
+    workspace.files[notebook] = b"# notebook"
+    workspace.metadata_overrides[notebook] = {"object_type": "NOTEBOOK", "size": None}
+    workspace.files[notes] = b"draft 1"
+    return notes
+
+
+def test_workspace_receipt_ignores_the_users_own_content_in_the_instruction_root(tmp_path, monkeypatch):
+    """Live 0.3.28: the instruction root is a home folder with notebooks; the receipt never engaged."""
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    state = tmp_path / "state"
+    notes = _home_folder_content(workspace)
+    results = []
+    for boot in range(4):
+        workspace.files[notes] = f"draft {boot}".encode()  # the user keeps editing their files
+        results.append(setup_host(target, adapter="databricks", receipt_root=state)["verification"])
+
+    assert results == ["content", "content", "metadata_receipt", "metadata_receipt"]
+
+
+@pytest.mark.parametrize("managed_root_file", [".assistant_instructions.md", "agent_bootstrap.py", module._MANIFEST])
+def test_workspace_receipt_still_tracks_managed_root_files(tmp_path, monkeypatch, managed_root_file):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    state = tmp_path / "state"
+    _home_folder_content(workspace)
+    setup_host(target, adapter="databricks", receipt_root=state)
+    setup_host(target, adapter="databricks", receipt_root=state)
+    workspace.metadata_overrides[f"/Users/test@example.invalid/anchor-host/{managed_root_file}"] = {
+        "modified_at": 999,
+    }
+
+    assert setup_host(target, adapter="databricks", receipt_root=state)["verification"] == "content"
+
+
+def test_unusable_receipt_records_why_in_the_metadata_phase(tmp_path, monkeypatch):
+    _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
+    target = "/Workspace/Users/test@example.invalid/anchor-host"
+    state = tmp_path / "state"
+    stray = "/Users/test@example.invalid/anchor-host/.assistant/Scratch notebook"
+    workspace.files[stray] = b"# notebook"
+    workspace.metadata_overrides[stray] = {"object_type": "NOTEBOOK", "size": None}
+    setup_host(target, adapter="databricks", receipt_root=state)
+
+    with recording() as recorder, phase("host_guidance"):
+        assert setup_host(target, adapter="databricks", receipt_root=state)["verification"] == "content"
+
+    def phases(entries):
+        for entry in entries:
+            yield entry
+            yield from phases(entry.get("sub_phases", []))
+
+    (metadata, *_rest) = [p for p in phases(recorder.summary()["phases"]) if p["phase"] == "metadata"]
+    assert "Scratch notebook" in metadata["reason"]
