@@ -769,14 +769,33 @@ def _session_diff_action(root: str, *args, **kwargs):
     return result
 
 
+def _git_untracked(root: str, path: str) -> bool:
+    """Return whether Git reports ``path`` as a new untracked (not ignored) file."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "--", path],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
 def _touched_action(path: str, root: str, *, created: bool = False, **_kwargs) -> dict:
     """Register a file as changed (or created) during this session.
 
     Delegates to the shared _session_state singleton so that both
     the exec'd namespace and safe_change_context share the same state.
     Includes cross-project detection for files outside the current ROOT.
+    A path Git reports as untracked is registered as created even without ``created=True``.
     """
+    created_basis = "explicit" if created else "not_created"
+    if not created and _git_untracked(root, path):
+        created, created_basis = True, "git_untracked"
     result = _session_touched(path, created=created, root=root)
+    result["created_basis"] = created_basis
 
     from odibi_anchor._utils._session_state import canonical_session_path
 

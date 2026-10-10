@@ -30,6 +30,7 @@ PRESERVED_ENV_NAMES = frozenset({
     "ANCHOR_REQUIRE_INSTALLED_QUALIFICATION",
     "ANCHOR_OFFLINE_WHEELHOUSE",
 })
+COUNT_FIELDS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
 _CANONICAL_PLUGIN_NAME = "odibi_anchor.pytest_runner"
 _GIT_CONFIG = (
     ("commit.gpgSign", "false"),
@@ -122,7 +123,7 @@ def run_pytest(
         except (OSError, ValueError):
             loaded = {}
         summary = _empty_summary(proc.returncode, time.monotonic() - started)
-        for field in ("passed", "failed", "errors", "skipped"):
+        for field in COUNT_FIELDS:
             value = loaded.get(field)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 summary[field] = value
@@ -142,6 +143,8 @@ def _empty_summary(exit_code: int, duration_s: float, *, timed_out: bool = False
         "failed": 0,
         "errors": 0,
         "skipped": 0,
+        "xfailed": 0,
+        "xpassed": 0,
         "duration_s": round(max(0.0, duration_s), 3),
         "timed_out": timed_out,
     }
@@ -149,12 +152,18 @@ def _empty_summary(exit_code: int, duration_s: float, *, timed_out: bool = False
 
 class _SummaryPlugin:
     def __init__(self) -> None:
-        self.counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        self.counts = dict.fromkeys(COUNT_FIELDS, 0)
         self.started = time.monotonic()
 
     def pytest_runtest_logreport(self, report: Any) -> None:
+        # pytest reports an expected failure as skipped and a non-strict unexpected
+        # pass as passed, both marked with `wasxfail`. A strict XPASS is a failure
+        # without that marker, so it stays in `failed`.
+        expected_failure = hasattr(report, "wasxfail")
         if report.skipped:
-            self.counts["skipped"] += 1
+            self.counts["xfailed" if expected_failure else "skipped"] += 1
+        elif report.when == "call" and report.passed and expected_failure:
+            self.counts["xpassed"] += 1
         elif report.when == "call":
             self.counts["passed" if report.passed else "failed"] += 1
         elif report.failed:

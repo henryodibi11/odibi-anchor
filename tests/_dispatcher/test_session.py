@@ -400,3 +400,34 @@ class TestConfig:
         assert "performance" in result["all_categories"]
         assert "convention" in result["all_categories"]
         assert "security" in result["all_categories"]
+
+
+def test_touched_registers_untracked_files_as_created(tmp_path, monkeypatch):
+    import subprocess
+
+    from odibi_anchor._utils import _session_state as state_module
+
+    # Patch the registry `touched` actually uses; other suites may re-import the module.
+    registry = session_module._session_touched.__globals__
+    for name, value in (("_SESSION_FILES_CHANGED", set()), ("_SESSION_FILES_CREATED", set()),
+                        ("_SESSION_DIFF_BASELINES", {})):
+        monkeypatch.setitem(registry, name, value)
+    for session_state in {id(s): s for s in (registry["_SESSION_STATE"], state_module._SESSION_STATE)}.values():
+        monkeypatch.setattr(session_state, "task_window_id", None)
+        monkeypatch.setattr(session_state, "artifact_root", None)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("before\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    "-c", "commit.gpgSign=false", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("after\n")
+    (tmp_path / "new.txt").write_text("new\n")
+
+    created = session_module._touched_action("new.txt", str(tmp_path))
+    modified = session_module._touched_action("tracked.txt", str(tmp_path))
+    explicit = session_module._touched_action("tracked.txt", str(tmp_path), created=True)
+
+    assert (created["created"], created["created_basis"]) == (True, "git_untracked")
+    assert (modified["created"], modified["created_basis"]) == (False, "not_created")
+    assert (explicit["created"], explicit["created_basis"]) == (True, "explicit")
+    assert "new.txt" in registry["_SESSION_FILES_CREATED"]

@@ -336,6 +336,9 @@ def validate_producer_policy(plan: dict[str, Any], profile: Any) -> None:
             if (not isinstance(targets, list) or not targets
                     or any(not isinstance(t, str) or not t.strip() for t in targets)):
                 raise WorkflowError("missing_evidence", "pytest criterion requires explicit test_targets")
+            expected_xfailed = criterion.get("expected_xfailed", 0)
+            if type(expected_xfailed) is not int or expected_xfailed < 0:
+                raise WorkflowError("missing_evidence", "pytest criterion expected_xfailed must be a nonnegative integer")
             has_pytest = True
         elif method == "artifact_sha256" and plan["execution_mode"] == "artifact_only":
             expected = criterion.get("expected_sha256")
@@ -457,12 +460,15 @@ def collect_test_measurement(*, state: dict[str, Any], before: dict[str, Any],
     metrics = result.get("metrics")
     if result.get("kind") != "test_run" or not isinstance(metrics, dict):
         raise WorkflowError("unavailable", "trusted pytest measurement is unavailable")
-    counts = {name: metrics.get(name) for name in ("passed", "failed", "errors", "skipped")}
+    counts = {name: metrics.get(name)
+              for name in ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")}
     if any(type(value) is not int or value < 0 for value in counts.values()):
         raise WorkflowError("unavailable", "test measurement lacks complete exact counts")
+    # Expected failures qualify only when the accepted criterion declares their exact count.
     passed = (type(metrics.get("exit_code")) is int and metrics["exit_code"] == 0
               and metrics.get("timed_out") is False and counts["passed"] > 0
-              and counts["failed"] == counts["errors"] == counts["skipped"] == 0)
+              and counts["failed"] == counts["errors"] == counts["skipped"] == counts["xpassed"] == 0
+              and counts["xfailed"] == criteria[0].get("expected_xfailed", 0))
     retained = json.loads(canonical(redact_payload(result)))
     return {"plan_sha256": state["plan_sha256"], "candidate_sha256": digest(before),
             "criterion_id": criterion_id, "method": "pytest", "collector": "anchor.pytest_runner",

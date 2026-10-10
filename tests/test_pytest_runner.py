@@ -154,6 +154,48 @@ def test_summary_counts_failure_skip_and_setup_error(tmp_path):
     assert (summary["passed"], summary["failed"], summary["errors"], summary["skipped"]) == (1, 1, 1, 1)
 
 
+def test_summary_counts_expected_failures_apart_from_skips_and_passes(tmp_path):
+    _write(
+        tmp_path / "test_cases.py",
+        "import pytest\n"
+        "def test_pass(): pass\n"
+        "@pytest.mark.skip\ndef test_skip(): pass\n"
+        "@pytest.mark.xfail(strict=True)\ndef test_xfail(): assert False\n"
+        "@pytest.mark.xfail\ndef test_xpass(): pass\n"
+        "@pytest.mark.xfail(strict=True)\ndef test_strict_xpass(): pass\n",
+    )
+    summary, _ = run_pytest(["-q"], cwd=tmp_path, capture_output=True)
+    counts = {name: summary[name] for name in ("passed", "failed", "skipped", "xfailed", "xpassed")}
+    # A strict XPASS fails the run, so it stays a failure rather than an xpass.
+    assert counts == {"passed": 1, "failed": 1, "skipped": 1, "xfailed": 1, "xpassed": 1}
+
+
+def test_per_test_timeout_is_bounded_configurable_and_reported(monkeypatch, tmp_path):
+    # The thread method kills pytest before any report is written, which used to
+    # surface as an opaque "0 passed, 0 failed, 1 errors".
+    _write(tmp_path / "pytest.ini", "[pytest]\ntimeout_method = thread\n")
+    _write(tmp_path / "test_slow.py", "import time\ndef test_slow(): time.sleep(3)\n")
+    monkeypatch.delenv("ANCHOR_TEST_TIMEOUT", raising=False)
+
+    timed_out = _session_tools._test_run(tmp_path, target=["test_slow.py"], timeout=1)
+    assert timed_out["summary"].startswith("TIMEOUT:")
+    assert timed_out["metrics"]["failure_cause"] == "per_test_timeout"
+    assert timed_out["metrics"]["per_test_timeout_s"] == 1
+    assert "timeout=" in timed_out["suggested_next_actions"][0]
+
+    monkeypatch.setenv("ANCHOR_TEST_TIMEOUT", "20")
+    passed = _session_tools._test_run(tmp_path, target=["test_slow.py"])
+    assert passed["metrics"]["passed"] == 1 and passed["metrics"]["per_test_timeout_s"] == 20
+    assert "failure_cause" not in passed["metrics"]
+
+    for invalid in (0, 601, "soon"):
+        with pytest.raises(ValueError, match=r"\(0, 600\]"):
+            _session_tools._test_run(tmp_path, target=["test_slow.py"], timeout=invalid)
+    monkeypatch.setenv("ANCHOR_TEST_TIMEOUT", "3600")
+    with pytest.raises(ValueError, match="ANCHOR_TEST_TIMEOUT"):
+        _session_tools._test_run(tmp_path, target=["test_slow.py"])
+
+
 def test_collection_error_and_timeout_are_bounded(tmp_path):
     _write(tmp_path / "test_bad.py", "this is invalid python !!!")
     summary, _ = run_pytest([], cwd=tmp_path, capture_output=True)

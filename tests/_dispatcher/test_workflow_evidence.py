@@ -155,7 +155,8 @@ def test_open_review_finding_remains_failed(work):
                                      {"errors": 1}, {"timed_out": True}, {"exit_code": 2}])
 def test_measurements_preserve_unsatisfied_results(work, changes):
     _, _, workflow = work
-    metrics = {"passed": 3, "failed": 0, "errors": 0, "skipped": 0, "exit_code": 0, "timed_out": False}
+    metrics = {"passed": 3, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0, "xpassed": 0,
+               "exit_code": 0, "timed_out": False}
     metrics.update(changes)
     candidate = workflow["candidate"]
     check = collect_test_measurement(state=workflow, before=candidate, after=candidate,
@@ -163,6 +164,39 @@ def test_measurements_preserve_unsatisfied_results(work, changes):
                                      criterion_id="constant", result={"kind": "test_run", "metrics": metrics})
     assert check["status"] == ("failed" if changes else "satisfied")
     assert check["counts"]["passed"] == metrics["passed"]
+
+
+@pytest.mark.parametrize(("changes", "declared", "status"), [
+    ({"xfailed": 1}, None, "failed"),
+    ({"xfailed": 1}, 1, "satisfied"),
+    ({"xfailed": 2}, 1, "failed"),
+    ({"xfailed": 1, "xpassed": 1}, 1, "failed"),
+    ({"skipped": 1}, 1, "failed"),
+])
+def test_expected_failures_are_counted_distinctly_and_qualify_only_when_declared(
+    work, changes, declared, status,
+):
+    from odibi_anchor._dispatcher._workflow_evidence import validate_producer_policy
+
+    _, producer, workflow = work
+    criterion = dict(workflow["plan"]["criteria"][0])
+    if declared is not None:
+        criterion["expected_xfailed"] = declared
+    workflow = {**workflow, "plan": {**workflow["plan"], "criteria": [criterion]}}
+    metrics = {"passed": 3, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0, "xpassed": 0,
+               "exit_code": 0, "timed_out": False, **changes}
+    candidate = workflow["candidate"]
+    check = collect_test_measurement(state=workflow, before=candidate, after=candidate,
+                                     targets=["tests/test_constant.py"], environment_before=runtime_environment(),
+                                     criterion_id="constant", result={"kind": "test_run", "metrics": metrics})
+    assert check["status"] == status
+    assert (check["counts"]["skipped"], check["counts"]["xfailed"], check["counts"]["xpassed"]) == (
+        metrics["skipped"], metrics["xfailed"], metrics["xpassed"])
+    raised = validate_producer_policy.__globals__["WorkflowError"]  # robust to module re-imports
+    for invalid in (-1, True, "1"):
+        with pytest.raises(raised, match="expected_xfailed"):
+            validate_producer_policy({**workflow["plan"], "criteria": [{**criterion, "expected_xfailed": invalid}]},
+                                     producer.active_task_profile)
 
 
 def test_measurements_require_complete_counts_and_stable_candidate(work):
@@ -200,7 +234,8 @@ def retain_evidence(work, *, skipped=0, close=True):
         state=workflow, before=candidate, after=candidate, criterion_id="constant",
         targets=["tests/test_constant.py"], environment_before=runtime_environment(),
         result={"kind": "test_run", "metrics": {"passed": 2, "failed": 0, "errors": 0,
-                                                 "skipped": skipped, "exit_code": 0, "timed_out": False}},
+                                                 "skipped": skipped, "xfailed": 0, "xpassed": 0,
+                                                 "exit_code": 0, "timed_out": False}},
     )
     transition_workflow(db, owner=workflow_owner(producer), workflow_id=workflow["workflow_id"],
                         expected_generation=2, request_id="measurement", operation="record_check", payload=measurement)

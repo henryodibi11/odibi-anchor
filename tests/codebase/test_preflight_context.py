@@ -147,6 +147,35 @@ class TestGracefulDegradation:
         assert ctx["metrics"]["is_safe"] is True
         assert "diagnostics" in ctx
 
+    def test_checker_beside_interpreter_is_found_when_not_on_path(
+        self, project_with_valid_file, tmp_path, monkeypatch,
+    ):
+        """A venv-launched server finds ruff in its own bin even when PATH lacks it."""
+        import os
+        import stat
+        import sys
+
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        marker = tmp_path / "ruff-ran"
+        ruff = venv_bin / "ruff"
+        ruff.write_text(f"#!/bin/sh\n: > {marker}\necho '[]'\n")  # builtins only: PATH is empty
+        ruff.chmod(ruff.stat().st_mode | stat.S_IEXEC)
+        empty_path = tmp_path / "empty-path"
+        empty_path.mkdir()
+        monkeypatch.setenv("PATH", str(empty_path))
+        monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+
+        ctx = preflight_context(
+            str(project_with_valid_file), changed_files=["src/good.py"], check_types=False,
+        )
+
+        assert ctx["metrics"]["tools_available"] == {"ruff": True}
+        assert ctx["metrics"]["tool_paths"] == {"ruff": str(ruff)}
+        assert marker.exists()
+        assert not any("ruff not found" in finding for finding in ctx["findings"])
+        assert os.environ["PATH"] == str(empty_path)
+
     def test_empty_changed_files(self, tmp_path):
         """Empty changed_files list doesn't crash."""
         with patch("odibi_anchor.codebase.preflight_context.subprocess.run") as run:

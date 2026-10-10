@@ -77,6 +77,18 @@ def test_public_recovery_derives_owner_and_actor_from_session(tmp_path, monkeypa
         )
 
 
+def test_unknown_positional_subcommand_is_rejected_with_supported_operations(tmp_path):
+    from odibi_anchor.codebase.memory_context import memory_context
+
+    # anchor("memory", "status") used to forward "status" positionally into the
+    # keyword-only query and fail with an opaque TypeError.
+    with pytest.raises(ValueError, match=r"unknown memory subcommand 'status'.*diagnostics"):
+        memory_action(
+            tmp_path, ("status",), {"db_path": str(tmp_path / "memory.db")},
+            session_state=_state(tmp_path), query_fn=memory_context, render_fn=None,
+        )
+
+
 def test_task_retrieval_apply_and_evaluate_are_separate(tmp_path):
     db = tmp_path / "memory.db"
     append_memory(
@@ -678,7 +690,7 @@ def test_ordinary_query_rejects_project_override(tmp_path, active, requested):
     called = []
     with pytest.raises(ValueError, match="active project/trust boundary"):
         memory_action(
-            tmp_path, ("deployment",), {"project": requested}, session_state=state,
+            tmp_path, (), {"query": "deployment", "project": requested}, session_state=state,
             query_fn=lambda *args, **kwargs: called.append(kwargs), render_fn=lambda value: value,
         )
     assert called == []
@@ -689,7 +701,7 @@ def test_unresolved_ordinary_query_is_forced_global(tmp_path):
     state.active_project = None
     called = []
     result = memory_action(
-        tmp_path, ("deployment",), {}, session_state=state,
+        tmp_path, (), {"query": "deployment"}, session_state=state,
         query_fn=lambda *args, **kwargs: called.append(kwargs) or {"entries": []},
         render_fn=lambda value: value,
     )
