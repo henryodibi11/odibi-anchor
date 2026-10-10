@@ -1064,8 +1064,10 @@ def _route_step(
                     text = content.decode("utf-8")
                 except UnicodeDecodeError:
                     text = "\ufffd"
+                # Parse at the path restore will publish: a defaulted project_type is
+                # derived from the descriptor's parent, the runtime artifact root.
                 integrity = parse_descriptor_text(
-                    text, path=f"{facts['descriptor_source']}:{project_id}/PROJECT.md",
+                    text, path=str(artifact_root / "PROJECT.md"),
                     sha256=hashlib.sha256(content).hexdigest(), expected_id=project_id,
                 )
     except (OSError, RuntimeError, ValueError) as exc:
@@ -1082,7 +1084,11 @@ def _route_step(
             classification="descriptor_damaged", **facts,
         )
     descriptor_target = _descriptor_target(artifact_root, integrity)
-    facts["descriptor_target"] = descriptor_target
+    facts.update(
+        descriptor_target=descriptor_target,
+        descriptor_project_type=integrity.fields["project_type"],
+        descriptor_defaulted_fields=list(integrity.defaulted_fields),
+    )
     if route_path_identity(descriptor_target) == route_path_identity(portfolio_target):
         return {"step": "route_comparison", "status": "ok", "classification": "match", **facts,
                 "next_operation": None}

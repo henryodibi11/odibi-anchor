@@ -110,6 +110,40 @@ def test_fresh_compute_doctor_plans_restore_and_route_without_writing(replay, da
     assert after_launch["route_comparison"]["classification"] == "match"
 
 
+def test_fresh_compute_doctor_accepts_a_descriptor_with_defaulted_route_fields(replay, databricks):
+    # 0.3.23 descriptors may omit id and project_type; 0.3.25 defaults them from the
+    # managed directory and the artifact root, while target_root stays mandatory.
+    target = replay.target("alpha")
+    created = replay.create_project("alpha", target)
+    descriptor = Path(created["startup_packet"]["artifact_root"]) / "PROJECT.md"
+    lines = descriptor.read_text().split("\n")
+    frontmatter_end = lines.index("---", 1)
+    descriptor.write_text("\n".join(
+        line for number, line in enumerate(lines)
+        if not (0 < number < frontmatter_end and line.startswith(("id:", "project_type:")))
+    ))
+    replay.snapshot(created)
+    replay.new_compute()
+    before = _persistent_state(replay, databricks)
+
+    plan = _doctor(replay)
+
+    assert _persistent_state(replay, databricks) == before
+    route = _steps(plan)["route_comparison"]
+    assert route["descriptor_source"].startswith("snapshot:")
+    assert (route["status"], route["classification"], route["descriptor_target"]) == (
+        "ok", "match", str(target),
+    )
+    assert route["descriptor_defaulted_fields"] == ["id", "project_type"]
+    assert route["descriptor_project_type"] == "referenced"
+    assert plan["status"] == "ready"
+
+    assert replay.bootstrap("alpha")["startup_packet"]["status"] == "ready"
+    local = _steps(_doctor(replay))["route_comparison"]
+    assert (local["descriptor_source"], local["classification"]) == ("local_state", "match")
+    assert local["descriptor_defaulted_fields"] == ["id", "project_type"]
+
+
 def test_fresh_compute_doctor_classifies_a_probable_target_move(replay, databricks):
     old_target = replay.target("alpha")
     created = replay.create_project("alpha", old_target)
