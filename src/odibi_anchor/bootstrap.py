@@ -358,7 +358,7 @@ def init(
     os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     from odibi_anchor._utils._session_state import (
         _SESSION_FILES_CHANGED, _SESSION_FILES_CREATED, _SESSION_TIMINGS,
-        _SESSION_LOG, _SESSION_BOOT_MANIFEST, _SESSION_STATE,
+        _SESSION_LOG, _SESSION_BOOT_MANIFEST, _SESSION_STATE, _SESSION_DIFF_BASELINES,
         touched as _session_touched, record_timing as _session_record_timing,
         is_empty as _session_is_empty, get_diff as _get_session_diff,
         log_note, get_log,
@@ -595,6 +595,29 @@ def init(
         })
         _SESSION_STATE.task_verification_epoch = len(_SESSION_TIMINGS)
         result = {"kind": "task_authority_rebind", **rebound}
+        # Restore this exact task window's process state only where bytes are unchanged.
+        import sqlite3 as _continuity_sqlite
+
+        from odibi_anchor._dispatcher._task_continuity import restore_continuity
+
+        def _skill_content_sha256(name):
+            from odibi_anchor._dispatcher._boot import _resolve_skills_dir
+            from odibi_anchor._dispatcher._guidance import resolve_and_load_guidance
+            _, content, _ = resolve_and_load_guidance(_resolve_skills_dir(), name)
+            return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        try:
+            result["continuity"] = restore_continuity(
+                _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                files_changed=_SESSION_FILES_CHANGED, files_created=_SESSION_FILES_CREATED,
+                diff_baselines=_SESSION_DIFF_BASELINES, timings=_SESSION_TIMINGS,
+                skill_content_sha256=_skill_content_sha256,
+            )
+        except (OSError, ValueError, _continuity_sqlite.Error) as _continuity_exc:
+            result["continuity"] = {
+                "status": "rejected", "reason": f"{type(_continuity_exc).__name__}: {_continuity_exc}",
+                "restored": {}, "not_restored": [],
+            }
         from odibi_anchor._dispatcher._workflow_admission import (
             bound_workflow,
             data_only_legacy_exception,
@@ -628,14 +651,45 @@ def init(
                 "known_bad", kwargs={"changed_files": python_paths} if python_paths else None,
                 reason="touched on .py files requires a known-bad check in this process",
             ))
+        for entry in result["continuity"].get("not_restored", [])[:20]:
+            if entry["kind"] == "touched":
+                required.append(dispatcher_operation(
+                    "touched", entry["name"], reason=f"re-register: {entry['reason']}",
+                ))
+            elif entry["kind"] == "skill":
+                required.append(dispatcher_operation(
+                    "skill_loaded", entry["name"], reason="skill content changed; load it again",
+                ))
+            elif entry["kind"] == "spec":
+                required.append(dispatcher_operation(
+                    "spec", "execute", entry["name"], reason="spec bytes changed; link the exact current spec",
+                ))
+                required.append(dispatcher_operation(
+                    "spec", "review", entry["name"], reason="review the exact current spec (rating good or better)",
+                ))
         result["required_next_operations"] = required
         result["suggested_next_actions"] = [f"MUST: {op['copy_ready']}" for op in required]
         return result
 
     def _task_rebind_dispatch(action_args, action_kwargs):
-        unknown = set(action_kwargs) - {"output_format", "task_window_id"}
+        unknown = set(action_kwargs) - {"output_format", "task_window_id", "abandon", "reason"}
         if action_args or unknown:
-            raise TypeError("task_rebind accepts only task_window_id as a keyword argument")
+            raise TypeError(
+                "task_rebind accepts only task_window_id, plus abandon=True with reason for an "
+                "unrestorable orphan, as keyword arguments"
+            )
+        abandon = action_kwargs.get("abandon", False)
+        if type(abandon) is not bool:
+            raise TypeError("abandon must be a bool")
+        if abandon:
+            # Owner-free orphan closure: records `abandoned`, never restores authority.
+            from odibi_anchor.codebase._task_authority import abandon_unrestorable_task
+            return {"kind": "task_authority_abandonment", **abandon_unrestorable_task(
+                _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                task_window_id=action_kwargs.get("task_window_id"), reason=action_kwargs.get("reason"),
+            )}
+        if "reason" in action_kwargs:
+            raise TypeError("reason applies only with abandon=True")
         return _task_rebind_action(task_window_id=action_kwargs.get("task_window_id"))
 
     def _task_adoption_action(command="inspect", **options):
@@ -906,16 +960,61 @@ def init(
         return result
 
     def _test_run(*args, **kwargs):
-        criterion_id = kwargs.pop("workflow_criterion", None)
-        if criterion_id is not None:
-            from odibi_anchor._dispatcher._workflow_runtime import measured_test
+        request_id = kwargs.pop("request_id", None)
 
-            return measured_test(
-                _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
-                runner=lambda **options: _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, **options),
-                criterion_id=criterion_id, args=args, kwargs=kwargs,
-            )
-        return _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, *args, **kwargs)
+        def _execute():
+            options = dict(kwargs)
+            criterion_id = options.pop("workflow_criterion", None)
+            if criterion_id is not None:
+                from odibi_anchor._dispatcher._workflow_runtime import measured_test
+
+                return measured_test(
+                    _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                    runner=lambda **runner_options: _test_run_impl(
+                        ROOT, _debugging_mod.failure_pattern_context, **runner_options),
+                    criterion_id=criterion_id, args=args, kwargs=options,
+                )
+            return _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, *args, **options)
+
+        if request_id is None:
+            return _execute()
+        from odibi_anchor._dispatcher._session_tools import run_retained_test
+        result = run_retained_test(
+            request_id, task_window_id=_SESSION_STATE.task_window_id,
+            arguments={"args": list(args), **kwargs},
+            scope_fingerprint=_test_scope_fingerprint, execute=_execute,
+        )
+        criterion_id = kwargs.get("workflow_criterion")
+        if criterion_id is not None and isinstance(result, dict) and result.get("request", {}).get("replayed"):
+            # A replayed measurement report must still match the authoritative workflow record.
+            from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+            from odibi_anchor._recovery import attach_recovery
+            state = bound_workflow(_DEFAULT_DB_PATH, session_state=_SESSION_STATE) or {}
+            recorded = ((state.get("measurements") or {}).get(criterion_id) or {}).get("status")
+            if recorded != (result.get("workflow_measurement") or {}).get("status"):
+                raise attach_recovery(ValueError(
+                    f"retained measurement for request_id {request_id!r} no longer matches workflow "
+                    f"criterion {criterion_id!r} (recorded status: {recorded}); measure again with a "
+                    "new request_id"
+                ), error_code="test_request_id_conflict", context={
+                    "executed": False, "request_id": request_id, "criterion_id": criterion_id,
+                })
+        return result
+
+    def _test_scope_fingerprint():
+        """Digest the bytes of every changed path a retained test result depends on."""
+        scope = _active_task_scope()
+        paths = set(_SESSION_FILES_CHANGED) | set(scope.changed_paths if scope is not None else ())
+        digest = hashlib.sha256()
+        for relative in sorted(paths):
+            try:
+                content = hashlib.sha256((Path(ROOT) / relative).read_bytes()).hexdigest()
+            except FileNotFoundError:
+                content = "absent"
+            except OSError:
+                content = "unreadable"
+            digest.update(f"{relative}\0{content}\n".encode())
+        return digest.hexdigest()
 
     def _auto_scope_tests(kwargs):
         from odibi_anchor._dispatcher._session_tools import _auto_scope_tests as _ast_impl
@@ -938,9 +1037,31 @@ def init(
             baseline, _SESSION_STATE.task_repository_write_fingerprints,
         )
 
+    def _bound_workflow_criteria():
+        """Project the bound plan's criteria with measurement status, or None."""
+        if _SESSION_STATE.workflow_binding is None:
+            return None
+        from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+        from odibi_anchor.codebase._workflow import WorkflowError
+        try:
+            state = bound_workflow(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+        except WorkflowError:
+            return None
+        if state is None:
+            return None
+        measurements = state.get("measurements") or {}
+        return [
+            {"id": criterion["id"], "expected": criterion.get("expected", ""),
+             "status": (measurements.get(criterion["id"]) or {}).get("status", "pending")}
+            for criterion in state["plan"].get("criteria", [])
+        ]
+
     def _review_with_task_scope(**review_kwargs):
         scope = _active_task_scope()
         current_frame = _SESSION_FRAME_holder[0]
+        if "workflow_criteria" in review_kwargs:
+            raise ValueError("workflow_criteria is derived from the bound workflow, never caller-supplied")
+        review_kwargs["workflow_criteria"] = _bound_workflow_criteria()
         result = _review_context_impl(
             ROOT,
             frame=current_frame if ANCHOR_FRAME_ENABLED else None,
@@ -1282,6 +1403,10 @@ def init(
             )
         if action == "test" and pre_dispatch_test_mark:
             entry["test_mark"] = str(pre_dispatch_test_mark)
+        if action == "touched" and passed and isinstance(result, dict) and isinstance(result.get("registered"), str):
+            entry["touched_path"] = result["registered"]  # Cap accounting for accepted-plan paths.
+        if err is not None and isinstance(getattr(err, "context", None), dict) and err.context.get("executed") is False:
+            entry["executed"] = False  # Rejected before execution: no evidence was produced.
         if action == "checkpoint" and passed:
             entry["includes_learn"] = bool(
                 isinstance(result, dict) and result.get("metrics", {}).get("closure_route") == "legacy"
@@ -1933,6 +2058,7 @@ def init(
                     candidate_state.trust_domain = staged.get("trust_domain")
                     staged_workflow_binding = bind_task_workflow(
                         _DEFAULT_DB_PATH, session_state=candidate_state, workflow_id=staged["workflow_id"],
+                        task_call=(args, kwargs),
                     )
                 _final = _run_pd(
                     action, _result, _err, args, kwargs,
@@ -1984,6 +2110,22 @@ def init(
             if action == "skill_loaded" and _err is None and isinstance(_final, dict):
                 _SESSION_STATE.skills_loaded.add(str(_final["registered"]))
                 _final["skills_loaded"] = sorted(_SESSION_STATE.skills_loaded)
+            if (action in {"known_bad", "touched", "skill_loaded", "spec"} and isinstance(_final, dict)
+                    and _SESSION_STATE.active_task_profile is not None
+                    and __import__("odibi_anchor._dispatcher._effects", fromlist=["dispatch_succeeded"])
+                    .dispatch_succeeded(action, _final, _err)):
+                # Persist restorable process state for task_rebind after a dispatcher restart.
+                import sqlite3 as _continuity_sqlite
+
+                from odibi_anchor._dispatcher._task_continuity import record_continuity
+                try:
+                    record_continuity(
+                        _DEFAULT_DB_PATH, session_state=_SESSION_STATE, action=action,
+                        kwargs=kwargs, result=_final, diff_baselines=_SESSION_DIFF_BASELINES,
+                    )
+                except (OSError, ValueError, _continuity_sqlite.Error) as _continuity_exc:
+                    from odibi_anchor._utils._session_state import record_degraded
+                    record_degraded("task_continuity_record", _continuity_exc)
             if action == "learning":
                 command = str(args[0]).lower().strip() if args else "list"
                 if command == "assess" and _err is None:
@@ -2037,6 +2179,15 @@ def init(
                         "terminal_reason": _SESSION_STATE.terminal_reason,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
+                _terminal = _final.get("terminal_task_record") if isinstance(_final, dict) else None
+                if _err is None and isinstance(_terminal, dict) and _terminal.get("task_window_id"):
+                    # A terminal task can never be rebound, so its continuity is spent.
+                    from odibi_anchor._dispatcher._task_continuity import discard_continuity
+                    try:
+                        discard_continuity(_DEFAULT_DB_PATH, _terminal["task_window_id"])
+                    except (OSError, ValueError) as _discard_exc:
+                        from odibi_anchor._utils._session_state import record_degraded
+                        record_degraded("task_continuity_discard", _discard_exc)
             from odibi_anchor._dispatcher._operating_protocol import (
                 attach_operating_protocol as _attach_protocol,
                 build_operating_protocol as _build_protocol,

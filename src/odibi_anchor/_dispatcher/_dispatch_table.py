@@ -799,8 +799,55 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'positive destination reconciliation, never blind retry. Revoke unused approval through '
         'human authority before replan/cancel; stale bindings remain inspectable. Rebind an '
         'interrupted task exactly with task_rebind. A handoff does not grant authority.',
+        'Copy each plan criterion\'s `expected` text (or its id) into the producer task\'s '
+        'acceptance_criteria: `review` then reports that criterion\'s workflow measurement status '
+        'instead of a diff-keyword UNVERIFIED CRITERION finding.',
+        'Planned work: in a bound source_change producer with an accepted plan, `touched` paths '
+        'listed in the plan\'s exact source_paths do not count against the per-checkpoint file cap '
+        'or the ungated-edit limit; unplanned paths still do. A checkpoint closes the producer '
+        'before `implemented`, so add a missing path through replan, not checkpoint.',
+        '`request_delivery_approval` and `revoke_delivery` accept `timeout_minutes`, an integer '
+        'from 1 to 240 (default 5): the owner\'s response window. It grants no authority; a '
+        'non-default value is part of the request identity for exact retries.',
+        'Base moved (rebase or integration-branch update): the candidate is diffed from the '
+        'producer\'s start HEAD and cannot be carried across. Supported procedure: (1) keep the old '
+        'commits on a side branch (rebased onto the new base if useful) and move the worktree '
+        'cleanly to the new base. (2) Replan from an accepted task bound to this workflow: the '
+        'still-open producer, or, if it is closed or lost, a fresh source_change task with this '
+        'workflow_id and explicit risk (replan never runs from a read-only or unbound task); an old '
+        'task whose authority can no longer be restored closes with anchor("task_rebind", '
+        'task_window_id=..., abandon=True, reason=...). (3) Close that task with review, gate, then '
+        'learning assess (a source_change task closes only after its gate), or learning '
+        'safe_stop(status="blocked", reason=...). (4) new_session, a fresh producer with the same '
+        'workflow_id and explicit risk, accept_plan, known_bad, re-apply the change (for example '
+        'git cherry-pick), touched every path, then continue the producer order above.',
+    ],
+    "task_rebind": [
+        'Restores an interrupted open task. The result\'s `continuity` reports process state '
+        'restored for that exact task window: touched registrations, the known_bad check, skill '
+        'registrations and the spec link, each only where the current bytes equal the bytes '
+        'recorded by this task. Anything not restored is listed with a reason and a copy-ready '
+        'operation in `required_next_operations`. Restoration never grants authority.',
+        '`abandon=True` with `task_window_id` and a non-empty `reason` closes an exact-owner open '
+        'task whose authority can no longer be restored (for example after its base was '
+        'rewritten) and records it as `abandoned`. It needs no owner approval, restores nothing, '
+        'refuses the current task and refuses any task that can still be rebound.',
+    ],
+    "test": [
+        '`request_id` (string, at most 128 characters) retains the completed result in this '
+        'process. If a client times out, the server-side run continues; retry the identical call '
+        'with the same request_id to receive the stored result (`request.replayed=True`) without '
+        'rerunning. Changed arguments or changed-file bytes are rejected; use a new request_id. A '
+        'workflow measurement is also retained in workflow status.',
+        'Skipped tests report bounded `samples.skip_reasons`. A strict workflow criterion that '
+        'fails on skips names `workflow_measurement.missing_dependencies` when the skips are '
+        'missing optional modules.',
     ],
     "task": [
+        '`scope`: one optional prose string describing the work boundary; it becomes the first '
+        '`in_scope` entry. Use `in_scope=[...]` for lists and `repository_scope=[...]` for paths.',
+        '`continuation=True` creates a fresh task window after the prior task in this process '
+        'closed; it conflicts only with a `new_session` called since that closure.',
         '`workflow_id`: required with explicit managed project and trust_domain for fresh '
         'source-capable or substantive artifact tasks. Create a workflow draft during read-only '
         'analysis, close that task, bind a fresh producer, then accept_plan before edits. '

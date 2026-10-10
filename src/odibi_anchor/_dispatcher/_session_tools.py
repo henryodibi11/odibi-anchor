@@ -196,6 +196,8 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
 
     # Build samples
     samples = {"command": " ".join(cmd), "exit_code": proc.returncode}
+    if summary_data.get("skip_reasons"):
+        samples["skip_reasons"] = list(summary_data["skip_reasons"])
     if verbose or proc.returncode != 0:
         # Pytest startup/plugin failures can write only to stderr. Preserve both
         # channels while keeping the diagnostic bounded and credential-redacted.
@@ -245,7 +247,8 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
     with no discoverable tests fails before spawning pytest rather than silently
     widening to the full suite.
     """
-    supported = {"target", "changed_files", "mark", "timeout", "verbose", "output_format", "workflow_criterion"}
+    supported = {"target", "changed_files", "mark", "timeout", "verbose", "output_format", "workflow_criterion",
+                 "request_id"}
     unsupported = sorted(set(kwargs) - supported)
     if unsupported:
         raise ValueError(
@@ -291,3 +294,64 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
         "No applicable tests were discovered for the Python change scope; no tests were run. "
         "Pass target=... explicitly if broader verification is intended."
     )
+
+
+# Completed test results retained by (task window, request_id) in this process.
+# A client timeout does not stop the server-side run; an identical retry after it
+# returns the retained result instead of rerunning or losing it.
+_RETAINED_TEST_RESULTS: dict[tuple[str, str], dict] = {}
+_MAX_RETAINED_TEST_RESULTS = 64
+
+
+def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprint, execute):
+    """Run ``execute`` once per request_id; return the retained result on exact retries.
+
+    A retry replays only when the arguments and the byte fingerprint of the change scope
+    are identical, so retained evidence never transfers to different bytes.
+    """
+    import copy
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
+        raise ValueError("request_id must be a non-empty string of at most 128 characters")
+    key = (str(task_window_id), request_id)
+    request_sha256 = hashlib.sha256(
+        json.dumps(arguments, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    fingerprint = scope_fingerprint()
+    retained = _RETAINED_TEST_RESULTS.get(key)
+    if retained is not None:
+        reason = None
+        if retained["request_sha256"] != request_sha256:
+            reason = "was used for different test arguments"
+        elif retained["scope_sha256"] != fingerprint:
+            reason = "has a retained result for different file bytes; files changed after it ran"
+        if reason is not None:
+            raise attach_recovery(
+                ValueError(f"test request_id {request_id!r} {reason}; use a new request_id"),
+                error_code="test_request_id_conflict",
+                context={"executed": False, "request_id": request_id,
+                         "completed_at": retained["completed_at"]},
+                next_operations=[dispatcher_operation(
+                    "test", kwargs={**arguments, "request_id": request_id + "-2"},
+                    reason="run the test again under a fresh request_id", retry_safety="not_idempotent",
+                )],
+            )
+        result = copy.deepcopy(retained["result"])
+        if isinstance(result, dict):
+            result["request"] = {"request_id": request_id, "replayed": True,
+                                 "completed_at": retained["completed_at"]}
+        return result
+    result = execute()
+    completed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    if len(_RETAINED_TEST_RESULTS) >= _MAX_RETAINED_TEST_RESULTS:
+        _RETAINED_TEST_RESULTS.pop(next(iter(_RETAINED_TEST_RESULTS)))
+    _RETAINED_TEST_RESULTS[key] = {"request_sha256": request_sha256, "scope_sha256": fingerprint,
+                                   "completed_at": completed_at, "result": copy.deepcopy(result)}
+    if isinstance(result, dict):
+        result["request"] = {"request_id": request_id, "replayed": False, "completed_at": completed_at}
+    return result

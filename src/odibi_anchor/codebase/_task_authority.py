@@ -855,7 +855,9 @@ def rebind_latest_open_task(
             "To close an abandoned task, rebind it, dispose pending memories in one "
             "all_pending=True call when all are irrelevant, then run review, gate, and "
             "learning assess; if delivery is blocked, assess learning and use learning "
-            "safe_stop. task_adoption is only for authenticated takeover of dirty work, "
+            "safe_stop. If its authority can no longer be restored, record it as abandoned "
+            "with anchor('task_rebind', task_window_id='<exact-id>', abandon=True, reason='...'). "
+            "task_adoption is only for authenticated takeover of dirty work, "
             "not orphan recovery." + suffix
         ), error_code="multiple_open_task_windows", context={
             "matching_open_task_count": len(matches),
@@ -883,14 +885,40 @@ def rebind_latest_open_task(
             {"accepted_record_sha256": hashlib.sha256(_canonical(record).encode()).hexdigest()},
         )
         _record_rebind_session(path, record=record, session_state=session_state, event=event)
-    except TaskAuthorityUnavailable:
+    except TaskAuthorityUnavailable as exc:
         vars(session_state).clear()
         vars(session_state).update(prior_state)
+        if not hasattr(exc, "error_code"):
+            from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+            task = identity["task_window_id"]
+            attach_recovery(exc, error_code="task_authority_unrestorable", context={
+                "task_window_id": task, "cause": str(exc)[:200],
+            }, next_operations=[dispatcher_operation(
+                "task_rebind", kwargs={"task_window_id": task, "abandon": True,
+                                       "reason": "<why this orphan is abandoned>"},
+                reason="if this orphan cannot be recovered, record it as abandoned; grants no authority",
+            )])
         raise
     except Exception as exc:
         vars(session_state).clear()
         vars(session_state).update(prior_state)
-        raise TaskAuthorityUnavailable("accepted task authority could not be restored") from exc
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        task = identity["task_window_id"]
+        raise attach_recovery(TaskAuthorityUnavailable(
+            "accepted task authority could not be restored "
+            f"({type(exc).__name__}: {str(exc)[:200]}). If this orphan cannot be recovered, "
+            f"close it as abandoned with anchor('task_rebind', task_window_id={task!r}, "
+            "abandon=True, reason='...'); that grants no authority."
+        ), error_code="task_authority_unrestorable", context={
+            "task_window_id": task, "cause": type(exc).__name__,
+        }, next_operations=[dispatcher_operation(
+            "task_rebind", kwargs={"task_window_id": task, "abandon": True,
+                                   "reason": "<why this orphan is abandoned>"},
+            reason="record the unrestorable orphan as abandoned without restoring authority",
+            retry_safety="idempotent",
+        )]) from exc
     result = {
         "status": "rebound", "task_window_id": identity["task_window_id"],
         "record_id": record["record_id"], "rebind_event_id": event["event_id"],
@@ -900,6 +928,74 @@ def rebind_latest_open_task(
     }
     result["diagnostics"] = inspect_task_authority(path)
     return result
+
+
+def abandon_unrestorable_task(
+    path: str | Path, *, session_state: Any, task_window_id: str, reason: str,
+) -> dict[str, Any]:
+    """Close an exact-owner open task whose authority can no longer be restored.
+
+    This is the owner-free orphan path: it only appends a ``closed`` event recording
+    ``abandoned``. It never restores, transfers or grants authority, refuses the
+    current process's task, and refuses any task that can still be restored, which
+    must be rebound and closed through its normal review, gate and learning path.
+    """
+    import copy
+
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    if not isinstance(task_window_id, str) or not task_window_id.strip():
+        raise TaskAuthorityUnavailable("abandon requires an exact task_window_id")
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+        raise ValueError("abandon requires a non-empty reason of at most 500 characters")
+    requested = task_window_id.strip()
+    if (requested == getattr(session_state, "task_window_id", None)
+            and getattr(session_state, "active_task_profile", None) is not None):
+        raise TaskAuthorityUnavailable(
+            "the current process's task cannot be abandoned; close it with review, gate and learning assess"
+        )
+    target = Path(path).expanduser()
+    if not target.is_file():
+        raise TaskAuthorityUnavailable("accepted task authority is unavailable")
+    if requested in _terminal_task_ids(target):
+        raise TaskAuthorityUnavailable("terminal task is already closed")
+    connection = _connect(target, read_only=True)
+    try:
+        _verify_schema(connection)
+        relocations = load_relocations(connection)
+        row = connection.execute(
+            "SELECT r.* FROM accepted_task_records r WHERE r.task_window_id=? AND NOT EXISTS "
+            "(SELECT 1 FROM accepted_task_events e WHERE e.task_window_id=r.task_window_id AND e.event_type='closed')",
+            (requested,),
+        ).fetchone()
+        record = _load_verified_record(row) if row is not None else None
+    finally:
+        connection.close()
+    if record is None or not _matches_owner(record, _owner_identity(session_state), relocations):
+        raise TaskAuthorityUnavailable(
+            f"no open accepted task {requested} matches the exact project, Anchor home, project root, "
+            "artifact root, target, repository provider, and trust domain"
+        )
+    probe = copy.copy(session_state)
+    try:
+        _restore_state(record, probe)
+    except Exception as exc:  # Any restore failure is exactly what makes the task an orphan.
+        restore_error = f"{type(exc).__name__}: {str(exc)[:240]}"
+    else:
+        raise attach_recovery(TaskAuthorityUnavailable(
+            f"task {requested} can still be restored; rebind it and close it with review, gate and "
+            "learning assess (or learning safe_stop) instead of abandoning it"
+        ), error_code="task_restorable", context={"task_window_id": requested}, next_operations=[
+            dispatcher_operation("task_rebind", kwargs={"task_window_id": requested},
+                                 reason="rebind the restorable task and close it normally"),
+        ])
+    event = _append_event(target, requested, "closed", {
+        "terminal_status": "abandoned", "basis": "authority_unrestorable",
+        "reason": " ".join(reason.split()), "restore_error": restore_error,
+    })
+    return {"status": "abandoned" if event["created"] else "already_closed", "task_window_id": requested,
+            "closure_event_id": event["event_id"], "restore_error": restore_error,
+            "authority_granted": False}
 
 
 def task_recovery_context(

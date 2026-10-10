@@ -812,7 +812,9 @@ def run_post_dispatch(
         if (_sname and result.get("write_performed")
                 and (_spec_command in {"create", "persist", "execute"}
                      or result.get("linked") or result.get("executing"))):
-            if getattr(session_state, "linked_spec", None) != _sname:
+            # Linking keeps a review only when it is for this exact spec, so
+            # review-then-execute and execute-then-review both link the reviewed spec.
+            if getattr(session_state, "reviewed_spec_name", None) != _sname:
                 session_state.reviewed_spec_name = None
                 session_state.spec_review_rating = None
             session_state.linked_spec = _sname

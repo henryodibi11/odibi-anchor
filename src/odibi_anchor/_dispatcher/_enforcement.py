@@ -25,7 +25,7 @@ def closure_satisfied(timing: dict[str, Any]) -> bool:
 
 
 def should_block_edit_limit(
-    timings: list[dict], max_ungated: int = 6
+    timings: list[dict], max_ungated: int = 6, exempt_paths: frozenset[str] = frozenset(),
 ) -> tuple[bool, str]:
     """Determine if the ungated edit limit has been exceeded.
 
@@ -35,6 +35,8 @@ def should_block_edit_limit(
     Args:
         timings: Session timing records (list of dicts with 'action', 'error', 'passed' keys).
         max_ungated: Maximum allowed edits before gate is required. Default 6.
+        exempt_paths: Exact accepted-plan paths. A ``touched`` timing whose recorded
+            ``touched_path`` is in this set is planned work and does not count.
 
     Returns:
         (should_block, message) — True if limit exceeded.
@@ -52,6 +54,8 @@ def should_block_edit_limit(
         1 for j in range(start, len(timings))
         if timings[j]["action"] in ("safe", "semantic", "touched")
         and timings[j].get("error") is None
+        and not (timings[j]["action"] == "touched"
+                 and timings[j].get("touched_path") in exempt_paths)
     )
 
     if edits_since_gate >= max_ungated:
@@ -65,6 +69,7 @@ def should_block_checkpoint(
     current_touch: str,
     threshold: int = 5,
     is_reconciliation: bool = False,
+    exempt_paths: frozenset[str] = frozenset(),
 ) -> tuple[bool, str]:
     """Determine if the checkpoint file threshold has been exceeded.
 
@@ -74,13 +79,19 @@ def should_block_checkpoint(
         current_touch: The file about to be touched (may not be in files_changed yet).
         threshold: Maximum files between checkpoints. Default 5.
         is_reconciliation: If True, the touch is reconciling drift, not a new change.
+        exempt_paths: Exact accepted-plan paths, which are planned work and do not
+            count. Unplanned paths are counted conservatively: planned registrations
+            never lower the unplanned count below its true value since the checkpoint.
 
     Returns:
         (should_block, message) — True if threshold exceeded.
     """
-    files_since_cp = len(files_changed) - files_at_last_checkpoint
+    planned_registered = len(set(files_changed) & exempt_paths)
+    files_since_cp = (len(files_changed) - planned_registered) - max(
+        0, files_at_last_checkpoint - planned_registered,
+    )
     # +1 if the current file isn't already registered
-    if current_touch and current_touch not in files_changed:
+    if current_touch and current_touch not in files_changed and current_touch not in exempt_paths:
         files_since_cp += 1
 
     if files_since_cp > threshold and not is_reconciliation:
@@ -320,6 +331,21 @@ def required_task_prerequisite(
         if not any(predicate(t) and t.get("error") is None for t in timings):
             return action
     return None
+
+
+def inline_session_since_closure(timings: list[dict]) -> bool:
+    """Return whether ``new_session`` ran after the latest committed task closure.
+
+    ``continuation=True`` replaces only the current startup's inline ``new_session``.
+    A session started for an earlier task that has since closed is history, not a conflict.
+    """
+    last_closure = max(
+        (index for index, timing in enumerate(timings) if closure_satisfied(timing)), default=-1,
+    )
+    return any(
+        timing["action"] == "new_session" and timing.get("error") is None
+        for timing in timings[last_closure + 1:]
+    )
 
 
 def should_block_task_prerequisites(

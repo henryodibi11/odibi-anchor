@@ -166,6 +166,8 @@ def _timing_observation(timing: Mapping[str, Any], index: int, epoch: int | None
     action = timing.get("action")
     if not isinstance(action, str) or not action:
         return None
+    if timing.get("executed") is False:
+        return None  # Rejected before it ran: neither passing nor failing evidence.
     failed = timing.get("error") is not None or timing.get("passed") is False
     current_task = action == "task" and epoch is not None and index == epoch - 1
     stale = epoch is not None and index < epoch and not current_task

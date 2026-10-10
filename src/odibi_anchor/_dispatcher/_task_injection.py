@@ -49,6 +49,16 @@ def inject_session_context(
     workflow_id = injected.pop("workflow_id", None)
     if workflow_id is not None and (not isinstance(workflow_id, str) or not workflow_id.strip()):
         raise TypeError("workflow_id must be a non-empty string or None")
+    # The canonical instructions define `scope` as one prose string; it becomes the
+    # first explicit in-scope statement. Lists belong in in_scope/repository_scope.
+    scope = injected.pop("scope", None)
+    if scope is not None:
+        if not isinstance(scope, str) or not scope.strip() or len(scope) > 2000:
+            raise TypeError(
+                "scope must be one non-empty prose string of at most 2000 characters; "
+                "use in_scope=[...] for a list or repository_scope=[...] for paths"
+            )
+        injected["in_scope"] = [scope.strip(), *(injected.get("in_scope") or [])]
 
     from odibi_anchor.planning._task_profile import normalize_task_profile
     profile = normalize_task_profile(

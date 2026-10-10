@@ -499,7 +499,7 @@ def validate_prepared_inputs(operation: str, inputs: Mapping[str, Any]) -> None:
         dispatcher_fields = {
             "task", "continuation", "repository_scope", "accept_unknown_git_state",
             "baseline_qualification", "memory_limit", "adoption_approval_id", "trust_domain",
-            "problem", "create_problem", "work_item", "spec", "workflow_id",
+            "problem", "create_problem", "work_item", "spec", "workflow_id", "scope",
         }
         unknown = set(inputs) - planner_fields - dispatcher_fields
         if unknown:

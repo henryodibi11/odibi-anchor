@@ -31,6 +31,8 @@ PRESERVED_ENV_NAMES = frozenset({
     "ANCHOR_OFFLINE_WHEELHOUSE",
 })
 COUNT_FIELDS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
+MAX_SKIP_REASONS = 20
+MAX_SKIP_REASON_CHARS = 300
 _CANONICAL_PLUGIN_NAME = "odibi_anchor.pytest_runner"
 _GIT_CONFIG = (
     ("commit.gpgSign", "false"),
@@ -127,6 +129,12 @@ def run_pytest(
             value = loaded.get(field)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 summary[field] = value
+        reasons = loaded.get("skip_reasons")
+        if isinstance(reasons, list):
+            summary["skip_reasons"] = [
+                str(item)[:MAX_SKIP_REASON_CHARS] for item in reasons[:MAX_SKIP_REASONS]
+                if isinstance(item, str)
+            ]
         if proc.returncode != 0 and not any(summary[field] for field in ("failed", "errors")):
             summary["errors"] = 1
         return summary, proc
@@ -153,7 +161,16 @@ def _empty_summary(exit_code: int, duration_s: float, *, timed_out: bool = False
 class _SummaryPlugin:
     def __init__(self) -> None:
         self.counts = dict.fromkeys(COUNT_FIELDS, 0)
+        self.skip_reasons: list[str] = []
         self.started = time.monotonic()
+
+    def _record_skip(self, report: Any) -> None:
+        # Bounded, de-duplicated reasons let a strict criterion name missing dependencies.
+        longrepr = getattr(report, "longrepr", None)
+        reason = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else longrepr
+        text = str(reason or "")[:MAX_SKIP_REASON_CHARS]
+        if text and text not in self.skip_reasons and len(self.skip_reasons) < MAX_SKIP_REASONS:
+            self.skip_reasons.append(text)
 
     def pytest_runtest_logreport(self, report: Any) -> None:
         # pytest reports an expected failure as skipped and a non-strict unexpected
@@ -162,6 +179,8 @@ class _SummaryPlugin:
         expected_failure = hasattr(report, "wasxfail")
         if report.skipped:
             self.counts["xfailed" if expected_failure else "skipped"] += 1
+            if not expected_failure:
+                self._record_skip(report)
         elif report.when == "call" and report.passed and expected_failure:
             self.counts["xpassed"] += 1
         elif report.when == "call":
@@ -174,6 +193,7 @@ class _SummaryPlugin:
             self.counts["errors"] += 1
         elif report.skipped:
             self.counts["skipped"] += 1
+            self._record_skip(report)
 
     def pytest_sessionfinish(self, session: Any, exitstatus: int) -> None:
         path = os.environ.get(SUMMARY_ENV)
@@ -181,6 +201,7 @@ class _SummaryPlugin:
             return
         summary = _empty_summary(int(exitstatus), time.monotonic() - self.started)
         summary.update(self.counts)
+        summary["skip_reasons"] = list(self.skip_reasons)
         Path(path).write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
 
 

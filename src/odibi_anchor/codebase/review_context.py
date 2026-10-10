@@ -30,6 +30,7 @@ def review_context(
     test_timings: list[dict] | None = None,
     acceptance_criteria: list[str] | None = None,
     files_changed: set[str] | None = None,
+    workflow_criteria: list[dict] | None = None,
     output_format: str = "markdown",
 ) -> dict | str:
     """Pre-gate changeset review — unified diff analysis + quality checks.
@@ -47,6 +48,9 @@ def review_context(
         test_timings: List of test/test_focus timing records from session.
         acceptance_criteria: List of acceptance criteria strings to verify.
         files_changed: Set of changed file paths this session.
+        workflow_criteria: Criteria of the bound workflow plan as
+            ``{"id", "expected", "status"}``. A task criterion naming one of them is
+            verified by workflow measurement, not by diff keywords.
         output_format: "dict" or "markdown".
 
     Returns:
@@ -103,7 +107,30 @@ def review_context(
             all_diff_text += f" {path} {diff_content}"
         all_diff_text_lower = all_diff_text.lower()
 
+        def _normalized(text: Any) -> str:
+            return " ".join(str(text).lower().split())
+
+        measured = [item for item in (workflow_criteria or []) if isinstance(item, dict)]
         for criterion in acceptance_criteria:
+            text = _normalized(criterion)
+            workflow_match = next((
+                item for item in measured
+                if text and (text == _normalized(item.get("id", ""))
+                             or (_normalized(item.get("expected", ""))
+                                 and (text in _normalized(item.get("expected", ""))
+                                      or _normalized(item.get("expected", "")) in text)))
+            ), None)
+            if workflow_match is not None:
+                status = str(workflow_match.get("status") or "pending")
+                criteria_results.append({"criterion": criterion, "matched": True,
+                                         "workflow_criterion": workflow_match.get("id"),
+                                         "workflow_status": status})
+                if status != "satisfied":
+                    findings.append(
+                        f"WORKFLOW CRITERION: '{criterion}' is verified by workflow measurement "
+                        f"{workflow_match.get('id')!r} (status: {status})."
+                    )
+                continue
             # Heuristic: extract keywords from criterion (words > 3 chars)
             keywords = [w.lower() for w in criterion.split() if len(w) > 3]
             matched = any(kw in all_diff_text_lower for kw in keywords)
