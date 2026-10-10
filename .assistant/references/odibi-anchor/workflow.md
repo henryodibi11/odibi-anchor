@@ -1142,3 +1142,52 @@ identities and independent destination readback, scope/authority/staleness/negat
 tests and supported-host qualification pass, and fresh tasks can enroll at safe
 boundaries. Keep prior records visibly unphased; never backfill plan, qualification
 or delivery evidence. This exception does not authorize plain non-Git source edits.
+
+## Contract details
+
+Procedure moved out of `.assistant_instructions.md`; the contract's rules still govern.
+
+### Host startup specifics
+
+Normal Databricks/Genie startup needs only the project ID. Never probe the Volume through
+FUSE or run a Genie CLI subprocess; use the launcher in the stateful notebook process.
+
+### Approved project creation
+
+After explicit creation approval and one exact existing target, relaunch with init globals
+`ANCHOR_CREATE_PROJECT=True` and `ANCHOR_PROJECT_ROOT=<exact-target>`. The managed path updates
+the portfolio, registers, and checkpoints. Never edit the portfolio TOML manually.
+
+### Notebooks, compute, and cell failures
+
+On Databricks, keep resumable diagnostics under `artifact_root/notebooks/` and reusable source
+in `target_root`. Attaching compute is external: use only a specifically approved existing
+cluster; never infer selection, startup, creation, resizing, or installation. Wrap multi-step
+cells in the `Exception` handler shown above (print type, message, traceback; re-raise). Never
+dump locals/environment, suppress failure, continue, or retry blindly.
+
+### Task rebind and continuation
+
+After a restart, call `anchor("task_rebind")` first. If several exact-owner tasks are open, use
+the reported `anchor("task_rebind", task_window_id="<exact-id>")`. Dirty-task adoption remains
+an authenticated exception. For an intentional continuation after the prior task closed, omit
+`new_session` and pass `continuation=True`; Anchor creates a fresh task window. That is
+replacement-task creation, not durable rebinding.
+
+### Reference guidance
+
+`reference_guidance` entries are advisory; load relevant ones before technology decisions. Use
+`anchor("references", "search", "query")` and `load-section` for offline depth; a match is not
+loaded content or runtime/host proof.
+
+### Machine-verifiable memory lane
+
+Prefer this lane when a reusable codebase observation is an exact callable behavior rather than
+prose. The repository must own a tracked `.odibi-anchor/memory-verifiers.json` entry fixing the
+callable, inputs, and exact assertions, and the learning summary must be the canonical
+`PythonCallResultV1` produced by
+`odibi_anchor.codebase._memory_verifier.canonical_python_call_result_claim`. Bind the
+allowlisted source path as `file` evidence. A later independent task and source snapshot can
+then verify and activate it mechanically; a second independent verification can confirm it.
+Never encode preferences, policy, credentials, arbitrary expressions, or claims not completely
+entailed by the exact JSON-pointer assertions.

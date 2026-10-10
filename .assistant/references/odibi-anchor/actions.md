@@ -11,6 +11,37 @@ Run `anchor("help")` for the full API overview, or `anchor("help", "action_name"
 - `anchor("help")` is too terse — you need "when to use" guidance
 - You're looking for session management, memory, or snapshot tools
 
+## Result envelope
+
+Every dict result from `anchor()` carries one additive `envelope` key (schema
+`odibi_anchor.result_envelope`, version 1); a raised call carries the same structure as
+`exc.envelope`, and the CLI and MCP v2 error objects include it as `error["envelope"]`. It is
+identical across in-process, CLI and MCP calls. Existing result keys are unchanged.
+
+- `outcome`: exactly one of `succeeded`, `succeeded_with_warnings`, `blocked`, `failed`.
+  Only `succeeded` is a clean success.
+- `state`: `project`, `target`, `task_window_id`, lifecycle `phase`, bound `workflow`
+  (id, phase, progress, generation when known) and `open_obligations`.
+- `effects` (mutating calls only, else `null`): `changed` (`null` after a failure),
+  `verified_readback` (true only when Anchor re-read the written state; `readback.method`
+  names what it read), `invalidated`, `effect_classes`.
+- `retry_safety` for repeating this call: `read_only`, `idempotent`, `state_checked` or
+  `not_idempotent`.
+- `warnings`: degraded components and fallbacks (`fallback_used`), unavailable evidence,
+  readiness gaps.
+- `obligations`: what is required now or pending verification, counted once each.
+- `next_operation`: `copy_ready`, `requires_owner`, `retry_safety`, `reason`; for failures it
+  maps the `attach_recovery` metadata.
+- `undo`: `reversible` with a `copy_ready` call, `irreversible` with a reason, or
+  `not_applicable`.
+- `error` (failures): `type`, `error_code`, `message`.
+
+Text renderings (`output_format="markdown"` or `"toon"`) and the non-dict actions `help`,
+`export_md` and `session_log` carry no envelope. MCP returns budgeted compact task results by
+default; pass `response_detail="full"` (MCP parameter, or a dispatcher keyword in process) for
+every section. CLI `state snapshot|restore|resume|abandon` and `portfolio` commands report
+the same envelope shape.
+
 ## Session & Diagnostic Actions
 
 These help you understand and manage the current session:

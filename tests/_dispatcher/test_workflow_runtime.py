@@ -918,7 +918,9 @@ def test_public_data_only_exception_stays_unphased_through_task_closure(runtime)
     finish_producer(anchor)
     from odibi_anchor.codebase._workflow import digest
 
-    assert anchor("workflow", output_format="dict") == {**packet, "packet_sha256": digest(packet)}
+    observed = anchor("workflow", output_format="dict")
+    assert observed.pop("envelope")["outcome"] == "succeeded"  # additive result envelope
+    assert observed == {**packet, "packet_sha256": digest(packet)}
 
 
 def test_fresh_standalone_source_rejection_preserves_authority_and_files(tmp_path, monkeypatch):
