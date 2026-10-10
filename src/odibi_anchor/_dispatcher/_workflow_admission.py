@@ -127,7 +127,13 @@ def bound_workflow(path: str | Path, *, session_state: Any) -> dict[str, Any] | 
         return state
     if (binding["plan_sha256"] != state["plan_sha256"]
             or binding["execution_mode"] != state["plan"]["execution_mode"]):
-        raise WorkflowError("stale_plan", "plan changed; establish a fresh task at a safe boundary")
+        raise WorkflowError(
+            "stale_plan",
+            "plan changed; establish a fresh task at a safe boundary. Rework order: close this task "
+            "(review, gate, learning assess, or learning safe_stop), then with a clean worktree open a "
+            "fresh producer with the same workflow_id and risk, accept_plan, and only then edit; "
+            "see help('workflow').",
+        )
     return state
 
 
