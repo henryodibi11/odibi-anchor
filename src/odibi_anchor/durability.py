@@ -664,6 +664,16 @@ def _open_owned_root(destination: Path, record: Mapping[str, Any]) -> int | None
     return root_fd
 
 
+def _walk_artifacts(root: Path) -> Iterator[Path]:
+    """Visit staged directories before their children without sorting the whole tree."""
+    for directory, directories, files in os.walk(root):
+        parent = Path(directory)
+        for name in directories:
+            yield parent / name
+        for name in files:
+            yield parent / name
+
+
 def _fill_owned_destination_fd(
     staged: Path,
     destination: Path,
@@ -687,7 +697,7 @@ def _fill_owned_destination_fd(
         return held
 
     try:
-        for source in sorted(staged.rglob("*"), key=lambda item: item.relative_to(staged).parts):
+        for source in _walk_artifacts(staged):
             relative = source.relative_to(staged)
             expected.add(relative)
             parent_fd = require_unchanged(relative.parent)
@@ -807,7 +817,7 @@ def _fill_owned_destination(
         return _fill_owned_destination_fd(staged, destination, record, created)
     expected: set[Path] = set()
     directories = {Path("."): (record["device"], record["inode"])}
-    for source in sorted(staged.rglob("*"), key=lambda item: item.relative_to(staged).parts):
+    for source in _walk_artifacts(staged):
         relative = source.relative_to(staged)
         expected.add(relative)
         target = destination / relative
@@ -947,9 +957,10 @@ def _stage_artifact_bundle(source: Path, destination: Path) -> dict[str, Any]:
             info.uname = info.gname = ""
             with path.open("rb") as stream:
                 archive.addfile(info, stream)
+    digest = _sha256(destination)
     return {
-        "file": f"{_sha256(destination)}{_ARTIFACTS_SUFFIX}",
-        "sha256": _sha256(destination),
+        "file": f"{digest}{_ARTIFACTS_SUFFIX}",
+        "sha256": digest,
         "size_bytes": destination.stat().st_size,
         "file_count": len(files),
         "directory_count": len(directories),
@@ -982,6 +993,9 @@ def _descriptor_integrity(bundle: Path) -> list[dict[str, Any]]:
 
 def _extract_artifact_bundle(bundle: Path, destination: Path) -> dict[str, int]:
     seen: dict[PurePosixPath, str] = {}
+    # Insertion order is parent-first, including implicit directories. Membership
+    # detects children-before-file collisions without scanning every prior member.
+    directories: dict[PurePosixPath, None] = {}
     members: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
     total_bytes = 0
     with tarfile.open(bundle, mode="r:") as archive:
@@ -992,27 +1006,26 @@ def _extract_artifact_bundle(bundle: Path, destination: Path) -> dict[str, int]:
                 raise RuntimeError("artifact archive contains a special entry")
             if path in seen:
                 raise RuntimeError("artifact archive contains duplicate entries")
-            for parent in path.parents:
-                if parent != PurePosixPath(".") and seen.get(parent) == "file":
+            for parent in reversed(path.parents):
+                if parent == PurePosixPath("."):
+                    continue
+                if seen.get(parent) == "file":
                     raise RuntimeError("artifact archive contains a file/directory collision")
-            if kind == "file" and any(
-                existing != path and path in existing.parents for existing in seen
-            ):
+                directories[parent] = None
+            if kind == "file" and path in directories:
                 raise RuntimeError("artifact archive contains a file/directory collision")
+            if kind == "directory":
+                directories[path] = None
             seen[path] = kind
             total_bytes += info.size if kind == "file" else 0
             if len(seen) > _MAX_ARTIFACT_MEMBERS or total_bytes > _MAX_ARTIFACT_BYTES:
                 raise RuntimeError("artifact archive exceeds supported extraction limits")
             members.append((info, path))
         destination.mkdir()
-        for _info, path in sorted(
-            (item for item in members if item[0].isdir()),
-            key=lambda item: (len(item[1].parts), item[1].as_posix()),
-        ):
-            (destination.joinpath(*path.parts)).mkdir(parents=True, exist_ok=False)
+        for path in directories:
+            destination.joinpath(*path.parts).mkdir()
         for info, path in (item for item in members if item[0].isfile()):
             target = destination.joinpath(*path.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
             incoming = archive.extractfile(info)
             if incoming is None:
                 raise RuntimeError("artifact archive file has no content")
