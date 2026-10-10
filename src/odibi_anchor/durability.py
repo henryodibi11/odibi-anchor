@@ -19,12 +19,17 @@ import sqlite3
 import stat
 import tarfile
 import tempfile
+import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+# Restore sub-phase timing reuses the bootstrap recorder; outside a bootstrap these are no-ops.
+from odibi_anchor._bootstrap_phases import elapsed_ms as _elapsed_ms
+from odibi_anchor._bootstrap_phases import phase as _phase
+from odibi_anchor._bootstrap_phases import record_phase as _record_phase
 from odibi_anchor._recovery import attach_recovery
 from odibi_anchor.codebase._migration_backup import logical_digest
 
@@ -2064,6 +2069,7 @@ def restore_latest(
         )
     if not destination.parent.is_dir():
         raise FileNotFoundError(f"destination parent is not a directory: {destination.parent}")
+    listing_started = time.perf_counter()
     with _snapshot_view(
         root,
         qualified["authority_id"],
@@ -2080,6 +2086,10 @@ def restore_latest(
             _validated_manifests(snapshot_root, remote_entries=remote_entries)
             if snapshot_root.is_dir()
             else []
+        )
+        _record_phase(
+            "restore_listing", outcome="ok", elapsed_ms=_elapsed_ms(listing_started),
+            manifests=len(manifests),
         )
         if not manifests:
             raise _no_snapshots(root, qualified["authority_id"], files=files, databricks=databricks)
@@ -2121,55 +2131,58 @@ def _restore_manifest(
             "destination_artifacts is required to restore a v2 durable snapshot"
         )
     if files is not None:
-        _download_remote_file(
-            files,
-            publication_root,
-            snapshot_root,
-            manifest["snapshot_file"],
-        )
-        if manifest["format"] == _FORMAT_V2:
+        with _phase("restore_download", transport="databricks_files_api"):
             _download_remote_file(
                 files,
                 publication_root,
                 snapshot_root,
-                manifest["artifacts"]["file"],
+                manifest["snapshot_file"],
             )
-        _validate_manifest_payloads(snapshot_root, manifest)
+            if manifest["format"] == _FORMAT_V2:
+                _download_remote_file(
+                    files,
+                    publication_root,
+                    snapshot_root,
+                    manifest["artifacts"]["file"],
+                )
+            _validate_manifest_payloads(snapshot_root, manifest)
     durable_snapshot = snapshot_root / str(manifest["snapshot_file"])
     # Stage on the destination filesystem so hard-link publication is an atomic,
     # no-overwrite directory-entry operation rather than the partial-copy fallback.
     with tempfile.TemporaryDirectory(
         prefix=".odibi-anchor-restore-", dir=destination.parent
     ) as temporary_directory:
-        staged = Path(temporary_directory) / "restore.sqlite3"
-        shutil.copyfile(durable_snapshot, staged)
-        if _sha256(staged) != manifest["sha256"]:
-            raise RuntimeError("staged restore hash mismatch")
-        inspection = _inspect_local_database(staged)
-        if inspection["integrity_check"] != "ok":
-            raise RuntimeError("staged restore failed SQLite integrity check")
-        if inspection["logical_digest"] != manifest["logical_digest"]:
-            raise RuntimeError("staged restore logical digest mismatch")
-        ensure_database_authority(
-            staged,
-            authority_id=qualified["authority_id"],
-            trust_domain="work",
-        )
+        with _phase("restore_verify_database", size_bytes=manifest.get("size_bytes")):
+            staged = Path(temporary_directory) / "restore.sqlite3"
+            shutil.copyfile(durable_snapshot, staged)
+            if _sha256(staged) != manifest["sha256"]:
+                raise RuntimeError("staged restore hash mismatch")
+            inspection = _inspect_local_database(staged)
+            if inspection["integrity_check"] != "ok":
+                raise RuntimeError("staged restore failed SQLite integrity check")
+            if inspection["logical_digest"] != manifest["logical_digest"]:
+                raise RuntimeError("staged restore logical digest mismatch")
+            ensure_database_authority(
+                staged,
+                authority_id=qualified["authority_id"],
+                trust_domain="work",
+            )
         artifacts_status: dict[str, Any]
         if manifest["format"] == _FORMAT_V2:
             assert artifacts_destination is not None
             if not artifacts_destination.parent.exists():
                 artifacts_destination.parent.mkdir(parents=True)
             _reject_symlinks(artifacts_destination.parent, "destination_artifacts")
-            staged_artifacts = Path(temporary_directory) / "artifacts"
-            bundle = snapshot_root / manifest["artifacts"]["file"]
-            extracted = _extract_artifact_bundle(bundle, staged_artifacts)
-            expected = {
-                key: manifest["artifacts"][key]
-                for key in ("file_count", "directory_count", "content_size_bytes")
-            }
-            if extracted != expected:
-                raise RuntimeError("artifact bundle inventory mismatch")
+            with _phase("restore_extract_artifacts", file_count=manifest["artifacts"].get("file_count")):
+                staged_artifacts = Path(temporary_directory) / "artifacts"
+                bundle = snapshot_root / manifest["artifacts"]["file"]
+                extracted = _extract_artifact_bundle(bundle, staged_artifacts)
+                expected = {
+                    key: manifest["artifacts"][key]
+                    for key in ("file_count", "directory_count", "content_size_bytes")
+                }
+                if extracted != expected:
+                    raise RuntimeError("artifact bundle inventory mismatch")
             from odibi_anchor._dispatcher._session import (
                 _relocate_restored_continuity,
             )
@@ -2197,12 +2210,13 @@ def _restore_manifest(
                 })
             created: list[tuple[Path, str, tuple[int, int]]] = []
             try:
-                _fill_owned_destination(staged_artifacts, artifacts_destination, record, created)
-                if not _restore_owned(artifacts_destination, record):
-                    raise RuntimeError("restore destination ownership changed during copy")
-                from odibi_anchor.codebase._workflow_artifact_restore import append_verified_restores
+                with _phase("restore_fill_artifacts"):
+                    _fill_owned_destination(staged_artifacts, artifacts_destination, record, created)
+                    if not _restore_owned(artifacts_destination, record):
+                        raise RuntimeError("restore destination ownership changed during copy")
+                    from odibi_anchor.codebase._workflow_artifact_restore import append_verified_restores
 
-                append_verified_restores(staged, projects=artifacts_destination, manifest=manifest)
+                    append_verified_restores(staged, projects=artifacts_destination, manifest=manifest)
             except Exception as exc:
                 released = _release_owned_destination(
                     artifacts_destination, record, created, remove_root=fresh,
@@ -2230,10 +2244,11 @@ def _restore_manifest(
         else:
             artifacts_status = {"status": "not_included_legacy_v1"}
         try:
-            if record is not None:
-                assert artifacts_destination is not None
-                record = _record_database_intent(artifacts_destination, record, staged)
-            _publish_file_exclusive(staged, destination)
+            with _phase("restore_publish"):
+                if record is not None:
+                    assert artifacts_destination is not None
+                    record = _record_database_intent(artifacts_destination, record, staged)
+                _publish_file_exclusive(staged, destination)
         except Exception as exc:
             if record is None or artifacts_destination is None:
                 raise
@@ -2265,6 +2280,7 @@ def _restore_manifest(
     )
     return {
         "kind": "durable_restore",
+        "status": "restored",
         "action": "created",
         "classification": "restored",
         "destination_db": str(destination),
@@ -2356,6 +2372,7 @@ def resume_restore(
         _fsync_directory(destination)
         return {
             "kind": "durable_restore",
+            "status": "restored",
             "action": "finalized",
             "classification": "restored",
             "destination_db": qualified["destination_db"],

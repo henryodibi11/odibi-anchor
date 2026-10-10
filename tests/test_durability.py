@@ -137,16 +137,27 @@ def test_v2_snapshot_restores_project_artifacts_and_empty_directories(tmp_path: 
         durable_root=durable,
         authority_id="work",
     )
-    restored = durability.restore_latest(
-        durable_root=durable,
-        destination_db=restored_db,
-        destination_artifacts=restored_artifacts,
-        authority_id="work",
-    )
+    from odibi_anchor import _bootstrap_phases
+
+    with _bootstrap_phases.recording() as recorder, _bootstrap_phases.phase("runtime_preparation"):
+        restored = durability.restore_latest(
+            durable_root=durable,
+            destination_db=restored_db,
+            destination_artifacts=restored_artifacts,
+            authority_id="work",
+        )
 
     assert first["manifest"]["format"] == "odibi-anchor-durable-snapshot-v2"
     assert first["manifest"]["artifacts"]["file_count"] == 1
     assert second["action"] == "reused"
+    assert restored["status"] == restored["classification"] == "restored"
+    # Cold-start restore is attributed per step inside the enclosing bootstrap phase.
+    (preparation,) = recorder.summary()["phases"]
+    assert [item["phase"] for item in preparation["sub_phases"]] == [
+        "restore_listing", "restore_verify_database", "restore_extract_artifacts",
+        "restore_fill_artifacts", "restore_publish",
+    ]
+    assert all(item["outcome"] == "ok" for item in preparation["sub_phases"])
     assert restored["artifacts"]["status"] == "restored"
     assert (restored_artifacts / "alpha" / "specs").is_dir()
     assert (restored_artifacts / "alpha" / "problems" / "P-1.md").read_text() == "# Evidence\n"

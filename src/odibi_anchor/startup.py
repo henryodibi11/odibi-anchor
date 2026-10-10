@@ -760,6 +760,16 @@ def bootstrap_managed_project(
             ),
         )
 
+    from odibi_anchor._dispatcher._descriptor import read_descriptor
+
+    try:
+        bound_descriptor = read_descriptor(binding["artifact_root"])
+        descriptor_summary = {
+            "integrity_status": bound_descriptor.status,
+            "defaulted_fields": list(bound_descriptor.defaulted_fields),
+        }
+    except FileNotFoundError:
+        descriptor_summary = {"integrity_status": "absent", "defaulted_fields": []}
     startup_packet = {
         "kind": "managed_startup_packet",
         "status": "ready",
@@ -768,6 +778,8 @@ def bootstrap_managed_project(
         "target_root": prepared["target_root"],
         "artifact_root": binding.get("artifact_root"),
         "binding_source": binding.get("binding_source"),
+        # Visible when routing depends on defaulted descriptor fields (id, project_type).
+        "descriptor": descriptor_summary,
         "guidance": {
             "status": guidance.get("status"),
             "verified_files": guidance.get("verified_file_count"),
@@ -1321,6 +1333,8 @@ def doctor(
         )
         return {
             "kind": "startup_doctor",
+            # One top-level summary: routing is not ready until portfolio preparation runs.
+            "status": "attention",
             "read_only": True,
             "package": {"name": "odibi-anchor", "version": __version__},
             "home": {"path": None, "exists": False, "status": "unconfigured"},
@@ -1403,6 +1417,9 @@ def doctor(
     )
     return {
         "kind": "startup_doctor",
+        # One top-level summary: ready only when the route is exact and, on Databricks, the
+        # SDK is qualified; details stay in routing and capabilities.
+        "status": "ready" if route and (not is_databricks or databricks_capability["qualified"]) else "attention",
         "read_only": True,
         "package": {"name": "odibi-anchor", "version": __version__},
         "home": {"path": str(paths.anchor_home), "exists": paths.anchor_home.is_dir()},

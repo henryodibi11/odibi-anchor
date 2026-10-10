@@ -2,6 +2,71 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.26] - 2026-10-10
+
+Recovery and agent-experience release: the supported descriptor repair and target move for #29
+and #30, deterministic host discovery, and the lifecycle friction found while self-hosting (#39).
+
+### Added
+
+- **Descriptor repair (#29).** `anchor portfolio repair-descriptor --config C --host H --project P
+  --expected-sha256 S [--approve]` (also `odibi_anchor.startup.repair_portfolio_descriptor` and
+  `anchor("project", "repair-descriptor", ...)`). It rebuilds only the route fields from the
+  portfolio target and keeps the Markdown body byte for byte. A dry run returns the exact text;
+  an approved repair writes a backup, an atomic hash-checked replacement and a receipt, then
+  re-reads the result. Refusals are `descriptor_repair_refused` with a classification.
+  `managed_descriptor_damaged` from portfolio preparation now offers the copy-ready dry run.
+- **Route-field protection.** The gate blocks a task edit that changes or damages the bound
+  `PROJECT.md` route fields with `managed_descriptor_route_change`; body-only edits pass.
+- **Target move (#30).** `anchor portfolio move-target` (single, `--mapping` batch, `--dry-run`,
+  `--resume`, `--rollback`) and `odibi_anchor.move_target`. Preflight checks the destination,
+  quiescence (no open task window or non-terminal workflow) and exact hashes. A create-only
+  journal under the artifact root records every step, so a crash at any point resumes or rolls
+  back exactly. New codes: `target_migration_blocked` and `target_migration_incomplete`;
+  `route_target_conflict` gains `migration_pending`, and a workflow bound to a prior target
+  reports `workflow_bound_to_prior_target`. `set_target` refusals name the supported move.
+- **Host discovery and reconcile (#30).** `anchor setup-host ... --portfolio <path> [--host <id>]`
+  records a validated host binding that the launcher prefers over the default search.
+  `setup-host --reconcile` classifies each managed guidance file (`current`, `released_version`,
+  `unmanaged_edit`, `missing`), dry runs by default, and applies with backups; edited files need
+  explicit approval. Drift at bootstrap reports every file and points to the reconcile plan.
+  Released guidance bytes come from `_released_guidance_hashes.json`; regenerate it with
+  `python scripts/generate_released_guidance_hashes.py --write` after each release tag.
+- **Fresh-compute doctor.** `anchor doctor --fresh-compute --config --host --project` walks
+  discovery, guidance, durable lineage, route comparison and launch inputs read-only, each with an
+  exact next operation. `doctor()` now has a top-level `status` (`ready` or `attention`).
+- **Result envelope.** Every dispatcher dict result carries one additive `envelope` key (v1) with
+  `outcome`, `effects`, `retry_safety`, `obligations`, `next_operation` and `error`, identical
+  across in-process, CLI and MCP calls. MCP compact responses are budgeted; the boot banner goes
+  to stderr; the mandatory contract shrank from about 26 KB to under 18 KB with every rule kept.
+- **Snapshot descriptor integrity.** v2 manifests and `snapshot_state` report
+  `descriptor_integrity` per project without blocking.
+
+### Changed
+
+- **Lifecycle friction (#39).** Planned workflow paths no longer consume the checkpoint cap;
+  `task_rebind` restores touched files, known_bad, skills and spec links whose bytes still match;
+  `continuation=True` works after the prior task closed; `test(request_id=...)` replays a result
+  after a client timeout; `request_delivery_approval` accepts `timeout_minutes`; risk-downgrade,
+  capture and checkpoint-cap refusals carry exact corrective calls; `task_rebind(abandon=True)`
+  closes an unrestorable orphan without granting authority.
+- **Visibility of defaulted descriptor fields.** The markdown project listing marks
+  `(defaulted: …)`, and the startup packet reports `descriptor.integrity_status` and
+  `descriptor.defaulted_fields`, so a boot that depends on a defaulted `id` is visible.
+- **Restore timings.** A performed restore reports `status: "restored"`, and cold-start restore
+  is timed per step (`restore_listing`, `restore_download`, `restore_verify_database`,
+  `restore_extract_artifacts`, `restore_fill_artifacts`, `restore_publish`) inside
+  `runtime_preparation`.
+- Restore fill and cleanup act through held directory descriptors where the platform supports
+  `dir_fd`.
+
+### Fixed
+
+- Deriving a missing `project_type` no longer raises when `target_root` is a symlink loop
+  (Python 3.11 and 3.12); before, one such descriptor broke project listing for every project.
+- Route lines inserted into a CRLF descriptor follow its line endings even when the closing
+  `---` has no trailing newline.
+
 ## [0.3.25] - 2026-10-10
 
 Hotfix for a 0.3.24 compatibility regression found by live Databricks validation.
@@ -21,7 +86,7 @@ Hotfix for a 0.3.24 compatibility regression found by live Databricks validation
 ## [0.3.24] - 2026-10-10
 
 Hardening release: contain and diagnose the incidents reported in #24, #28, #29, #30 and #31.
-The safe target-migration and descriptor-repair operations ship in 0.3.25.
+The safe target-migration and descriptor-repair operations ship in 0.3.26.
 
 ### Fixed
 

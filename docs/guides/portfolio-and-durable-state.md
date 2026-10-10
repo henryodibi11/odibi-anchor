@@ -365,8 +365,11 @@ both operations refuse.
 
 These are local filesystem primitives: exclusive creation, identity comparison, and atomic
 rename. They detect concurrent changes and keep cleanup from reaching another writer's
-content, but they are not distributed locks. Path checks and the following operation are not
-one atomic step. Power-loss durability depends on the host filesystem honoring `fsync`. The
+content, but they are not distributed locks. Where the platform supports `dir_fd` operations
+(for example Linux), restore fill and cleanup act relative to held directory descriptors, so a
+parent swapped for a symlink or another directory after a check cannot redirect the following
+create, unlink, or rmdir. Elsewhere, such as on Windows, path checks and the following operation
+are not one atomic step. Power-loss durability depends on the host filesystem honoring `fsync`. The
 Databricks Files API offers no compare-and-swap. A concurrent upload of identical bytes is
 accepted after a byte-for-byte readback, and anything else fails closed.
 

@@ -157,12 +157,17 @@ Cleanup requires an exact inventory and classification as active, evidence, roll
 disposable.
 
 Never replace a managed project's whole `PROJECT.md`; edit it only in place and preserve its
-frontmatter route fields `id`, `project_type`, and `target_root`. If startup reports
-`managed_descriptor_damaged` or `route_target_conflict`, stop and give the project owner the
-error context; this version has no supported descriptor repair or move-target operation, so do
-not edit the descriptor, portfolio, or state by hand. `anchor("project", "set_target", ...)`
-retargets only a never-launched project and otherwise refuses with
-`project_retarget_requires_migration`.
+frontmatter route fields `id`, `project_type`, and `target_root`. Never hand-edit route fields,
+the portfolio, or state; the gate blocks route changes with `managed_descriptor_route_change`.
+If startup reports `managed_descriptor_damaged`, repair `PROJECT.md` only through the
+owner-approved `anchor portfolio repair-descriptor` (dry run first, then `--approve` with the
+same expected SHA-256). To change a launched project's target, the owner runs
+`anchor portfolio move-target` (dry run first; it refuses unless no task is open).
+`anchor("project", "set_target", ...)` retargets only a never-launched project and otherwise
+refuses with `project_retarget_requires_migration`. For edited or stale managed guidance, run
+`anchor setup-host <adapter> --target <root> --reconcile` (a dry run) before any approved apply;
+on a fresh Databricks compute, `anchor doctor --fresh-compute` explains each startup step without
+writing.
 
 ## Related skills
 

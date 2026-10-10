@@ -470,12 +470,20 @@ def test_shipped_released_table_recognizes_v0324_launchers():
     module._released_table.cache_clear()
     table = module._released_table()
 
+    def covers_v0324(span):
+        # The upper bound grows when later tags ship the same bytes (regenerated per release).
+        first, last = (tuple(int(part) for part in version.split(".")) for version in span)
+        return first <= (0, 3, 24) <= last
+
     assert table[".assistant/agent_bootstrap.py"][
         "ad4c2bc8838f823bea9c27b9ebd2649ae2d02072a500e30e332f76f1197b8bde"
-    ] == ["0.3.24", "0.3.24"]
-    assert table["agent_bootstrap.py"][
+    ][0] == "0.3.24"
+    assert covers_v0324(table[".assistant/agent_bootstrap.py"][
+        "ad4c2bc8838f823bea9c27b9ebd2649ae2d02072a500e30e332f76f1197b8bde"
+    ])
+    assert covers_v0324(table["agent_bootstrap.py"][
         "02c55115d8ec9dc52bd102d1ef6b95a82bb945db5db5c0debe45284423a54993"
-    ] == ["0.1.0", "0.3.24"]
+    ])
 
 
 # ── host-root source launcher ────────────────────────────────────────────────

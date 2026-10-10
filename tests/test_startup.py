@@ -61,6 +61,11 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
     config = tmp_path / "anchor.toml"
     instruction.mkdir()
     target.mkdir()
+    # A real 0.3.23-era descriptor without an id line: the packet must surface the default.
+    artifact.mkdir(parents=True)
+    (artifact / "PROJECT.md").write_text(
+        f"---\ntarget_root: {target}\nproject_type: referenced\n---\n# Alpha\n", encoding="utf-8",
+    )
     write_portfolio(config, {
         "schema_version": 1,
         "authority": {"id": "owner", "trust_domain": "work"},
@@ -125,6 +130,7 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
         "kind": "managed_startup_packet", "status": "ready", "project_id": "alpha",
         "host_id": "local", "target_root": str(target), "artifact_root": str(artifact),
         "binding_source": "explicit",
+        "descriptor": {"integrity_status": "intact", "defaulted_fields": ["id"]},
         "guidance": {"status": "unchanged", "verified_files": 92, "verified_skills": 18},
         "local_state": prepared["local_state"],
         "restore": {"action": "not_applicable", "classification": "local_present"},
@@ -1102,6 +1108,7 @@ def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
                                  "ANCHOR_PROJECT_ROOT": str(target), "TOKEN": "secret"})
 
     assert result["read_only"] is True
+    assert result["status"] == "attention"
     assert result["route_inputs"] == {"ANCHOR_HOME": str(home), "ANCHOR_PROJECT_ID": "alpha",
                                       "ANCHOR_PROJECT_ROOT": str(target)}
     assert result["routing"]["status"] == "ambiguous_or_invalid"
@@ -1110,6 +1117,13 @@ def test_doctor_is_read_only_secret_safe_and_truthful(tmp_path):
     assert result["concurrency"]["status"] == "unqualified"
     assert "secret" not in repr(result)
     assert set(tmp_path.rglob("*")) == before
+
+    project = home / "workspace" / "projects" / "alpha"
+    project.mkdir(parents=True)
+    (project / "PROJECT.md").write_text(f"---\ntarget_root: {target}\n---\n", encoding="utf-8")
+    registered = doctor(environment={"ANCHOR_HOME": str(home), "ANCHOR_PROJECT_ID": "alpha",
+                                     "ANCHOR_PROJECT_ROOT": str(target)})
+    assert (registered["status"], registered["routing"]["status"]) == ("ready", "exact")
 
 
 def test_doctor_directs_unconfigured_databricks_to_portfolio_prepare(monkeypatch):
@@ -1124,6 +1138,7 @@ def test_doctor_directs_unconfigured_databricks_to_portfolio_prepare(monkeypatch
     })
 
     assert result["read_only"] is True
+    assert result["status"] == "attention"
     assert result["home"] == {"path": None, "exists": False, "status": "unconfigured"}
     assert result["database"] == {
         "path": None, "exists": False, "status": "unconfigured"
@@ -1168,12 +1183,13 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.25"',
+        "install_command": '%pip install "odibi-anchor[databricks]==0.3.26"',
         "restart_required_after_install": True,
     }
+    assert result["status"] == "attention"
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.25"',
+        "command": '%pip install "odibi-anchor[databricks]==0.3.26"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

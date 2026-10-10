@@ -70,7 +70,10 @@ class DescriptorIntegrity:
 def parse_descriptor_text(
     text: str, *, path: str, sha256: str | None, expected_id: str | None = None,
 ) -> DescriptorIntegrity:
-    """Classify descriptor text without consulting or changing the filesystem."""
+    """Classify descriptor text without changing the filesystem.
+
+    Deriving a missing ``project_type`` may read path metadata (symlink resolution).
+    """
 
     def result(status: IntegrityStatus, detail: str | None = None, **extra: Any) -> DescriptorIntegrity:
         return DescriptorIntegrity(path, status, sha256, detail=detail, text=text, **extra)
@@ -132,9 +135,7 @@ def parse_descriptor_text(
     if "project_type" not in values:
         configured = Path(values["target_root"])
         target = configured if configured.is_absolute() else artifact_root / configured
-        same = os.path.normcase(str(target.resolve(strict=False))) == os.path.normcase(
-            str(artifact_root.resolve(strict=False))
-        )
+        same = _same_location(target, artifact_root)
         values["project_type"] = "managed" if same else "referenced"
         defaulted.append("project_type")
     if values["project_type"] not in _PROJECT_TYPES:
@@ -150,6 +151,23 @@ def parse_descriptor_text(
             fields=values,
         )
     return result("intact", fields=values, defaulted_fields=tuple(defaulted))
+
+
+def _same_location(target: Path, artifact_root: Path) -> bool:
+    """Compare locations for project_type derivation without ever raising.
+
+    Resolution can fail (for example a symlink loop raises RuntimeError on Python 3.11 and
+    3.12); fall back to a lexical comparison of absolute, normalized paths. Routing never reads
+    project_type, so the fallback only affects the reported label.
+    """
+    try:
+        return os.path.normcase(str(target.resolve(strict=False))) == os.path.normcase(
+            str(artifact_root.resolve(strict=False))
+        )
+    except (OSError, RuntimeError):
+        return os.path.normcase(os.path.normpath(os.path.abspath(target))) == os.path.normcase(
+            os.path.normpath(os.path.abspath(artifact_root))
+        )
 
 
 def read_descriptor(project_root: str | Path) -> DescriptorIntegrity:
@@ -196,7 +214,10 @@ def render_route_update(integrity: DescriptorIntegrity, updates: dict[str, str])
         closing = next(
             index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"
         )
-        ending = "\r" if lines[closing].endswith("\r") else ""
+        # Follow the frontmatter's line-ending style, not only the closing line's: a closing
+        # delimiter without a trailing newline carries no ending of its own.
+        crlf = any(line.endswith("\r") for line in lines[: closing + 1])
+        ending = "\r" if crlf else ""
         lines[closing:closing] = [f"{key}: {updates[key]}{ending}" for key in absent]
     return "\n".join(lines)
 

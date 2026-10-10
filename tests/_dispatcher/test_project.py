@@ -748,6 +748,46 @@ def test_descriptor_without_id_or_project_type_boots_like_0_3_23(tmp_path: Path)
     assert caught.value.context["integrity_status"] == "malformed_frontmatter"  # type: ignore[attr-defined]
 
 
+def test_project_type_derivation_survives_a_symlink_loop_target(tmp_path: Path) -> None:
+    """A looping target_root must not crash listing for every project (Python 3.11/3.12)."""
+    _target, artifact = _referenced(tmp_path)
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    descriptor = artifact / "PROJECT.md"
+    text = _drop_line(descriptor.read_text(encoding="utf-8"), "project_type:")
+    descriptor.write_text(
+        "".join(
+            f"target_root: {loop}\n" if line.startswith("target_root:") else line
+            for line in text.splitlines(keepends=True)
+        ),
+        encoding="utf-8",
+    )
+    project_action(tmp_path, "create", name="beta", output_format="dict")
+
+    listed = {item["id"]: item for item in project_action(tmp_path, "list", output_format="dict")["projects"]}
+
+    assert listed["alpha"]["integrity_status"] == "intact"
+    assert listed["alpha"]["project_type"] == "referenced"
+    assert listed["beta"]["integrity_status"] == "intact"
+    markdown = project_action(tmp_path, "list", output_format="markdown")
+    assert "**alpha**" in markdown and "(defaulted: project_type)" in markdown
+
+
+def test_inserted_route_lines_follow_crlf_style_without_trailing_newline(tmp_path: Path) -> None:
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    frontmatter = _drop_line(descriptor.read_text(encoding="utf-8"), "project_type:").split("---\n", 2)[1]
+    descriptor.write_bytes(("---\n" + frontmatter + "---").replace("\n", "\r\n").encode())
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    project_action(tmp_path, "set_target", "alpha", target=replacement, output_format="dict")
+
+    written = descriptor.read_bytes()
+    assert b"project_type: referenced\r\n" in written
+    assert written.count(b"\n") == written.count(b"\r\n")
+
+
 def test_set_target_inserts_defaulted_route_lines(tmp_path: Path) -> None:
     _target, artifact = _referenced(tmp_path)
     descriptor = artifact / "PROJECT.md"

@@ -935,6 +935,8 @@ def _render_project_context(result: dict[str, Any]) -> str:
             marker = " (active)" if item["id"] == active_project else ""
             if item.get("integrity_status", "intact") != "intact":
                 marker += f" (descriptor {item['integrity_status']})"
+            if item.get("defaulted_fields"):
+                marker += f" (defaulted: {', '.join(item['defaulted_fields'])})"
             lines.append(f"- **{item['id']}**{marker} — {item['status']} — `{item['path']}`")
     else:
         lines.append("No managed projects. Create one with `anchor('project', 'create', name='...')`.")
