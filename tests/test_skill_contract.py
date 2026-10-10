@@ -42,3 +42,22 @@ def test_managed_startup_guidance_uses_launcher_resolved_install_preflight():
     assert 'os.environ.update(prepared["environment"])' in setup_skill
     assert 'prepared["next_operation"]["arguments"]["script"]' in setup_skill
     assert "only to recover or diagnose" in setup_skill
+
+
+def test_closure_reconciles_managed_artifacts_to_verified_outcomes():
+    instructions = " ".join(Path(".assistant_instructions.md").read_text(encoding="utf-8").split())
+    workflow = Path(".assistant/references/odibi-anchor/workflow.md").read_text(encoding="utf-8")
+    details = " ".join(workflow.split("### Reconcile managed artifacts at closure", 1)[1].split())
+
+    assert "Before closure, reconcile linked or touched Spec, Problem, Work Item, and `PROJECT.md`" in instructions
+    assert "statuses to verified outcomes only" in instructions
+    assert "- Outcome, files/artifacts changed, and statuses reconciled" in instructions
+    for operation in (
+        'anchor("spec", "done"',
+        'anchor("problem", "close"',
+        'anchor("work_item", "close"',
+        "implementation_disposition",
+    ):
+        assert operation in details
+    assert "Partial work stays open" in details
+    assert "Never mark an artifact done, closed, or completed to satisfy a checklist" in details

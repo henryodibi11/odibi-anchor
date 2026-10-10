@@ -1659,9 +1659,22 @@ def test_databricks_restore_confirms_volume_root_before_first_use(
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("listing_order", ["native", "reversed"])
 def test_parent_substitution_during_copy_cannot_redirect_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, listing_order: str,
 ) -> None:
+    if listing_order == "reversed":
+        # Directory listing order is filesystem-dependent (it differed on GitHub runners);
+        # restore must visit artifacts in the same order regardless.
+        real_walk = durability.os.walk
+
+        def reversed_walk(top, *args, **kwargs):
+            for directory, directories, files in real_walk(top, *args, **kwargs):
+                directories.reverse()
+                files.reverse()
+                yield directory, directories, files
+
+        monkeypatch.setattr(durability.os, "walk", reversed_walk)
     durable, _artifacts, _snapshot = _v2_lineage(tmp_path)
     destination_db, destination_artifacts, _neighbor = _restore_paths(tmp_path)
     victim = tmp_path / "victim"

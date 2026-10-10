@@ -665,12 +665,17 @@ def _open_owned_root(destination: Path, record: Mapping[str, Any]) -> int | None
 
 
 def _walk_artifacts(root: Path) -> Iterator[Path]:
-    """Visit staged directories before their children without sorting the whole tree."""
+    """Visit staged directories before their children in a filesystem-independent order.
+
+    Each level is sorted (directory listing order differs between filesystems); the whole
+    tree is never sorted at once.
+    """
     for directory, directories, files in os.walk(root):
+        directories.sort()  # in place, so os.walk also descends in this order
         parent = Path(directory)
         for name in directories:
             yield parent / name
-        for name in files:
+        for name in sorted(files):
             yield parent / name
 
 
