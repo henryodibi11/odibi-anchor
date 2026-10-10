@@ -5,7 +5,9 @@ or retired example domains. This test tokenizes every tracked text file (and the
 XML members of tracked zip containers such as .xlsx) and fails when a denylisted token appears.
 Third-party snapshots under ``.assistant/references/snapshots/`` are excluded.
 
-The denylist stores SHA-256 digests of lower-cased tokens, never the plaintext terms. A token is
+The denylist stores SHA-256 digests of lower-cased tokens, never the plaintext terms. Unsalted
+digests of short tokens can be recovered by guessing, so this is a regression guard, not a way to
+conceal the terms (Git history also retains earlier plaintext). A token is
 a lower-cased run of ``[a-z0-9]`` parts joined by ``_`` or ``-``; the whole run and every
 contiguous sub-span of up to four parts are checked, so ``prefix_<token>`` cannot hide a term.
 

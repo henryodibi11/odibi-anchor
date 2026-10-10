@@ -341,7 +341,7 @@ def test_host_package_version_pin_round_trips_and_is_documented(tmp_path):
     )["path"])["hosts"]["amp-host"]
 
 
-@pytest.mark.parametrize("pin", ["latest", "0.3", "0.3.24rc1", "v0.3.24", "00.3.24", 324])
+@pytest.mark.parametrize("pin", ["latest", "0.3", "0.3.24rc1", "v0.3.24", "00.3.24", 324, "0.3.23", "0.2.99"])
 def test_host_package_version_pin_rejects_inexact_values(tmp_path, pin):
     portfolio = _portfolio(tmp_path)
     portfolio["hosts"]["amp-host"]["package_version"] = pin

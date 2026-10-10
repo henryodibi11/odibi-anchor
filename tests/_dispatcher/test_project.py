@@ -693,6 +693,28 @@ def test_intact_referenced_descriptor_keeps_target_and_artifact_separate(tmp_pat
     )
 
 
+def test_descriptor_yaml_list_under_non_route_field_stays_bootable(tmp_path: Path) -> None:
+    """0.3.23 ignored unindented list items; they must not turn into descriptor damage."""
+    target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    text = descriptor.read_text(encoding="utf-8")
+    descriptor.write_text(text.replace("status: active\n", "status: active\ntags:\n- data\n- quality\n"),
+                          encoding="utf-8")
+
+    binding = resolve_route_binding(
+        tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-list",
+    )
+    assert binding is not None and binding.target_root == str(target)
+
+    descriptor.write_text(text.replace(f"target_root: {target}\n", f"target_root: {target}\n- extra\n"),
+                          encoding="utf-8")
+    with pytest.raises(ValueError, match="managed_descriptor_damaged") as caught:
+        resolve_route_binding(
+            tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-route-list",
+        )
+    assert caught.value.context["integrity_status"] == "malformed_frontmatter"  # type: ignore[attr-defined]
+
+
 def _drop_line(text: str, prefix: str) -> str:
     return "".join(line for line in text.splitlines(keepends=True) if not line.startswith(prefix))
 

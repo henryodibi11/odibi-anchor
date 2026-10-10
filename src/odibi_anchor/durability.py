@@ -1173,13 +1173,24 @@ def _ensure_authority_marker(root: Path, authority: str, *, files: Any | None, s
                     stream.write(expected)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.link(temporary, marker)
+                try:
+                    os.link(temporary, marker)
+                except OSError as exc:
+                    if isinstance(exc, FileExistsError):
+                        raise
+                    if exc.errno not in (errno.EXDEV, errno.ENOSYS, errno.EPERM, errno.EACCES):
+                        raise
+                    # Filesystems without hard links: every writer publishes identical
+                    # canonical bytes, so an atomic rename never leaves a partial marker
+                    # or replaces it with different content.
+                    os.replace(temporary, marker)
                 _fsync_directory(marker.parent)
                 return "created"
             except FileExistsError:
                 pass
             finally:
-                os.unlink(temporary)
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary)
         if marker.is_symlink() or not marker.is_file() or marker.read_bytes() != expected:
             raise RuntimeError(f"durable authority marker mismatch: {marker}")
         return "present"

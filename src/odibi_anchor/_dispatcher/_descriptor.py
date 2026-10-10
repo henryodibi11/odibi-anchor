@@ -7,7 +7,8 @@ read-only and never repairs or rewrites a damaged descriptor. Rules:
 - The block ends at the next ``---`` line; an unterminated block is malformed.
 - Blank and ``#`` comment lines are ignored. Other unindented lines must be
   ``key: value``; duplicate keys are malformed.
-- Indented lines are tolerated as nested content of a non-route field only.
+- Indented lines and unindented ``- item`` list lines are tolerated as nested content
+  of a non-route field only.
 - ``id``, ``project_type`` and ``target_root`` must be present and non-empty.
   ``project_type`` must be ``managed`` or ``referenced``; ``id`` must equal the
   managed directory name. Route values may use one matching pair of quotes.
@@ -78,7 +79,9 @@ def parse_descriptor_text(
             break
         if not stripped or stripped.startswith("#"):
             continue
-        if line[0] in " \t":
+        # Indented lines and unindented YAML list items ("- value") continue the previous
+        # non-route field; 0.3.23 ignored both, so they must keep parsing.
+        if line[0] in " \t" or stripped == "-" or stripped.startswith("- "):
             if previous_key in ROUTE_FIELDS:
                 return result(
                     "malformed_frontmatter",

@@ -13,21 +13,25 @@ The safe target-migration and descriptor-repair operations ship in 0.3.25.
   (exclusive `mkdir`, inode identity and a per-invocation ownership marker). Cleanup removes only
   entries that invocation created, while its identity still holds. A directory created by a
   competing writer is never deleted; that case raises `restore_destination_conflict`.
-- **Restore qualification.** Startup initializes empty local state only on confirmed first use
-  (restore `classification: no_lineage`). An unreachable durable root raises
+- **Restore qualification.** Startup initializes empty local state only when restore classifies
+  first use (`classification: no_lineage`: the durable root is reachable and has no authority
+  marker). An unreachable durable root raises
   `durable_root_unavailable`. A lineage whose authority marker exists but whose snapshots are gone
   raises `durable_lineage_missing`. A plain `FileNotFoundError` during restore is no longer read
   as "no snapshot". The startup packet reports `restore.classification`
   (`restored`, `no_lineage`, `local_present`, `not_configured`). A durable root writes
   `<durable_root>/<authority_id>/AUTHORITY.json` on its first publication, and existing lineages
-  get it on their next publication. Older readers ignore the marker.
+  get it on their next publication. Older readers ignore the marker. Two cases still classify as
+  first use: a local durable root that is an empty, unmounted mount point, and a lineage published
+  before 0.3.24 (no marker yet) whose snapshots disappeared.
 - **Recoverable partial restore.** A failure after the artifact copy leaves an owned record and
   raises `restore_incomplete`, with public, reversible `anchor state resume` and
   `anchor state abandon` operations (also `odibi_anchor.resume_restore` / `abandon_restore`).
   Abandon moves the owned tree to a preserved quarantine path and never deletes it.
 - **Descriptor integrity (#29).** `PROJECT.md` route frontmatter is parsed strictly. A missing,
   malformed, unreadable or incomplete descriptor raises `managed_descriptor_damaged` with exact
-  context. A referenced project no longer silently falls back to its artifact root as its target.
+  context. Indented content and `- item` lists under non-route fields stay accepted, as in 0.3.23.
+  A referenced project no longer silently falls back to its artifact root as its target.
   Damaged descriptors are never rewritten during detection. A damaged project that is the
   remembered selector no longer breaks `project list` and `status` for other projects.
 - **Structured route conflicts (#30).** The generic target-hint error is now
@@ -52,7 +56,8 @@ The safe target-migration and descriptor-repair operations ship in 0.3.25.
   `TypeError`. `preflight` also looks for ruff and pyright beside the running interpreter and
   reports the resolved paths. `anchor("test")` accepts `timeout=` or `ANCHOR_TEST_TIMEOUT`
   (bounded to 600 s) and reports per-test timeouts explicitly. The review diffstat counts
-  deletions. `touched` marks untracked new files as created. Workflow plan list fields are
+  deletions. `touched` marks Git-untracked files as created, including files that were already
+  untracked before the session. Workflow plan list fields are
   shape-checked at create. A gate before `implemented` warns with the exact next call.
   `task_rebind` returns its required next operations. `help("workflow")` documents the enforced
   order and the review findings schema.
@@ -62,19 +67,20 @@ The safe target-migration and descriptor-repair operations ship in 0.3.25.
 - Bootstrap phase timings in the managed startup packet (`timings`), bounded Workspace API and
   package-index timeouts (`bootstrap_phase_timeout`), and `scripts/bootstrap_benchmark.py` (#31).
 - Optional exact package pin: `ANCHOR_PACKAGE_VERSION` or `hosts.<id>.package_version`. A pinned
-  launcher skips the package index. Pins must be 0.3.24 or newer, and every host must run 0.3.24
-  or newer before the portfolio field is added.
+  launcher skips the package index. Pins must be 0.3.24 or newer (portfolio validation and the
+  launcher both enforce this), and every host must run 0.3.24 or newer before the portfolio field
+  is added.
 - Portfolio-not-found errors list every searched path in precedence order (#30). The search
   precedence itself is unchanged.
 - An incident replay harness (`tests/integration`) with a fake Databricks runtime and crash
   injection replays the reported incidents end to end.
 - The owner Slack transport accepts the legacy `CW_SLACK_*` names, only when every
-  `ANCHOR_SLACK_*` name is absent. The two sets are never mixed.
+  `ANCHOR_SLACK_*` name is absent or empty. The two sets are never mixed.
 
 ### Changed
 
 - Examples, packaged guidance and test fixtures use one neutral retail domain. A guard test blocks
-  reintroduction. Memory project routing keeps only the `odibi_anchor` fragment; other roots
+  reintroduction; it is a regression guard, not a way to conceal the blocked terms. Memory project routing keeps only the `odibi_anchor` fragment; other roots
   resolve to their directory name, so exact roots are unchanged. The table profiler no longer
   treats `mw`, `kwh` and `mwh` name suffixes as measure-name hints (`capacity` still is), and such
   numeric columns remain MEASURE through the fallback.
@@ -82,7 +88,8 @@ The safe target-migration and descriptor-repair operations ship in 0.3.25.
 ### Unchanged boundaries
 
 - Single-writer restore remains required. Ownership protects against a competing local writer but
-  is not a distributed lock. On Databricks, the root check confirms the Unity Catalog Volume, so a
+  is not a distributed lock, and each ownership check is not atomic with the removal that follows
+  it. On Databricks, the root check confirms the Unity Catalog Volume, so a
   mistyped subdirectory inside an existing Volume is treated as first use. All Databricks paths in
   this release are verified with fakes, not live workspaces.
 - Relative `touched` paths still resolve against `target_root` in every mode.

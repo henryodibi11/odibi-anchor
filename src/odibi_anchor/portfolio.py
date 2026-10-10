@@ -25,6 +25,7 @@ _ADAPTERS = frozenset({"amp", "claude", "databricks", "chatgpt"})
 _ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
 _PROJECT_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _PACKAGE_VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+_MINIMUM_PINNABLE_VERSION = (0, 3, 24)
 _SECRET = re.compile(r"(?:^|_)(?:secret|token|password|passwd|credential|api_key|private_key)(?:$|_)", re.I)
 _PERSONA_FORBIDDEN = frozenset(
     {
@@ -217,10 +218,12 @@ def _structural(portfolio: Any) -> dict[str, Any]:
         if "package_version" in host and (
             not isinstance(host["package_version"], str)
             or not _PACKAGE_VERSION.fullmatch(host["package_version"])
+            # Older managed launchers ignore pins, so the launcher refuses pins below 0.3.24.
+            or tuple(int(part) for part in host["package_version"].split(".")) < _MINIMUM_PINNABLE_VERSION
         ):
             raise ValueError(
                 f"hosts.{host_id}.package_version must be an exact stable release "
-                "MAJOR.MINOR.PATCH such as 0.3.24"
+                "MAJOR.MINOR.PATCH of 0.3.24 or newer"
             )
 
     projects = _table(root.get("projects", {}), "projects")

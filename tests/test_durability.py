@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import sqlite3
@@ -1450,6 +1451,31 @@ def test_restore_classifies_local_first_use_missing_root_and_missing_lineage(tmp
     assert cast(Any, missing.value).error_code == "durable_lineage_missing"
     assert cast(Any, missing.value).next_operations[0]["copy_ready"].startswith("anchor state list ")
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("refusal", [errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EXDEV])
+def test_snapshot_publishes_authority_marker_where_hard_links_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refusal: int,
+) -> None:
+    """SMB/NAS/FUSE durable roots refuse link(); snapshots must keep working there."""
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    source = tmp_path / "live.db"
+    _database(source)
+
+    def refuse_hard_links(*_args, **_kwargs):
+        raise OSError(refusal, "hard links refused")
+
+    monkeypatch.setattr(durability.os, "link", refuse_hard_links)
+    first = durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+    marker = durable / "work" / "AUTHORITY.json"
+    assert first["authority_marker"] == "created"
+    assert json.loads(marker.read_text()) == {
+        "authority_id": "work", "format": "odibi-anchor-durable-authority-v1",
+    }
+    second = durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+    assert second["authority_marker"] == "present"
+    assert not [path.name for path in marker.parent.iterdir() if path.name.startswith(".AUTHORITY")]
 
 
 def test_existing_lineage_without_marker_restores_and_backfills_marker(tmp_path: Path) -> None:
