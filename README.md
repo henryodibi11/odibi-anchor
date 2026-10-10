@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.29"
+python -m pip install "odibi-anchor==0.3.30"
 anchor help
 ```
 
@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.29"
+%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.30"
 dbutils.library.restartPython()
 ```
 

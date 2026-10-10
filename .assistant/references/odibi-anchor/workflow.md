@@ -1191,3 +1191,24 @@ allowlisted source path as `file` evidence. A later independent task and source 
 then verify and activate it mechanically; a second independent verification can confirm it.
 Never encode preferences, policy, credentials, arbitrary expressions, or claims not completely
 entailed by the exact JSON-pointer assertions.
+
+### Reconcile managed artifacts at closure
+
+Before closing a task, bring every Spec, Problem, Work Item, and `PROJECT.md` the task linked or
+touched in line with what was actually verified. A status records evidence, not intent.
+
+- Spec: `anchor("spec", "done", "<name>")` only when its success criteria were verified;
+  otherwise leave it executing and record what remains.
+- Problem: `anchor("problem", "update", "<id>", status=..., next_action="...")` for progress;
+  `anchor("problem", "close", "<id>", outcome="closed" or "inconclusive")` only after critical
+  hypotheses are resolved, deferred, or inconclusive.
+- Work Item: `anchor("work_item", "update", "<id>", ...)` for remaining work;
+  `anchor("work_item", "close", "<id>", outcome="completed" or "cancelled",
+  implementation_disposition=...)` with a truthful disposition and any `reopening_triggers`.
+- `PROJECT.md`: edit status text in its body in place; never replace frontmatter or the file.
+
+Partial work stays open with the remaining work recorded; blocked work records its blocker;
+use `inconclusive`, `cancelled`, `deferred`, or `superseded` when they are the truth. Never mark
+an artifact done, closed, or completed to satisfy a checklist or without evidence. Register
+direct edits with `anchor("touched", "<absolute_path>")`, re-read each artifact after writing it,
+and list the reconciled statuses in the terminal return.

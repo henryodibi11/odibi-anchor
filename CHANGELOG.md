@@ -2,6 +2,28 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.30] - 2026-10-10
+
+Agents now close the loop on managed artifacts, and GitHub CI is green again.
+
+### Changed
+
+- **Reconcile managed artifacts at closure.** The operating contract now tells agents to bring every
+  Spec, Problem, Work Item and `PROJECT.md` they linked or touched in line with the verified
+  outcome before closing a task, never beyond it, and the terminal return reports the reconciled
+  statuses. `workflow.md` "Contract details" names the exact operations (`spec done`,
+  `problem update`/`close`, `work_item update`/`close`) and the rules: partial work stays open with
+  the remaining work recorded, blocked work records its blocker, and nothing is marked done,
+  closed or completed to satisfy a checklist. The contract stays under its size limit by trimming
+  wording that repeated rules stated elsewhere.
+
+### Fixed
+
+- **Restore fill order no longer depends on the filesystem.** Restore fill visited staged files in
+  raw `os.walk` order, which differs between filesystems; GitHub runners exposed it as a failing
+  parent-substitution test on main since 0.3.28. Each directory level is now sorted, still
+  parent-first, and the regression test also runs with a reversed listing order.
+
 ## [0.3.29] - 2026-10-10
 
 Hotfix for the Databricks guidance metadata receipt, found by live validation of 0.3.28.
