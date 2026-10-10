@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.3.27"
+python -m pip install "odibi-anchor==0.3.28"
 anchor help
 ```
 

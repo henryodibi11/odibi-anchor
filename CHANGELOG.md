@@ -2,6 +2,44 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.28] - 2026-10-10
+
+Faster cold starts and fewer wasted agent round trips.
+
+### Changed
+
+- **Restore unpacking is linear.** Validating a restored artifact bundle compared each file against
+  every earlier entry, so time grew with the square of the file count (a 25.5 s step in a live
+  Databricks cold boot). Collision, duplicate, traversal and limit checks are unchanged; 2,000
+  files now validate in about 0.15 s instead of 12 s. Restore fill no longer sorts the whole tree.
+- **Guidance metadata receipt on repeat boots.** On Databricks, the third and later boots on the
+  same compute compare Workspace file metadata (one listing per guidance directory) with a
+  compute-local receipt instead of re-reading every guidance file. The first boot on a compute adds
+  no calls, the second records the receipt, and any difference falls back to full content
+  verification. The startup packet reports `guidance.verification` (`content` or
+  `metadata_receipt`); metadata equality is not a content hash.
+- **Every missing prerequisite at once.** `anchor("task")` and `anchor("learning", "capture")`
+  refusals keep their first message but list every independent problem in
+  `context.problems`, with one copy-ready corrected call where it can be determined.
+- **Start-then-check for long test runs.** `anchor("test", ..., wait_seconds=N)` (0–90) returns a
+  `running` packet with a copy-ready `poll=True` call when the run outlives the wait; finalization
+  and workflow measurement happen in the polling call. A `request_id` is reserved before the run
+  starts, so a concurrent duplicate never runs twice; after a restart, polling fails closed.
+
+### Fixed
+
+- **Clearer edge failures.**
+  - The launcher and `doctor` install with `pip --no-cache-dir` and explain that a just-published
+    release can take minutes to appear (never add `--pre`).
+  - A rejected delivery approval names each failed check (reply text, owner, transport, message
+    ids) without echoing the reply (`delivery_approval_mismatch`).
+  - Delivery readback failures report the endpoint, HTTP status and retry-after
+    (`destination_readback_unavailable`).
+  - `anchor("doctor")` and other module functions called as actions point to the exact import
+    (`module_function_not_action`).
+  - The `stale_plan` refusal and `help("workflow")` give the rework order that avoids a
+    dirty-worktree refusal.
+
 ## [0.3.27] - 2026-10-10
 
 Hotfix for a Databricks serverless install failure.

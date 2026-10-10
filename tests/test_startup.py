@@ -1183,13 +1183,13 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.27"',
+        "install_command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.28"',
         "restart_required_after_install": True,
     }
     assert result["status"] == "attention"
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.27"',
+        "command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.28"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }

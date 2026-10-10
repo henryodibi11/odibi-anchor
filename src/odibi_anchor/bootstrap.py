@@ -1673,11 +1673,12 @@ def init(
         """
         from odibi_anchor._dispatcher._envelope import dispatch_with_envelope
 
-        def core_with_diagnostics(action, *call_args, **call_kwargs):
+        # Positional-only-by-convention name: actions such as safe take an action= keyword.
+        def core_with_diagnostics(_action, *call_args, **call_kwargs):
             try:
-                return _anchor_core(action, *call_args, **call_kwargs)
+                return _anchor_core(_action, *call_args, **call_kwargs)
             except Exception as exc:
-                if action == "task":
+                if _action == "task":
                     from odibi_anchor._dispatcher._action_preparation import enrich_task_exception
                     enrich_task_exception(exc, call_args, call_kwargs, session_state=_SESSION_STATE,
                                           session_timings=_SESSION_TIMINGS)
