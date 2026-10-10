@@ -371,15 +371,17 @@ def test_gate_accepts_descriptors_with_defaulted_id_and_project_type(
     deployment, monkeypatch, project_type, blocked,
 ) -> None:
     # Since v0.3.25 the parser defaults id and project_type; simulate that intact shape.
-    from odibi_anchor._dispatcher import _descriptor_protection
     from odibi_anchor._dispatcher._descriptor import DescriptorIntegrity
 
     fields = {"target_root": str(deployment.target)}
     if project_type is not None:
         fields["project_type"] = project_type
-    monkeypatch.setattr(_descriptor_protection, "read_descriptor", lambda _root: DescriptorIntegrity(
-        str(deployment.descriptor), "intact", "0" * 64, fields=fields,
-    ))
+    # Patch the globals the imported function actually uses: bootstrap tests may have
+    # re-imported odibi_anchor modules since this test module imported it.
+    monkeypatch.setitem(
+        check_descriptor_route_protection.__globals__, "read_descriptor",
+        lambda _root: DescriptorIntegrity(str(deployment.descriptor), "intact", "0" * 64, fields=fields),
+    )
 
     if not blocked:
         check_descriptor_route_protection(_session(deployment), changed_paths=set())
