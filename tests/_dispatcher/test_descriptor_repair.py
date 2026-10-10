@@ -190,8 +190,9 @@ def test_matching_continuity_owner_allows_repair(deployment) -> None:
 @pytest.mark.parametrize(("setup", "classification"), [
     (lambda d: _damage(d, d.intact.decode().replace("id: alpha\n", "id: beta\n").replace(
         "project_type: referenced\n", "")), "identity_mismatch"),
+    # A foreign target alone now parses intact (v0.3.25 defaults); a duplicate id damages it.
     (lambda d: _damage(d, d.intact.decode().replace(str(d.target), "/elsewhere/alpha").replace(
-        "project_type: referenced\n", "")), "portfolio_mismatch"),
+        "id: alpha\n", "id: alpha\nid: alpha\n")), "portfolio_mismatch"),
     (lambda d: (_owner(d, target_root="/elsewhere/alpha"), _damage(d, PLAIN))[1], "portfolio_mismatch"),
     (lambda d: (_owner(d, artifact_root="/elsewhere/projects/alpha"), _damage(d, PLAIN))[1],
      "ownership_mismatch"),
@@ -366,26 +367,49 @@ def test_unbound_runtime_target_override_does_not_block_body_edits(deployment, t
     check_descriptor_route_protection(session, changed_paths=set())
 
 
-@pytest.mark.parametrize(("project_type", "blocked"), [(None, False), ("managed", True)])
-def test_gate_accepts_descriptors_with_defaulted_id_and_project_type(
-    deployment, monkeypatch, project_type, blocked,
-) -> None:
-    # Since v0.3.25 the parser defaults id and project_type; simulate that intact shape.
-    from odibi_anchor._dispatcher._descriptor import DescriptorIntegrity
+def _without(text: str, *prefixes: str) -> str:
+    return "".join(line for line in text.splitlines(True) if not line.startswith(prefixes))
 
-    fields = {"target_root": str(deployment.target)}
-    if project_type is not None:
-        fields["project_type"] = project_type
-    # Patch the globals the imported function actually uses: bootstrap tests may have
-    # re-imported odibi_anchor modules since this test module imported it.
-    monkeypatch.setitem(
-        check_descriptor_route_protection.__globals__, "read_descriptor",
-        lambda _root: DescriptorIntegrity(str(deployment.descriptor), "intact", "0" * 64, fields=fields),
+
+def test_repair_treats_a_descriptor_with_defaulted_id_and_project_type_as_intact(deployment) -> None:
+    defaulted = _without(deployment.intact.decode(), "id:", "project_type:")
+    sha = _damage(deployment, defaulted)
+
+    with pytest.raises(ValueError) as caught:
+        _repair(deployment, sha, approve=True)
+
+    assert caught.value.context["classification"] == "not_damaged"  # type: ignore[attr-defined]
+    assert caught.value.context["integrity_status"] == "intact"  # type: ignore[attr-defined]
+    assert deployment.descriptor.read_bytes() == defaulted.encode()
+    ready = prepare_portfolio_runtime(config_path=deployment.config, host_id="local", project_id="alpha")
+    assert ready["status"] == "ready" and ready["target_root"] == str(deployment.target)
+
+
+def test_repair_of_a_defaulted_descriptor_that_lost_target_root_appends_route_lines(deployment) -> None:
+    damaged = _without(deployment.intact.decode(), "id:", "project_type:", "target_root:")
+    sha = _damage(deployment, damaged)
+    head, body = damaged.split("\n---\n", 1)
+    expected = (
+        f"{head}\nid: alpha\nproject_type: referenced\ntarget_root: {deployment.target}\n---\n{body}"
     )
 
-    if not blocked:
-        check_descriptor_route_protection(_session(deployment), changed_paths=set())
-        return
+    repaired = _repair(deployment, sha, approve=True)
+
+    assert repaired["mode"] == "route_fields_reconstructed"
+    assert deployment.descriptor.read_text(encoding="utf-8") == expected
+    ready = prepare_portfolio_runtime(config_path=deployment.config, host_id="local", project_id="alpha")
+    assert ready["status"] == "ready"
+
+
+def test_gate_accepts_body_edits_on_a_defaulted_descriptor_and_blocks_its_route_change(deployment) -> None:
+    defaulted = _without(deployment.intact.decode(), "id:", "project_type:")
+    deployment.descriptor.write_text(defaulted + "\n## Notes\n\nA body edit.\n", encoding="utf-8")
+    check_descriptor_route_protection(_session(deployment), changed_paths=set())
+
+    deployment.descriptor.write_text(
+        defaulted.replace(f"target_root: {deployment.target}", "target_root: /elsewhere/alpha"),
+        encoding="utf-8",
+    )
     with pytest.raises(RuntimeError) as caught:
         check_descriptor_route_protection(_session(deployment), changed_paths=set())
-    assert caught.value.context["changed_fields"] == ["project_type"]  # type: ignore[attr-defined]
+    assert caught.value.context["changed_fields"] == ["target_root"]  # type: ignore[attr-defined]
