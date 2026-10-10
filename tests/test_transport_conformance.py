@@ -140,3 +140,98 @@ def test_path_like_arguments_conform_across_transports(
     }
 
     assert results == dict.fromkeys(TRANSPORTS, expected)
+
+
+# ── Result envelope conformance ──────────────────────────────────────────────
+# The real envelope hook wraps the recording dispatcher, so each transport carries
+# the envelope the core produced. Success envelopes must be identical everywhere,
+# including the MCP compact task projection; a raised call's envelope must reach
+# the CLI and MCP v2 error objects unchanged.
+
+
+def _envelope_dispatcher(tmp_path):
+    from odibi_anchor._dispatcher._effects import build_static_action_contracts
+    from odibi_anchor._dispatcher._envelope import dispatch_with_envelope
+    from odibi_anchor._utils._session_state import SessionState
+
+    contracts = build_static_action_contracts(anchor_home=tmp_path)
+    state = SessionState()
+    state.active_project = "alpha"
+    state.target_root = str(tmp_path)
+
+    def dispatcher(action, /, *args, **kwargs):
+        kwargs.pop("output_format", None)
+        return dispatch_with_envelope(
+            _failing_or_recording, action, args, kwargs,
+            session_state=state, session_timings=[], contracts=contracts,
+        )
+
+    return dispatcher
+
+
+def _failing_or_recording(action, /, *args, **kwargs):
+    if kwargs.get("fail"):
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        raise attach_recovery(
+            RuntimeError("BLOCKED: refused for conformance"),
+            error_code="conformance_refused",
+            context={"action": action},
+            next_operations=[dispatcher_operation("status", reason="inspect state")],
+        )
+    return _recording_dispatcher(action, *args, **kwargs)
+
+
+ENVELOPE_CASES = [
+    ("touched", ["src/module.py"], {}),
+    ("task", ["Fix the parser. Then add tests."], {"goal": "Ship it."}),
+    ("status", [], {}),
+    ("workflow", ["status"], {}),
+]
+
+
+@pytest.mark.parametrize(("action", "args", "kwargs"), ENVELOPE_CASES,
+                         ids=[case[0] for case in ENVELOPE_CASES])
+def test_result_envelope_is_identical_across_transports(action, args, kwargs, tmp_path, monkeypatch, capsys):
+    dispatcher = _envelope_dispatcher(tmp_path)
+    in_process = dispatcher(action, *args, **kwargs)["envelope"]
+
+    monkeypatch.setattr(cli, "_boot", lambda _root: dispatcher)
+    assert cli.main(["exec", action, json.dumps({"args": args, "kwargs": kwargs})]) == 0
+    cli_envelope = json.loads(capsys.readouterr().out)["result"]["envelope"]
+
+    monkeypatch.setattr(mcp_server, "_boot", lambda: dispatcher)
+    monkeypatch.setattr(mcp_server, "_table_cache", {})
+    request = json.dumps({"args": args, "kwargs": kwargs})
+    mcp_compact = json.loads(mcp_server.anchor_execute(action, request, response_version=2))
+    mcp_full = json.loads(mcp_server.anchor_execute(
+        action, request, response_version=2, response_detail="full",
+    ))
+
+    assert in_process["outcome"] in {"succeeded", "succeeded_with_warnings"}
+    assert cli_envelope == in_process
+    assert mcp_compact["result"]["envelope"] == in_process
+    assert mcp_full["result"]["envelope"] == in_process
+
+
+def test_failure_envelope_is_identical_across_transports(tmp_path, monkeypatch, capsys):
+    dispatcher = _envelope_dispatcher(tmp_path)
+    with pytest.raises(RuntimeError) as raised:
+        dispatcher("touched", "src/module.py", fail=True)
+    in_process = raised.value.envelope
+
+    monkeypatch.setattr(cli, "_boot", lambda _root: dispatcher)
+    request = json.dumps({"args": ["src/module.py"], "kwargs": {"fail": True}})
+    assert cli.main(["exec", "touched", request]) == cli.EXIT_POLICY
+    cli_error = json.loads(capsys.readouterr().out)["error"]
+
+    monkeypatch.setattr(mcp_server, "_boot", lambda: dispatcher)
+    mcp_error = json.loads(mcp_server.anchor_execute("touched", request, response_version=2))["error"]
+
+    assert in_process["outcome"] == "blocked"
+    assert in_process["error"]["error_code"] == "conformance_refused"
+    assert in_process["next_operation"]["copy_ready"] == "anchor('status')"
+    assert in_process["effects"]["changed"] is None
+    assert cli_error["envelope"] == in_process
+    assert mcp_error["envelope"] == in_process
+    assert cli_error["error_code"] == mcp_error["error_code"] == "conformance_refused"

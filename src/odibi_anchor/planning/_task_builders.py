@@ -334,8 +334,14 @@ def _build_readiness(
                 "background plus resources or evidence are explicit."
             )
 
-        # Uniform thresholds — mode-specific dimensions already encode appropriate weight
-        ready_threshold, clarify_threshold = 80, 50
+        # Mode-specific dimensions already encode weight. Read-only modes use the
+        # acceptance minimum (40) as "ready": an accepted read-only task that grants
+        # task authority must not simultaneously report needs_clarification.
+        # Remaining gaps stay advisory in missing_details.
+        if mode in _READ_ONLY_MODES:
+            ready_threshold, clarify_threshold = 40, 20
+        else:
+            ready_threshold, clarify_threshold = 80, 50
         status = (
             "ready" if capped_score >= ready_threshold
             else "needs_clarification" if capped_score >= clarify_threshold
