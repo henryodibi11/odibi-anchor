@@ -541,3 +541,27 @@ def test_original_owner_already_naming_the_destination_is_archived_not_mistaken_
     archive = deployment.artifact() / "continuity" / "archive" / result["migration_id"]
     assert (archive / "OWNER.json").read_bytes() == original and not owner_path.exists()
     assert result["steps"]["continuity"]["new_epoch_started"] is False
+
+
+def test_byte_identical_new_epoch_after_archive_still_counts_as_new(deployment, targets):
+    old, new = targets
+    artifact = deployment.artifact()
+    owner_path = artifact / "continuity" / "v1" / "OWNER.json"
+    owner = json.loads(owner_path.read_bytes())
+    owner_path.write_text(json.dumps({**owner, "target_root": str(new)}, sort_keys=True, separators=(",", ":")) + "\n",
+                          encoding="utf-8")
+    deployment.write_portfolio({"alpha": str(new)})
+    injector = CrashInjector(scope=[deployment.root], crash_if=_crash_before_receipt(artifact))
+    with injector, pytest.raises(InjectedCrash):
+        deployment.move(source=old, destination=new)
+    deployment.launch("alpha", new)  # recreates v1 with the same five owner fields
+    _module("odibi_anchor.codebase._workflow").create_workflow(deployment.state / ".agent_memory.db", owner={
+        "project_id": "alpha", "target_root": str(new), "artifact_root": str(artifact),
+        "anchor_home": str(deployment.state.resolve()), "trust_domain": "work",
+    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only"})
+
+    with pytest.raises(Exception) as refused:
+        deployment.move(source=old, destination=new, rollback=True)
+
+    assert "continuity" in _code(refused.value)[1]  # the new-epoch refusal, not a generic mismatch
+    assert deployment.move(source=old, destination=new, resume=True)["status"] == "completed"

@@ -815,13 +815,17 @@ def _new_epoch(ctx: _Context, journal: _Journal) -> bool:
     """Whether ``continuity/v1`` is a new epoch started on the new target.
 
     The recorded pre-migration owner is never a new epoch, even if it already names the
-    destination; only a different owner bound to ``to_target`` counts.
+    destination. Once this migration's archive exists, the original owner is there, so
+    any v1 bound to ``to_target`` is new; owner sentinels carry no nonce, so a new epoch
+    can be byte-identical to an original owner that already named the destination.
     """
-    v1, _archive = _continuity_paths(ctx.artifact_root)
+    v1, archive = _continuity_paths(ctx.artifact_root, journal.data["migration_id"])
     owner = v1 / "OWNER.json"
     if not _owner_names(owner, ctx, journal.data["intent"]["to_target"]):
         return False
-    return not journal.data["pre"]["continuity_present"] or _file_sha256(owner) != _owner_sha_for(journal, ctx)
+    if not journal.data["pre"]["continuity_present"] or (archive is not None and archive.is_dir()):
+        return True
+    return _file_sha256(owner) != _owner_sha_for(journal, ctx)
 
 
 def _apply_descriptor(ctx: _Context, journal: _Journal, *, last: bool) -> None:
