@@ -764,9 +764,19 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'remain writable; historical missing baselines require recovery, not backfilling.',
         '`criteria`: unique id, expected and method. For method="pytest", test_targets is an '
         'exact list; measure with anchor("test", target=[...], workflow_criterion="id", '
-        'output_format="dict"). For method="artifact_sha256", expected_sha256 maps every '
+        'output_format="dict"). A pytest criterion qualifies only with zero failed, errors, '
+        'skipped and xpassed; optional expected_xfailed (nonnegative int, default 0) declares the '
+        'exact xfailed count. For method="artifact_sha256", expected_sha256 maps every '
         'artifact path to its expected hash; use check_artifact with criterion_id. Caller-authored '
         'results, grants and receipts are not accepted.',
+        'Producer order: edit, touched, preflight, test, review, commit, workflow `implemented`, '
+        'measure each criterion, workflow `review`, gate, learning assess, then `qualify`. A gate '
+        'before `implemented` (the gate response warns) leaves the task unable to produce a '
+        'candidate; recover by replanning and binding a fresh producer. '
+        'High risk: after measuring, close the producer with gate and learning first, then accept '
+        'the separate read-only review task, record the workflow `review`, and `qualify`.',
+        'Workflow `review` findings: an explicit array of objects {"summary": "<nonempty text>", '
+        '"status": "open" | "resolved"}; [] records no findings. Any open finding fails the review.',
         'Writes require output_format="dict"; transitions require the observed expected_generation '
         'and a unique request_id. Exact retries return historical acknowledgements, not new '
         'observations. Read status to refresh generation. Candidate changes require replan and '

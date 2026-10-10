@@ -17,6 +17,35 @@ from odibi_anchor.human_input import (
 )
 
 SLACK_API_BASE_URL = "https://slack.com/api"
+SLACK_ENVIRONMENT_VARIABLES = (
+    "ANCHOR_SLACK_BOT_TOKEN",
+    "ANCHOR_SLACK_CHANNEL_ID",
+    "ANCHOR_SLACK_USER_ID",
+)
+#: Deprecated Context Workbench names, read only when every ANCHOR_SLACK_* name is absent.
+LEGACY_SLACK_ENVIRONMENT_VARIABLES = (
+    "CW_SLACK_BOT_TOKEN",
+    "CW_SLACK_CHANNEL_ID",
+    "CW_SLACK_USER_ID",
+)
+
+
+def slack_environment_variables() -> tuple[str, str, str]:
+    """Return the single Slack variable set to read; the two sets are never mixed."""
+    if (not any(os.environ.get(name) for name in SLACK_ENVIRONMENT_VARIABLES)
+            and any(os.environ.get(name) for name in LEGACY_SLACK_ENVIRONMENT_VARIABLES)):
+        return LEGACY_SLACK_ENVIRONMENT_VARIABLES
+    return SLACK_ENVIRONMENT_VARIABLES
+
+
+def slack_environment_source() -> str | None:
+    """Name the configured variable set for diagnostics, never its values."""
+    names = slack_environment_variables()
+    if not any(os.environ.get(name) for name in names):
+        return None
+    return "CW_SLACK_* (deprecated)" if names == LEGACY_SLACK_ENVIRONMENT_VARIABLES else "ANCHOR_SLACK_*"
+
+
 _TRANSIENT_SLACK_ERRORS = {
     "fatal_error",
     "internal_error",
@@ -76,12 +105,9 @@ class SlackHumanInputTransport:
 
     @classmethod
     def from_environment(cls) -> SlackHumanInputTransport:
-        """Create the Slack transport from Odibi Anchor environment variables."""
-        variables = {
-            "bot_token": "ANCHOR_SLACK_BOT_TOKEN",
-            "channel_id": "ANCHOR_SLACK_CHANNEL_ID",
-            "allowed_user_id": "ANCHOR_SLACK_USER_ID",
-        }
+        """Create the Slack transport from ANCHOR_SLACK_* (or, only if all absent, CW_SLACK_*)."""
+        variables = dict(zip(("bot_token", "channel_id", "allowed_user_id"),
+                             slack_environment_variables(), strict=True))
         missing = [environment for environment in variables.values() if not os.environ.get(environment)]
         if missing:
             raise HumanInputConfigurationError(

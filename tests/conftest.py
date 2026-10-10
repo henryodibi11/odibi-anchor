@@ -31,6 +31,10 @@ for _name in [
     if name.startswith("ANCHOR_") and name not in PRESERVED_ENV_NAMES
 ]:
     del os.environ[_name]
+# Legacy CW_SLACK_* names are a deprecated Slack owner fallback; an operator's
+# exported credentials must not configure owner approval inside the suite.
+for _name in ("CW_SLACK_BOT_TOKEN", "CW_SLACK_CHANNEL_ID", "CW_SLACK_USER_ID"):
+    os.environ.pop(_name, None)
 _cw_test_root = tempfile.mkdtemp(prefix="odibi-anchor-tests-")
 _cw_test_home = os.path.join(_cw_test_root, "home")
 os.makedirs(_cw_test_home)

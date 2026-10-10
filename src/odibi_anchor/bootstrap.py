@@ -595,10 +595,41 @@ def init(
         })
         _SESSION_STATE.task_verification_epoch = len(_SESSION_TIMINGS)
         result = {"kind": "task_authority_rebind", **rebound}
-        from odibi_anchor._dispatcher._workflow_admission import data_only_legacy_exception, workflow_packet
+        from odibi_anchor._dispatcher._workflow_admission import (
+            bound_workflow,
+            data_only_legacy_exception,
+            workflow_packet,
+        )
         if (_SESSION_STATE.workflow_binding is not None
                 or data_only_legacy_exception(_SESSION_STATE.active_task_profile)):
             result["workflow"] = workflow_packet(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+        # Rebinding restores authority, not this process's edit prerequisites: the
+        # planning and known-bad guards on `touched` read this process's own timings.
+        from odibi_anchor._recovery import dispatcher_operation
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        def _ran(action):
+            return any(t["action"] == action and t.get("error") is None for t in _SESSION_TIMINGS)
+
+        required = []
+        if not _ran("status"):
+            required.append(dispatcher_operation(
+                "orient", reason="edits such as touched require orientation (status) in this process",
+            ))
+        profile = _SESSION_STATE.active_task_profile
+        if profile is not None and profile.execution_mode != "read_only" and not _ran("known_bad"):
+            try:
+                state = bound_workflow(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+            except WorkflowError:
+                state = None
+            python_paths = [path for path in (state or {}).get("plan", {}).get("source_paths", [])
+                            if str(path).endswith(".py")]
+            required.append(dispatcher_operation(
+                "known_bad", kwargs={"changed_files": python_paths} if python_paths else None,
+                reason="touched on .py files requires a known-bad check in this process",
+            ))
+        result["required_next_operations"] = required
+        result["suggested_next_actions"] = [f"MUST: {op['copy_ready']}" for op in required]
         return result
 
     def _task_rebind_dispatch(action_args, action_kwargs):
@@ -637,7 +668,8 @@ def init(
                 raise TypeError(
                     f"task_adoption withdraw received unsupported arguments: {sorted(unknown)}"
                 )
-            actor = os.environ.get("ANCHOR_SLACK_USER_ID", "")
+            from odibi_anchor.human_input_slack import slack_environment_variables
+            actor = os.environ.get(slack_environment_variables()[2], "")
             return {
                 "kind": "task_adoption_withdrawal",
                 **withdraw_adoption(
@@ -654,6 +686,7 @@ def init(
         prior = options.get("prior_task_window_id")
         if not isinstance(prior, str) or not prior.strip():
             raise TypeError("prior_task_window_id must be a non-empty string")
+        from odibi_anchor.human_input_slack import slack_environment_variables
         try:
             approval = request_adoption_approval(
                 _DEFAULT_DB_PATH, prior_task_window_id=prior.strip(),
@@ -661,7 +694,7 @@ def init(
                 target_root=_SESSION_STATE.target_root,
                 artifact_root=_SESSION_STATE.artifact_root,
                 trust_domain=os.environ.get("ANCHOR_TRUST_DOMAIN", ""),
-                expected_owner_id=os.environ.get("ANCHOR_SLACK_USER_ID", ""),
+                expected_owner_id=os.environ.get(slack_environment_variables()[2], ""),
                 timeout_minutes=options.get("timeout_minutes", 60),
             )
         except AdoptionUnavailable as exc:

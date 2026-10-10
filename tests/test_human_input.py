@@ -506,3 +506,46 @@ class FakeHTTPResponse:
 
 def stat_mode(path):
     return os.stat(path).st_mode & 0o777
+
+
+_ANCHOR_SLACK = ("ANCHOR_SLACK_BOT_TOKEN", "ANCHOR_SLACK_CHANNEL_ID", "ANCHOR_SLACK_USER_ID")
+_LEGACY_SLACK = ("CW_SLACK_BOT_TOKEN", "CW_SLACK_CHANNEL_ID", "CW_SLACK_USER_ID")
+
+
+def _slack_environment(monkeypatch, anchor=(), legacy=()):
+    for name in (*_ANCHOR_SLACK, *_LEGACY_SLACK, "DATABRICKS_RUNTIME_VERSION"):
+        monkeypatch.delenv(name, raising=False)
+    for names, values in ((_ANCHOR_SLACK, anchor), (_LEGACY_SLACK, legacy)):
+        for name, value in zip(names, values, strict=False):  # an empty tuple sets none
+            if value is not None:
+                monkeypatch.setenv(name, value)
+
+
+def test_legacy_cw_slack_names_are_a_never_mixed_fallback(monkeypatch):
+    # Match the class this module raises; other suites may reload odibi_anchor.human_input.
+    from odibi_anchor.human_input_owner import (
+        HumanInputConfigurationError,
+        owner_approval_provider_status,
+        select_owner_approval_provider,
+    )
+
+    monkeypatch.setattr("odibi_anchor.human_input_owner._is_windows", lambda: False)
+    _slack_environment(monkeypatch, legacy=("legacy-secret", "C0LEGACY", "U0LEGACY"))
+    provider = select_owner_approval_provider()
+    assert provider.expected_owner_id == "U0LEGACY"
+    assert SlackHumanInputTransport.from_environment().channel_id == "C0LEGACY"
+    status = owner_approval_provider_status()
+    assert status["slack_environment"] == "CW_SLACK_* (deprecated)"
+    assert "legacy-secret" not in json.dumps(status)
+
+    # Any ANCHOR_SLACK_* name selects that set alone; legacy values never fill gaps.
+    _slack_environment(monkeypatch, anchor=("anchor-secret", None, "U0ANCHOR"),
+                       legacy=("legacy-secret", "C0LEGACY", "U0LEGACY"))
+    with pytest.raises(HumanInputConfigurationError, match="ANCHOR_SLACK_CHANNEL_ID"):
+        select_owner_approval_provider()
+    assert owner_approval_provider_status()["slack_environment"] == "ANCHOR_SLACK_*"
+
+    _slack_environment(monkeypatch, anchor=("anchor-secret", "C0ANCHOR", "U0ANCHOR"),
+                       legacy=("legacy-secret", "C0LEGACY", "U0LEGACY"))
+    assert select_owner_approval_provider().expected_owner_id == "U0ANCHOR"
+    assert SlackHumanInputTransport.from_environment().channel_id == "C0ANCHOR"
