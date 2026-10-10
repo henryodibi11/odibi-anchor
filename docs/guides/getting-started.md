@@ -20,7 +20,7 @@ In Databricks use the qualified SDK extra and restart Python. The extra adds onl
 on serverless needs 6.x) is kept:
 
 ```python
-%pip install "odibi-anchor[databricks]==<version>"
+%pip install --no-cache-dir "odibi-anchor[databricks]==<version>"
 dbutils.library.restartPython()
 ```
 

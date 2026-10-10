@@ -50,7 +50,7 @@ def _databricks_capability(*, required: bool) -> dict[str, Any]:
         "install_command": (
             None
             if qualified or not required
-            else f'%pip install "odibi-anchor[databricks]=={__version__}"'
+            else f'%pip install --no-cache-dir "odibi-anchor[databricks]=={__version__}"'
         ),
         "restart_required_after_install": required and not qualified,
     }

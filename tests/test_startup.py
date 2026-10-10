@@ -1183,13 +1183,13 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install "odibi-anchor[databricks]==0.3.27"',
+        "install_command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.27"',
         "restart_required_after_install": True,
     }
     assert result["status"] == "attention"
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install "odibi-anchor[databricks]==0.3.27"',
+        "command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.27"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -1296,7 +1296,10 @@ def test_assistant_launcher_resolves_exact_latest_stable_databricks_install(
         runpy.run_path(str(launcher))
 
     message = str(raised.value)
-    assert '%pip install "odibi-anchor[databricks]==0.3.20"' in message
+    assert '%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.20"' in message
+    # A just-published release can lag in pip's view; the launcher says so instead of letting
+    # an agent guess --pre.
+    assert "do not add --pre" in message
     assert "dbutils.library.restartPython()" in message
     assert "0.4.0rc1" not in message
     assert "9.9.9" not in message
@@ -1803,13 +1806,16 @@ def test_assistant_launcher_pin_skips_package_index_with_exact_install(
     assert str(raised.value) == (
         f"Odibi Anchor requires the pinned release {expected} in this Python process "
         f"({source.format(config=config)}). Run "
-        f'`%pip install "odibi-anchor[databricks]=={expected}"`, then '
+        f'`%pip install --no-cache-dir "odibi-anchor[databricks]=={expected}"`, then '
         "`dbutils.library.restartPython()` and rerun this launcher. "
-        f"Pinned: {expected}; installed: 0.3.24."
+        f"Pinned: {expected}; installed: 0.3.24. "
+        "If pip reports no matching distribution for a release published in the last few minutes, "
+        "wait a minute and rerun the same command; do not add --pre (Anchor releases are never "
+        "pre-releases)."
     )
     error = cast(Any, raised.value)
     assert error.error_code == "package_version_mismatch"
-    assert error.copy_ready == f'%pip install "odibi-anchor[databricks]=={expected}"'
+    assert error.copy_ready == f'%pip install --no-cache-dir "odibi-anchor[databricks]=={expected}"'
 
 
 @pytest.mark.parametrize("pin", ["latest", "0.3", "0.3.24rc1", "0.3.23"])

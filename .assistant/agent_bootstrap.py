@@ -108,6 +108,15 @@ def _version_check_timeout() -> float:
     return seconds
 
 
+# A just-published release can take minutes to reach pip's index view; --no-cache-dir skips a
+# stale local cache, and Anchor never publishes pre-releases, so --pre is never the fix.
+_INDEX_LAG_GUIDANCE = (
+    "If pip reports no matching distribution for a release published in the last few minutes, "
+    "wait a minute and rerun the same command; do not add --pre (Anchor releases are never "
+    "pre-releases)."
+)
+
+
 def _latest_stable_release() -> str:
     """Resolve the newest non-yanked stable release from the public package index."""
     request = urllib.request.Request(
@@ -531,17 +540,19 @@ if _checkout is None:
                         RuntimeError(
                             f"Odibi Anchor requires the pinned release {_pinned} in this Python "
                             f"process ({_policy['source']}). Run "
-                            f'`%pip install "odibi-anchor[databricks]=={_pinned}"`, then '
+                            f'`%pip install --no-cache-dir "odibi-anchor[databricks]=={_pinned}"`, then '
                             "`dbutils.library.restartPython()` and rerun this launcher. "
-                            f"Pinned: {_pinned}; installed: {_installed or 'missing'}."
+                            f"Pinned: {_pinned}; installed: {_installed or 'missing'}. "
+                            + _INDEX_LAG_GUIDANCE
                         ),
                         error_code="package_version_mismatch",
                         context={**_policy, "installed": _installed},
                         next_operations=({
                             "operation": "install_package",
-                            "copy_ready": f'%pip install "odibi-anchor[databricks]=={_pinned}"',
+                            "copy_ready": f'%pip install --no-cache-dir "odibi-anchor[databricks]=={_pinned}"',
                             "then": "dbutils.library.restartPython()",
-                            "reason": "Install the pinned release, restart Python, and rerun.",
+                            "reason": "Install the pinned release, restart Python, and rerun. "
+                                      + _INDEX_LAG_GUIDANCE,
                             "requires_owner": False,
                             "retry_safety": "idempotent",
                         },),
@@ -554,17 +565,19 @@ if _checkout is None:
                         RuntimeError(
                             "Odibi Anchor requires the latest stable release in this Python "
                             "process. Run "
-                            f'`%pip install "odibi-anchor[databricks]=={_latest}"`, then '
+                            f'`%pip install --no-cache-dir "odibi-anchor[databricks]=={_latest}"`, then '
                             "`dbutils.library.restartPython()` and rerun this launcher. "
-                            f"Resolved latest stable: {_latest}; installed: {_installed or 'missing'}."
+                            f"Resolved latest stable: {_latest}; installed: {_installed or 'missing'}. "
+                            + _INDEX_LAG_GUIDANCE
                         ),
                         error_code="package_version_mismatch",
                         context={**_policy, "installed": _installed},
                         next_operations=({
                             "operation": "install_package",
-                            "copy_ready": f'%pip install "odibi-anchor[databricks]=={_latest}"',
+                            "copy_ready": f'%pip install --no-cache-dir "odibi-anchor[databricks]=={_latest}"',
                             "then": "dbutils.library.restartPython()",
-                            "reason": "Install the latest stable release, restart Python, and rerun.",
+                            "reason": "Install the latest stable release, restart Python, and rerun. "
+                                      + _INDEX_LAG_GUIDANCE,
                             "requires_owner": False,
                             "retry_safety": "idempotent",
                         },),

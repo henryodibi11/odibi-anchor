@@ -781,6 +781,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'and a unique request_id. Exact retries return historical acknowledgements, not new '
         'observations. Read status to refresh generation. Candidate changes require replan and '
         'a fresh task binding, not evidence reuse.',
+        'Rework after review (avoids a dirty-worktree refusal): commit or keep nothing uncommitted; '
+        'replan from a task bound to the workflow and close that task; then, with a clean worktree, '
+        'open the fresh producer (same workflow_id and risk), accept_plan, register skills and the '
+        'spec, and only then edit, touched, preflight, test, review, commit and `implemented`.',
         '`implemented` freezes the observed candidate; qualify requires exact measured criteria, '
         'workflow review and producer gate/learning closure. High risk requires a separate '
         'accepted read-only review task; reviewer_authentication=none, not authenticated independence.',

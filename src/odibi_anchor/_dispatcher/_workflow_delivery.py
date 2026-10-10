@@ -58,7 +58,23 @@ def _get_json(service: str, path: str) -> dict[str, Any]:
             raise ValueError("response is not an object")
         return result
     except Exception as exc:
-        raise WorkflowError("unavailable", f"{service} readback unavailable ({type(exc).__name__})") from None
+        from urllib.error import HTTPError
+
+        from odibi_anchor._recovery import attach_recovery
+
+        status = exc.code if isinstance(exc, HTTPError) else None
+        retry_after = exc.headers.get("Retry-After") if isinstance(exc, HTTPError) and exc.headers else None
+        detail = f"{type(exc).__name__}" + (f" {status}" if status is not None else "")
+        raise attach_recovery(WorkflowError(
+            "unavailable",
+            f"{service} readback unavailable ({detail}) at {hosts[service]}{path}"
+            + (f"; retry after {retry_after} s" if retry_after else "")
+            + ". A transient failure is safe to retry with a new request_id; the destination was "
+            "not changed by this read.",
+        ), error_code="destination_readback_unavailable", context={
+            "service": service, "endpoint": hosts[service] + path, "http_status": status,
+            "retry_after": retry_after, "error_type": type(exc).__name__,
+        }) from None
 
 
 def _git(root: str, *args: str) -> str:
@@ -124,6 +140,51 @@ def _fresh(path, session_state, workflow_id, *, allow_unknown=False):
     return state
 
 
+def _require_exact_response(response, prepared, provider, *, operation, workflow_id, generation):
+    """Refuse any reply that is not the exact challenge from the configured owner, naming why.
+
+    The context names failed checks only; it never echoes the received reply text.
+    """
+    expected = prepared["approval_response"]
+    received = response.response if isinstance(response.response, str) else ""
+    mismatches = []
+    if received != expected:
+        mismatches.append({
+            "check": "reply_text",
+            "detail": "the reply must be exactly the challenge line, with nothing added or removed",
+            "received_length": len(received), "expected_length": len(expected),
+            "matches_after_trimming_whitespace": received.strip() == expected,
+        })
+    if response.response_user_id != provider.expected_owner_id:
+        mismatches.append({"check": "owner", "detail": "the reply came from a different user than the configured owner",
+                           "expected_owner_id": provider.expected_owner_id})
+    if response.transport != provider.transport.name:
+        mismatches.append({"check": "transport", "detail": "the reply arrived through a different transport",
+                           "expected_transport": provider.transport.name})
+    if not response.request_id or not response.response_message_id:
+        mismatches.append({"check": "message_ids", "detail": "the reply is missing its request or message id"})
+    if not mismatches:
+        return
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    summary = "; ".join(item["check"] for item in mismatches)
+    raise attach_recovery(WorkflowError(
+        "authority_required",
+        f"human response does not match exact challenge and owner (failed: {summary}). Nothing was "
+        f"approved. Request again and reply exactly: {expected}",
+    ), error_code="delivery_approval_mismatch", context={
+        "operation": operation, "workflow_id": workflow_id, "generation": generation,
+        "expected_response": expected, "mismatches": mismatches,
+    }, next_operations=[dispatcher_operation(
+        "workflow", operation, kwargs={
+            "workflow_id": workflow_id, "expected_generation": generation,
+            "request_id": "<new-request-id>", "output_format": "dict",
+        },
+        reason="request the owner's reply again; the challenge is unchanged while the candidate is",
+        requires_owner=True, retry_safety="not_idempotent",
+    )])
+
+
 def prepare_delivery(path, *, session_state, workflow_id):
     """Produce an exact, inspectable human challenge; grant no permission."""
     state = _fresh(path, session_state, workflow_id)
@@ -154,11 +215,8 @@ def request_delivery_approval(path, *, session_state, workflow_id, request_id, t
                "does not authenticate a different reviewer.\n" + canonical(subject)
                + "\nReply exactly: " + prepared["approval_response"])
     response = request_human_input_record(message, timeout_minutes=timeout_minutes, transport=provider.transport)
-    if (response.response != prepared["approval_response"]
-            or response.response_user_id != provider.expected_owner_id
-            or response.transport != provider.transport.name
-            or not response.request_id or not response.response_message_id):
-        raise WorkflowError("authority_required", "human response does not match exact challenge and owner")
+    _require_exact_response(response, prepared, provider, operation="request_delivery_approval",
+                            workflow_id=workflow_id, generation=subject["generation"])
     if prepare_delivery(path, session_state=session_state, workflow_id=workflow_id) != prepared:
         raise WorkflowError("stale_evidence", "candidate or qualification changed during human approval")
     return transition_workflow(
@@ -200,11 +258,8 @@ def request_delivery_revocation(path, *, session_state, workflow_id, request_id,
                "or prove that an external operation did not occur.\n" + canonical(subject)
                + "\nReply exactly: " + prepared["approval_response"])
     response = request_human_input_record(message, timeout_minutes=timeout_minutes, transport=provider.transport)
-    if (response.response != prepared["approval_response"]
-            or response.response_user_id != provider.expected_owner_id
-            or response.transport != provider.transport.name
-            or not response.request_id or not response.response_message_id):
-        raise WorkflowError("authority_required", "human response does not match exact challenge and owner")
+    _require_exact_response(response, prepared, provider, operation="revoke_delivery",
+                            workflow_id=workflow_id, generation=subject["generation"])
     if prepare_revocation(path, session_state=session_state, workflow_id=workflow_id) != prepared:
         raise WorkflowError("stale_evidence", "workflow approval changed during revocation")
     return transition_workflow(

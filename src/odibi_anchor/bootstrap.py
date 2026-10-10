@@ -63,6 +63,17 @@ def _source_fingerprint(path: str | Path) -> str | None:
     return digest.hexdigest()
 
 
+# Entry points agents call through anchor() by mistake; they run before or outside a dispatcher.
+_MODULE_FUNCTION_HINTS = {
+    "doctor": "from odibi_anchor.startup import doctor; doctor()  (CLI: anchor doctor)",
+    "setup_host": "from odibi_anchor.host_setup import setup_host; setup_host(target, adapter=...)"
+                  "  (CLI: anchor setup-host)",
+    "install_guidance": "from odibi_anchor.startup import install_guidance; install_guidance(target)",
+    "register_project": "from odibi_anchor.startup import register_project",
+    "prepare_portfolio_runtime": "anchor portfolio prepare --config <path> --host <id> --project <id>",
+    "move_target": "from odibi_anchor import move_target  (CLI: anchor portfolio move-target)",
+}
+
 _RUNTIME_LOADED_REVISION = _git_revision(Path(__file__).resolve().parent)
 _RUNTIME_LOADED_FINGERPRINT = _source_fingerprint(Path(__file__).resolve().parent)
 
@@ -1720,10 +1731,22 @@ def init(
             )
             _suggestions = _gcm(action, _all_actions, n=3, cutoff=0.6)
             _hint = f" Did you mean: {', '.join(_suggestions)}?" if _suggestions else ""
-            raise ValueError(
+            _module_function = _MODULE_FUNCTION_HINTS.get(action.replace("-", "_"))
+            if _module_function:
+                # Not dispatcher actions: they run before or outside a bound dispatcher.
+                _hint = (f" '{action}' is a module function, not an anchor() action: "
+                         f"{_module_function}")
+            _unknown = ValueError(
                 f"Unknown anchor() action: '{action}'.{_hint}\n"
                 f"Available: {', '.join(sorted(_all_actions))}"
             )
+            if _module_function:
+                from odibi_anchor._recovery import attach_recovery as _attach_recovery
+
+                _attach_recovery(_unknown, error_code="module_function_not_action", context={
+                    "action": action, "module_function": _module_function,
+                })
+            raise _unknown
         if action == "skill_loaded" and len(args) != 1:
             raise ValueError(
                 "skill_loaded requires exactly one positional skill name; "
