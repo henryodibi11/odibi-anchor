@@ -269,3 +269,61 @@ Within one explicit `work` authority, assessed evidence-backed `workbench` obser
 may become advisory `all`-project candidates and are retrieved alongside exact-project
 memories. Cross-project widening is never inferred, candidates remain non-authoritative,
 and personal/work authorities must use separate configurations and stores.
+
+## Descriptor repair
+
+A managed project's `PROJECT.md` carries its route in three frontmatter fields: `id`,
+`project_type`, and `target_root`. When they are missing, malformed, or incomplete, routing
+fails closed with `managed_descriptor_damaged`, and the artifact root is never used in place of
+the target. When the failure comes from portfolio preparation, the error reports
+`supported_repair_available: true`, and its first `next_operations` entry is a copy-ready dry run
+that requires the owner:
+
+```bash
+anchor portfolio repair-descriptor --config /Workspace/Users/alex/.odibi-anchor/anchor.toml \
+  --host databricks --project uc-tools --expected-sha256 <descriptor_sha256>
+```
+
+Use the `descriptor_sha256` from the error context. The dry run writes nothing and returns the exact
+repaired text (`rendered_text`) and the approve operation. After the owner has reviewed the text,
+run the same command with `--approve`. The Python equivalent is
+`odibi_anchor.startup.repair_portfolio_descriptor(config_path=..., host_id=..., project_id=...,
+expected_sha256=..., approve=False)`. A bound dispatcher exposes it as
+`anchor("project", "repair-descriptor", "<project>", config_path=..., host_id=...,
+expected_sha256=..., approve=False)`, and there the portfolio host's runtime root must be the
+dispatcher's `ANCHOR_HOME`.
+
+The repair rebuilds only the route fields and keeps the Markdown body byte for byte. The
+portfolio target for that host and project is the only source of `target_root`. `project_type`
+is `managed` when that target is the project's own artifact root and `referenced` otherwise. If
+the frontmatter is still delimited, only the route lines are replaced, and other fields and the
+body stay as they are. Otherwise, as with a plain-Markdown replacement or a malformed non-route
+line, the new frontmatter goes above the whole old content.
+
+Before writing, the repair checks the following. Each failure refuses with
+`descriptor_repair_refused` and a `classification`, and nothing is written:
+
+| Classification | Refused when |
+| --- | --- |
+| `identity_mismatch` | The managed project directory does not exist, the project ID is not canonical, or the damaged frontmatter claims another `id`. |
+| `portfolio_mismatch` | The portfolio has no target for that host and project; the damaged frontmatter or continuity `OWNER.json` claims a different target; or a dispatcher runtime root differs from the portfolio host's. |
+| `ownership_mismatch` | `continuity/v1/OWNER.json` exists and is unreadable, or names another `project_id` or `artifact_root`. |
+| `stale_hash` | The file's SHA-256 is not `expected_sha256`. This is checked again during the atomic write; if it changes at that point, the backup copy already written is kept and named in `backup_path`. |
+| `not_damaged` | The descriptor is intact or absent. |
+| `approval_required` | `approve` is not exactly `true` or `false`. |
+| `unrepairable` | The file cannot be read or is not UTF-8, so its body cannot be preserved. |
+
+An approved repair first copies the original bytes to
+`archive/descriptor-backups/PROJECT.<utc>.<sha12>.md`, then replaces `PROJECT.md` atomically. It
+then writes `PROJECT.<utc>.<sha12>.receipt.json`, canonical JSON with the pre- and post-repair
+SHA-256 values, the route fields, and the portfolio authority. Finally it re-reads the file. A
+result that is not intact with the expected bytes raises `descriptor_repair_unverified`, and the
+backup is kept.
+
+Task edits cannot change the route. If `PROJECT.md` is in a task's changed set, the gate compares
+its route fields with the task's accepted route: the bound project ID, target root, and artifact
+root. A `managed` descriptor must target its own artifact root. A route change or damaged
+frontmatter blocks the gate with `managed_descriptor_route_change`, whose context names the
+supported operations: `project move-target` for a target change and `project repair-descriptor`
+for damage. Body-only edits pass. Any write to `PROJECT.md` still marks a running dispatcher's
+routing stale, so continue from a fresh process with `task_rebind` before gating.

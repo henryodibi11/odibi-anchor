@@ -465,6 +465,10 @@ def prepare_portfolio_runtime(
             "route_target_conflict", "managed_descriptor_damaged",
         }:
             exc.context.update(config_path=document["path"], host_id=host_id)  # type: ignore[attr-defined]
+        if getattr(exc, "error_code", None) == "managed_descriptor_damaged":
+            from odibi_anchor._dispatcher._descriptor import attach_repair_recovery
+
+            attach_repair_recovery(exc, config_path=document["path"], host_id=host_id)
         raise
     assert route is not None
     return {
@@ -527,6 +531,64 @@ def _managed_host_id(
     if len(matches) != 1:
         raise ValueError("multiple portfolio hosts match the managed launcher instruction root")
     return str(matches[0])
+
+
+def repair_portfolio_descriptor(
+    *, config_path: str | os.PathLike[str], host_id: str, project_id: str,
+    expected_sha256: Any, approve: Any = False,
+    anchor_home: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Repair one damaged ``PROJECT.md`` under the portfolio's host/project authority.
+
+    The portfolio target is the only target written. ``approve=False`` returns the exact
+    dry-run plan. This never restores, registers, binds or selects a project. With
+    ``anchor_home`` (a running dispatcher), the portfolio host's runtime root must be it.
+    """
+    from odibi_anchor._dispatcher._project import repair_descriptor
+    from odibi_anchor._recovery import attach_recovery
+    from odibi_anchor.portfolio import load_portfolio_document, resolve_project
+
+    document = load_portfolio_document(config_path)
+    authority = {
+        "config_path": document["path"], "config_sha256": document["sha256"], "host_id": host_id,
+    }
+    try:
+        resolved = resolve_project(document["portfolio"], host_id=host_id, project_id=project_id)
+    except ValueError as exc:
+        raise attach_recovery(
+            ValueError(
+                f"Managed project '{project_id}' descriptor repair refused "
+                f"(descriptor_repair_refused, portfolio_mismatch): {exc}. PROJECT.md was not "
+                "changed; Anchor never guesses a target. Stop and ask the project owner."
+            ),
+            error_code="descriptor_repair_refused",
+            context={
+                **authority, "project_id": project_id, "classification": "portfolio_mismatch",
+                "reason": str(exc),
+            },
+        ) from exc
+    adapter = document["portfolio"]["hosts"][host_id]["adapter"]
+    environment, _local_state = _runtime_environment(resolved["environment"], adapter=adapter)
+    home = environment["ANCHOR_HOME"]
+    if anchor_home is not None and Path(anchor_home).resolve() != Path(home).resolve():
+        raise attach_recovery(
+            ValueError(
+                f"Managed project '{project_id}' descriptor repair refused "
+                "(descriptor_repair_refused, portfolio_mismatch): the portfolio host runtime "
+                f"root {home!r} is not this runtime's ANCHOR_HOME {str(anchor_home)!r}. "
+                "PROJECT.md was not changed. Stop and ask the project owner."
+            ),
+            error_code="descriptor_repair_refused",
+            context={
+                **authority, "project_id": project_id, "classification": "portfolio_mismatch",
+                "reason": "portfolio host runtime root differs from this runtime",
+                "portfolio_anchor_home": home, "anchor_home": str(anchor_home),
+            },
+        )
+    return repair_descriptor(
+        home, project_id, portfolio_target=resolved["target_root"],
+        expected_sha256=expected_sha256, approve=approve, authority=authority,
+    )
 
 
 @records_bootstrap_timings

@@ -124,6 +124,15 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--host", required=True)
     prepare.add_argument("--project", required=True)
     prepare.add_argument("--persona")
+    repair = portfolio_commands.add_parser(
+        "repair-descriptor",
+        help="owner-approved repair of one damaged PROJECT.md route frontmatter (dry run without --approve)",
+    )
+    repair.add_argument("--config", required=True)
+    repair.add_argument("--host", required=True)
+    repair.add_argument("--project", required=True)
+    repair.add_argument("--expected-sha256", required=True)
+    repair.add_argument("--approve", action="store_true")
     state = commands.add_parser("state", help="inspect or transfer durable Anchor state")
     state_commands = state.add_subparsers(dest="state_command", required=True)
     for name in ("list", "snapshot", "restore", "resume", "abandon"):
@@ -156,6 +165,13 @@ def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
 
     if ns.portfolio_command == "schema":
         return {"schema": portfolio_schema(), "next_operation": {"operation": "portfolio.scaffold"}}
+    if ns.portfolio_command == "repair-descriptor":
+        from odibi_anchor.startup import repair_portfolio_descriptor
+
+        return repair_portfolio_descriptor(
+            config_path=ns.config, host_id=ns.host, project_id=ns.project,
+            expected_sha256=ns.expected_sha256, approve=ns.approve,
+        )
     if ns.portfolio_command == "scaffold":
         return scaffold_portfolio(
             ns.config, host_id=ns.host, adapter=ns.adapter, target_root=ns.target_root,
