@@ -121,6 +121,17 @@ def test_source_task_rebind_preserves_baseline_after_worktree_becomes_dirty(tmp_
     assert qualification.outcome == "unavailable"
     assert qualification.task_window_id == accepted["accepted_task_authority"]["task_window_id"]
 
+    # After a dispatcher restart the public rebind names this process's edit
+    # prerequisites instead of leaving `touched` to discover them one block at a time.
+    restarted, _, _ = init(root=tmp_path, output_format="dict")
+    required = restarted("task_rebind", output_format="dict")["required_next_operations"]
+    assert [operation["action"] for operation in required] == ["orient", "known_bad"]
+    with pytest.raises(RuntimeError, match="requires orientation first"):
+        restarted("touched", "source.py", output_format="dict")
+    for operation in required:
+        restarted(operation["action"], *operation["args"], **operation["kwargs"], output_format="dict")
+    assert restarted("touched", "source.py", output_format="dict")["registered"] == "source.py"
+
 
 def test_ordinary_source_task_still_refuses_a_dirty_initial_worktree(tmp_path, monkeypatch):
     def git(*args):

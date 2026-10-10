@@ -1016,6 +1016,8 @@ def task_scope_review_diff(
     created_paths = set(snapshot.provenance.get("created_paths", ()))
     deleted_paths = set(snapshot.provenance.get("deleted_paths", ()))
     content_changes = snapshot.provenance.get("content_changes", {})
+    # Only local Git snapshots record old-side hunk lengths; other scopes report 0.
+    deleted_lines = snapshot.provenance.get("deleted_line_counts", {})
     per_file: dict[str, dict[str, Any]] = {}
     for path in snapshot.changed_paths:
         additions = sum(
@@ -1028,11 +1030,12 @@ def task_scope_review_diff(
                 else "deleted" if path in deleted_paths
                 else "modified"
             ),
-            "additions": additions, "deletions": 0,
+            "additions": additions, "deletions": deleted_lines.get(path, 0),
         }
         if path in content_changes:
             per_file[path].update(dict(content_changes[path]))
     additions = sum(item["additions"] for item in per_file.values())
+    deletions = sum(item["deletions"] for item in per_file.values())
     if isinstance(snapshot, DatabricksTaskChangeScope):
         metrics = {
             "files_changed": len(per_file), "total_additions": additions,
@@ -1046,7 +1049,7 @@ def task_scope_review_diff(
         return {"metrics": metrics, "samples": {"per_file": per_file}}
     metrics = {
             "files_changed": len(per_file), "total_additions": additions,
-            "total_deletions": 0, "net_lines": additions,
+            "total_deletions": deletions, "net_lines": additions - deletions,
             "scope_source": "task_repository_baseline",
             "target_drift": bool(snapshot.provenance.get("target_drift")),
             "target_start_sha": snapshot.provenance.get("target_start_sha"),
@@ -1219,6 +1222,14 @@ def _ranges_from_diff(output: str, path: str) -> list[ChangedLineRange]:
                 ranges.append(ChangedLineRange(path, "added" if old_count == 0 else "modified",
                                                start, start + count - 1))
     return ranges
+
+
+def _deleted_line_count(output: str) -> int:
+    """Sum old-side hunk lengths of a ``--unified=0`` diff (git numstat deletions)."""
+    return sum(
+        int(match.group("oldn") or "1")
+        for match in map(_HUNK.match, output.splitlines()) if match
+    )
 
 
 def _mutable_paths(git: _Git) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
@@ -1408,14 +1419,16 @@ def capture_repository_snapshot(
     changed = tuple(sorted(set(committed) | set(staged) | set(unstaged) | set(untracked)))
 
     ranges: list[ChangedLineRange] = []
+    deleted_lines: dict[str, int] = {}
     if base:
         # One aggregate merge-base-to-current coordinate model.  Supplying each
         # already-known path after ``--`` avoids ever parsing a filename from a
         # quoted patch header.
         for name in changed:
             if name not in untracked:
-                ranges += _ranges_from_diff(git.run(
-                    "diff", "--unified=0", "--no-ext-diff", base, "--", name), name)
+                diff = git.run("diff", "--unified=0", "--no-ext-diff", base, "--", name)
+                ranges += _ranges_from_diff(diff, name)
+                deleted_lines[name] = _deleted_line_count(diff)
     for name in untracked:
         current_range = _full_current_file_range(root, name)
         if current_range is not None:
@@ -1438,6 +1451,7 @@ def capture_repository_snapshot(
         "index_fingerprint": index_fingerprint,
         "worktree_fingerprint": _source_state_fingerprint(root, changed),
         "managed_fingerprint": _fingerprint(root, _managed_paths(root, tuple(sorted(classified)))),
+        "deleted_line_counts": deleted_lines,
     }
     return RepositorySnapshot(1, str(root), branch, head, configured_target_ref, target, base,
                               committed_range, staged, unstaged, untracked, changed,

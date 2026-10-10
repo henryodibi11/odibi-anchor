@@ -1001,10 +1001,19 @@ def memory_action(
 ) -> dict[str, Any] | str:
     """Dispatch lifecycle subcommands while preserving ordinary memory queries."""
     selector = str(args[0]).strip().lower() if args else "query"
-    if selector not in {
+    subcommands = {
         "apply", "disposition", "evaluate", "diagnostics", "seed",
         "task_record", "replay", "storage", "promotion", "recovery",
-    }:
+    }
+    if args and selector not in subcommands:
+        # memory_context accepts only keyword filters; forwarding a positional word
+        # raised an opaque TypeError for calls such as anchor("memory", "status").
+        raise ValueError(
+            f"unknown memory subcommand {args[0]!r}. Supported: {', '.join(sorted(subcommands))}. "
+            'Search with anchor("memory", query="..."); inspect store health with '
+            'anchor("memory", "diagnostics"). ' + _MEMORY_HELP_HINT
+        )
+    if selector not in subcommands:
         saved_format = kwargs.get("output_format", "dict")
         query_kwargs = dict(kwargs)
         query_kwargs["output_format"] = "dict"

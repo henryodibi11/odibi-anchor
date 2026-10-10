@@ -133,6 +133,32 @@ def test_task_scope_unions_committed_staged_unstaged_untracked(repository: Path)
     assert scope.provenance["scope_source"] == "task_repository_baseline"
 
 
+def test_task_review_diffstat_matches_git_numstat_including_deletions(repository: Path) -> None:
+    (repository / "b.txt").write_text("".join(f"line {n}\n" for n in range(1, 9)), encoding="utf-8")
+    git(repository, "add", "b.txt")
+    git(repository, "commit", "-m", "pretask")
+    start = git(repository, "rev-parse", "HEAD")
+    baseline = capture_task_repository_baseline(repository, "main")
+    (repository / "b.txt").write_text("line 1\nLINE 2\nline 8\n", encoding="utf-8")
+    git(repository, "commit", "-am", "task commit")
+    (repository / "a.py").write_text('"""base."""\n', encoding="utf-8")
+    (repository / "c.txt").write_text("new\n", encoding="utf-8")
+
+    diff = task_scope_review_diff(capture_task_change_scope(baseline))
+
+    numstat = {
+        name: (int(added), int(deleted))
+        for added, deleted, name in (line.split("\t") for line in git(
+            repository, "diff", "--numstat", start).splitlines())
+    }
+    per_file = diff["samples"]["per_file"]
+    for name, (added, deleted) in numstat.items():
+        assert (per_file[name]["additions"], per_file[name]["deletions"]) == (added, deleted)
+    assert per_file["c.txt"]["deletions"] == 0
+    assert diff["metrics"]["total_deletions"] == sum(d for _, d in numstat.values()) == 7
+    assert diff["metrics"]["net_lines"] == diff["metrics"]["total_additions"] - 7
+
+
 def test_clean_feature_branch_pretask_commit_is_accepted_and_excluded(repository: Path) -> None:
     (repository / "before.py").write_text("BEFORE = 1\n", encoding="utf-8")
     git(repository, "add", "before.py")

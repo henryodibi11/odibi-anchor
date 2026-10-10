@@ -12,6 +12,7 @@ import ast as ast_mod
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -127,20 +128,22 @@ def preflight_context(
         syntax_diags = _check_syntax(file_paths)
         diagnostics.extend(syntax_diags)
 
+    tool_paths: dict[str, str | None] = {}
+
     # Type check with pyright
     if check_types and file_paths:
-        pyright_path = shutil.which("pyright")
+        pyright_path = tool_paths["pyright"] = _resolve_tool("pyright")
         tools_available["pyright"] = pyright_path is not None
         if pyright_path:
-            type_diags = _run_pyright(root, file_paths)
+            type_diags = _run_pyright(root, file_paths, executable=pyright_path)
             diagnostics.extend(type_diags)
 
     # Lint with ruff
     if check_lint and file_paths:
-        ruff_path = shutil.which("ruff")
+        ruff_path = tool_paths["ruff"] = _resolve_tool("ruff")
         tools_available["ruff"] = ruff_path is not None
         if ruff_path:
-            lint_diags = _run_ruff(root, file_paths)
+            lint_diags = _run_ruff(root, file_paths, executable=ruff_path)
             diagnostics.extend(lint_diags)
 
     # Manifest: required_gates check
@@ -179,6 +182,7 @@ def preflight_context(
         "syntax_errors": len([d for d in errors if d["source"] == "syntax"]),
         "is_safe": is_safe,
         "tools_available": tools_available,
+        "tool_paths": tool_paths,
         "missing_required_gates": _missing_gates,
     }
 
@@ -337,9 +341,14 @@ def _check_syntax(files: list[Path]) -> list[dict[str, Any]]:
     return diagnostics
 
 
-def _run_pyright(root: Path, files: list[Path]) -> list[dict[str, Any]]:
+def _resolve_tool(name: str) -> str | None:
+    """Find a checker on PATH, then beside this interpreter (an unactivated venv's bin)."""
+    return shutil.which(name) or shutil.which(name, path=str(Path(sys.executable).parent))
+
+
+def _run_pyright(root: Path, files: list[Path], *, executable: str = "pyright") -> list[dict[str, Any]]:
     """Run pyright and parse JSON output."""
-    cmd = ["pyright", "--outputjson"]
+    cmd = [executable, "--outputjson"]
     if files:
         cmd.extend(str(f) for f in files)
 
@@ -372,9 +381,9 @@ def _run_pyright(root: Path, files: list[Path]) -> list[dict[str, Any]]:
     return diagnostics
 
 
-def _run_ruff(root: Path, files: list[Path]) -> list[dict[str, Any]]:
+def _run_ruff(root: Path, files: list[Path], *, executable: str = "ruff") -> list[dict[str, Any]]:
     """Run ruff and parse JSON output."""
-    cmd = ["ruff", "check", "--output-format", "json"]
+    cmd = [executable, "check", "--output-format", "json"]
     if files:
         cmd.extend(str(f) for f in files)
     else:

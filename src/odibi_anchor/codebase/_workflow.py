@@ -105,6 +105,12 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
         raise ValueError("plan.risk must be low, medium or high")
     if plan.get("execution_mode") not in {"read_only", "artifact_only", "source_change", "data_change"}:
         raise ValueError("invalid plan execution_mode")
+    # Drafts may omit fields, but a present list field must already have its accepted
+    # shape; otherwise the error surfaces only later at accept_plan.
+    for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions",
+                "unresolved_decisions", "source_paths", "artifact_paths", "criteria"):
+        if key in plan and not isinstance(plan[key], list):
+            raise ValueError(f"plan.{key} must be an explicit array")
     children = plan.get("required_children", [])
     if not isinstance(children, list):
         raise ValueError("plan.required_children must be an array")

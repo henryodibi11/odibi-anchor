@@ -8,12 +8,8 @@ from odibi_anchor.human_input import (
     HumanInputConfigurationError,
     HumanInputTransport,
 )
+from odibi_anchor.human_input_slack import slack_environment_source, slack_environment_variables
 
-_SLACK_VARIABLES = (
-    "ANCHOR_SLACK_BOT_TOKEN",
-    "ANCHOR_SLACK_CHANNEL_ID",
-    "ANCHOR_SLACK_USER_ID",
-)
 _DATABRICKS_IN_SESSION_PROVIDER = "databricks_in_session"
 
 
@@ -41,7 +37,7 @@ def databricks_in_session_preparation_available(*, provider: str | None = None) 
         and bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
         and (
             provider == _DATABRICKS_IN_SESSION_PROVIDER
-            or not any(os.environ.get(name) for name in _SLACK_VARIABLES)
+            or not any(os.environ.get(name) for name in slack_environment_variables())
         )
     )
 
@@ -73,11 +69,12 @@ def select_owner_approval_provider(
             expected_owner_id=transport.owner_user_id,
             assurance="lower_assurance_single_user_databricks_in_session_assertion",
         )
-    configured = tuple(bool(os.environ.get(name)) for name in _SLACK_VARIABLES)
+    slack_variables = slack_environment_variables()
+    configured = tuple(bool(os.environ.get(name)) for name in slack_variables)
     if any(configured):
         if not all(configured):
             missing = [
-                name for name, present in zip(_SLACK_VARIABLES, configured, strict=True)
+                name for name, present in zip(slack_variables, configured, strict=True)
                 if not present
             ]
             raise HumanInputConfigurationError(
@@ -124,7 +121,14 @@ def select_owner_approval_provider(
 
 
 def owner_approval_provider_status() -> dict[str, object]:
-    """Report provider capability without exposing credentials or opening a prompt."""
+    """Report provider capability without exposing credentials or opening a prompt.
+
+    ``slack_environment`` names the Slack variable set that was read, never its values.
+    """
+    return {**_provider_status(), "slack_environment": slack_environment_source()}
+
+
+def _provider_status() -> dict[str, object]:
     if databricks_in_session_preparation_available():
         return {
             "available": True,

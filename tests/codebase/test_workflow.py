@@ -450,3 +450,14 @@ def test_reconciliation_proof_cannot_be_reused_or_forged(run, field):
     with pytest.raises(workflow.WorkflowError, match="reconciliation"):
         run("verify_delivery", payload)
     assert workflow.read_workflow(run.path, owner=state["owner"], workflow_id=state["workflow_id"]) == state
+
+
+@pytest.mark.parametrize("field", ["scope", "constraints", "source_paths", "criteria"])
+def test_draft_rejects_list_fields_with_wrong_shape_at_create(tmp_path, owner, plan, field):
+    # A string scope used to be accepted as a draft and rejected only at accept_plan.
+    malformed = {**plan, field: "parser"}
+    with pytest.raises(ValueError, match=rf"plan\.{field} must be an explicit array"):
+        workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="create", plan=malformed)
+    partial = {key: value for key, value in plan.items() if key not in {"scope", "criteria"}}
+    assert workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial",
+                                    plan=partial)["progress"] == "draft"

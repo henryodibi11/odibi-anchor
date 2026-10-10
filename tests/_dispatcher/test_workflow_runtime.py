@@ -622,6 +622,36 @@ def test_checkpoint_closure_is_usable_without_inventing_another_gate(runtime):
     assert len(qualified["qualification"]["producer_terminal_record_sha256"]) == 64
 
 
+def test_producer_gate_before_implemented_warns_with_exact_next_operation(runtime):
+    anchor, home, _, _ = runtime
+    planned = advance(anchor, "accept_plan")
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_text("Result: 5\n")
+    anchor("touched", str(artifact), output_format="dict")
+    anchor("review", output_format="dict")
+    # Gating first freezes the producer; the gate used to say nothing, and the
+    # failure surfaced only later as "gated or closed tasks cannot produce candidates".
+    gate = anchor("gate", output_format="dict")
+    assert any(planned["workflow_id"] in risk and "no implemented candidate" in risk
+               for risk in gate["risks"])
+    assert gate["suggested_next_actions"][0].startswith(
+        f'MUST (before gate): anchor("workflow", "implemented", '
+        f'expected_generation={planned["generation"]}'
+    )
+    with pytest.raises(RuntimeError, match="gated or closed"):
+        advance(anchor, "implemented")
+
+
+def test_workflow_help_documents_producer_order_and_review_findings_schema(runtime):
+    anchor = runtime[0]
+    text = anchor("help", "workflow")
+    assert ("edit, touched, preflight, test, review, commit, workflow `implemented`, measure each "
+            "criterion, workflow `review`, gate, learning assess, then `qualify`") in text
+    assert "close the producer with gate and learning first" in text
+    assert '{"summary": "<nonempty text>", "status": "open" | "resolved"}' in text
+
+
 @pytest.mark.parametrize("assess", [False, True])
 def test_candidate_cannot_be_created_after_gate_or_closure_but_receipt_replays(runtime, assess):
     anchor, _, _, _ = runtime

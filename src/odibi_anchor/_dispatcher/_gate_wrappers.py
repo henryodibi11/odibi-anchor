@@ -341,6 +341,34 @@ def gate_with_auto_confirm(
             required_action="review", resume_action="gate",
         )
 
+    # ── Workflow producers should freeze their candidate before gating ──
+    # A successful gate creates the task's learning obligation, after which the task
+    # can no longer produce a candidate. Warn rather than block: gate-only producer
+    # lifecycles remain valid when no workflow qualification is intended.
+    _workflow_order_warning = None
+    _profile = getattr(session_state, "active_task_profile", None)
+    if (memory_db is not None and getattr(session_state, "workflow_binding", None) is not None
+            and _profile is not None and _profile.execution_mode != "read_only"):
+        from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        try:
+            _workflow_state = bound_workflow(memory_db, session_state=session_state)
+        except WorkflowError:
+            _workflow_state = None  # stale or foreign bindings are reported by workflow status
+        if (_workflow_state is not None and _workflow_state["status"] == "active"
+                and _workflow_state["progress"] == "planned"):
+            _workflow_order_warning = (
+                f"Workflow {_workflow_state['workflow_id']} had no implemented candidate when "
+                "this gate ran. After a successful gate this producer task can no longer "
+                "produce one, so the workflow cannot qualify from it.",
+                "MUST (before gate): anchor(\"workflow\", \"implemented\", "
+                f"expected_generation={_workflow_state['generation']}, "
+                f"request_id=\"implemented:{_workflow_state['generation']}\", "
+                "output_format=\"dict\"); if this gate already succeeded, replan at a safe "
+                "boundary and bind a fresh producer task.",
+            )
+
     # ── Enforce test pass: if tests ran and failed, block gate ──
     from odibi_anchor._dispatcher._enforcement import should_block_gate_tests as _sbgt
     _test_blocked, _test_block_msg = _sbgt(verification_timings, scope_files)
@@ -646,6 +674,10 @@ def gate_with_auto_confirm(
     except Exception as _exc:
         from odibi_anchor._utils._session_state import record_degraded
         record_degraded("gate_data_posture", _exc)
+
+    if isinstance(result, dict) and _workflow_order_warning is not None:
+        result.setdefault("risks", []).append(_workflow_order_warning[0])
+        result.setdefault("suggested_next_actions", []).insert(0, _workflow_order_warning[1])
 
     if isinstance(result, dict):
         _gate_risk = result.get("metrics", {}).get("risk_level")

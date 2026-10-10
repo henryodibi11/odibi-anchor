@@ -4,6 +4,7 @@ Extracted from agent_init.py Phase 1 (revamp spec).
 Functions that orchestrate subprocesses or session-level actions.
 """
 import os as _os
+import re as _re
 
 from odibi_anchor._dispatcher._request_adapter import redact_message
 from odibi_anchor.pytest_runner import run_pytest
@@ -47,6 +48,31 @@ def _format_test_result(result, output_format):
     return result
 
 
+DEFAULT_TEST_TIMEOUT_S = 30
+MAX_TEST_TIMEOUT_S = 600  # the whole-suite subprocess cap; a longer per-test limit is meaningless
+TEST_TIMEOUT_ENV = "ANCHOR_TEST_TIMEOUT"
+# pytest-timeout's thread method prints this banner and kills the process before any
+# report is written; the signal method fails the test with "Failed: Timeout >Ns".
+_PER_TEST_TIMEOUT = _re.compile(r"\+{5,} Timeout \+{5,}|Failed: Timeout >")
+
+
+def _per_test_timeout(value):
+    """Resolve the per-test timeout: call argument, then environment, then default."""
+    source = "timeout"
+    if value is None:
+        value = _os.environ.get(TEST_TIMEOUT_ENV) or DEFAULT_TEST_TIMEOUT_S
+        source = TEST_TIMEOUT_ENV
+    try:
+        seconds = float(value) if not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        seconds = None
+    if seconds is None or not 0 < seconds <= MAX_TEST_TIMEOUT_S:
+        raise ValueError(
+            f"{source} must be a number of seconds in (0, {MAX_TEST_TIMEOUT_S}]; got {value!r}"
+        )
+    return int(seconds) if seconds.is_integer() else seconds
+
+
 def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
     """Run pytest and return structured results.
 
@@ -56,7 +82,8 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
             Signature: fn(text, root=root, output_format="dict") -> dict.
         target: Optional file/pattern for focused run.
         mark: Optional marker filter (e.g. 'fast', 'slow').
-        timeout: Per-test timeout in seconds (default: 30).
+        timeout: Per-test timeout in seconds; defaults to ANCHOR_TEST_TIMEOUT, then 30.
+            Bounded to (0, 600].
         verbose: If True, include full output in samples.
         output_format: 'dict' or 'markdown'.
 
@@ -75,7 +102,7 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
     if isinstance(target, str) and " " in target.strip():
         target = target.split()
     mark = kwargs.pop("mark", None)
-    timeout = kwargs.pop("timeout", 30)
+    timeout = _per_test_timeout(kwargs.pop("timeout", None))
     verbose = kwargs.pop("verbose", False)
     output_format = kwargs.pop("output_format", "dict")
 
@@ -133,9 +160,18 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
     failed = summary_data["failed"]
     errors = summary_data["errors"]
     duration = summary_data["duration_s"]
+    per_test_timeout = proc.returncode != 0 and bool(_PER_TEST_TIMEOUT.search(f"{stdout}\n{stderr}"))
+    # Summaries without these counters report None, which workflow measurement rejects
+    # as incomplete rather than reading as zero.
+    expected = {name: summary_data.get(name) for name in ("xfailed", "xpassed") if summary_data.get(name)}
 
     # Build findings
     findings = []
+    if per_test_timeout:
+        findings.append(
+            f"A test exceeded the per-test timeout of {timeout}s (pytest-timeout); counts after "
+            "the timeout are incomplete."
+        )
     if proc.returncode == 0:
         findings.append(f"All {passed} test(s) passed in {duration:.1f}s")
     else:
@@ -144,6 +180,8 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
         for line in stdout.split("\n"):
             if line.startswith("FAILED "):
                 findings.append(line.strip())
+    if expected:
+        findings.append("Expected-failure outcomes: " + ", ".join(f"{v} {k}" for k, v in expected.items()))
 
     # On failure, run failure_pattern matching
     risks = []
@@ -163,25 +201,38 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
         # channels while keeping the diagnostic bounded and credential-redacted.
         samples["output_tail"] = _diagnostic_output_tail(stdout, stderr)
 
+    status = "PASS" if proc.returncode == 0 else "TIMEOUT" if per_test_timeout else "FAIL"
+    expected_text = "".join(f", {v} {k}" for k, v in expected.items())
+    metrics = {
+        "passed": passed, "failed": failed, "errors": errors,
+        "skipped": summary_data["skipped"],
+        "xfailed": summary_data.get("xfailed"), "xpassed": summary_data.get("xpassed"),
+        "duration_s": duration, "exit_code": proc.returncode,
+        "timed_out": False, "per_test_timeout_s": timeout,
+    }
+    if per_test_timeout:
+        metrics["failure_cause"] = "per_test_timeout"
+        next_actions = [
+            f"MUST: Re-run with a larger bounded limit, e.g. anchor('test', target=[...], "
+            f"timeout={min(MAX_TEST_TIMEOUT_S, max(int(timeout) * 4, 120))}) or set "
+            f"{TEST_TIMEOUT_ENV} (maximum {MAX_TEST_TIMEOUT_S}s), or fix the hanging test.",
+        ]
+    elif proc.returncode == 0:
+        next_actions = ["All tests pass — safe to proceed.", "MUST: Run anchor('gate') to verify session compliance."]
+    else:
+        first_failure = next((f for f in findings if f.startswith("FAILED ")), None)
+        focus = first_failure.split("::")[0].replace("FAILED ", " ").strip() if first_failure else "tests/"
+        next_actions = ["MUST: Fix failing tests before proceeding.",
+                        f"MUST: Run anchor('test', target='{focus}') for focused re-run"]
     result = {
         "kind": "test_run",
         "subject": (", ".join(target) if isinstance(target, (list, tuple)) else target) or "full_suite",
-        "summary": f"{'PASS' if proc.returncode == 0 else 'FAIL'}: {passed} passed, {failed} failed, {errors} errors ({duration:.1f}s)",
-        "metrics": {
-            "passed": passed, "failed": failed, "errors": errors,
-            "skipped": summary_data["skipped"],
-            "duration_s": duration, "exit_code": proc.returncode,
-            "timed_out": False,
-        },
+        "summary": f"{status}: {passed} passed, {failed} failed, {errors} errors{expected_text} ({duration:.1f}s)",
+        "metrics": metrics,
         "findings": findings,
         "risks": risks,
         "samples": samples,
-        "suggested_next_actions": (
-            ["All tests pass — safe to proceed.", "MUST: Run anchor('gate') to verify session compliance."]
-            if proc.returncode == 0
-            else ["MUST: Fix failing tests before proceeding.",
-                  f"MUST: Run anchor('test', target='{findings[1].split(chr(58)+chr(58))[0].replace(chr(70)+chr(65)+chr(73)+chr(76)+chr(69)+chr(68)+chr(32), chr(32)).strip() if len(findings) > 1 else 'tests/'}') for focused re-run"]
-        ),
+        "suggested_next_actions": next_actions,
     }
     return _format_test_result(result, output_format)
 
