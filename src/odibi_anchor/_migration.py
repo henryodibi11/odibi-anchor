@@ -352,10 +352,12 @@ def migration_receipt_for(
     target (at most 20 hops); otherwise nothing is reported.
     """
     root = _migrations_root(artifact_root)
-    if not root.is_dir():
+    try:
+        paths = sorted(root.glob("tm_*.receipt.json")) if root.is_dir() else []
+    except OSError:
         return None
     receipts = []
-    for path in sorted(root.glob("tm_*.receipt.json")):
+    for path in paths:
         try:
             receipt = json.loads(path.read_bytes())
             if receipt.get("format") == RECEIPT_FORMAT and receipt.get("project_id") == project_id:
@@ -809,6 +811,19 @@ def _owner_names(path: Path, ctx: _Context, target: str) -> bool:
     )
 
 
+def _new_epoch(ctx: _Context, journal: _Journal) -> bool:
+    """Whether ``continuity/v1`` is a new epoch started on the new target.
+
+    The recorded pre-migration owner is never a new epoch, even if it already names the
+    destination; only a different owner bound to ``to_target`` counts.
+    """
+    v1, _archive = _continuity_paths(ctx.artifact_root)
+    owner = v1 / "OWNER.json"
+    if not _owner_names(owner, ctx, journal.data["intent"]["to_target"]):
+        return False
+    return not journal.data["pre"]["continuity_present"] or _file_sha256(owner) != _owner_sha_for(journal, ctx)
+
+
 def _apply_descriptor(ctx: _Context, journal: _Journal, *, last: bool) -> None:
     from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
 
@@ -830,7 +845,6 @@ def _apply_descriptor(ctx: _Context, journal: _Journal, *, last: bool) -> None:
 
 def _apply_continuity(ctx: _Context, journal: _Journal, *, last: bool) -> None:
     pre = journal.data["pre"]
-    to_target = journal.data["intent"]["to_target"]
     v1, archive = _continuity_paths(ctx.artifact_root, journal.data["migration_id"])
     assert archive is not None
     state = "portfolio_pending" if last else None
@@ -838,7 +852,7 @@ def _apply_continuity(ctx: _Context, journal: _Journal, *, last: bool) -> None:
     expected = {"owner_sha256": owner_sha, "continuity_present": pre["continuity_present"],
                 "archive": str(archive)}
     # A launch on the finished route may already have started the new epoch in v1.
-    new_epoch = v1.exists() and _owner_names(v1 / "OWNER.json", ctx, to_target)
+    new_epoch = _new_epoch(ctx, journal)
     if not pre["continuity_present"]:
         if v1.exists() and not new_epoch:
             raise _mismatch(journal, "continuity", expected, {"v1_present": True})
@@ -926,7 +940,7 @@ def _route_mutations_remaining(ctx: _Context, journal: _Journal) -> bool:
     v1, archive = _continuity_paths(ctx.artifact_root, data["migration_id"])
     assert archive is not None
     descriptor_pending = _file_sha256(ctx.artifact_root / "PROJECT.md") != data["expected"]["descriptor_sha256"]
-    archived = archive.is_dir() and (not v1.exists() or _owner_names(v1 / "OWNER.json", ctx, data["intent"]["to_target"]))
+    archived = archive.is_dir() and (not v1.exists() or _new_epoch(ctx, journal))
     continuity_pending = data["pre"]["continuity_present"] and not archived
     portfolio_pending = (
         data["steps"]["portfolio"]["status"] != "already_applied"
@@ -1018,7 +1032,7 @@ def _rollback_actions(ctx: _Context, journal: _Journal) -> dict[str, str | None]
     observed = {"v1_present": v1.exists(), "archive_present": archive.exists(),
                 "owner_sha256": _file_sha256(v1 / "OWNER.json"),
                 "archived_owner_sha256": _file_sha256(archive / "OWNER.json")}
-    if v1.exists() and _owner_names(v1 / "OWNER.json", ctx, intent["to_target"]):
+    if _new_epoch(ctx, journal):
         raise _refuse_rollback(ctx, journal, "the project was already launched on the new target, which started a "
                                "new continuity epoch that a rollback would orphan", continuity=observed)
     if data["pre"]["continuity_present"]:
@@ -1237,6 +1251,8 @@ def move_target(
                     [_cli_operation({**journal.data["intent"], "from_target": to_value, "to_target": from_value},
                                     "dry_run", "preview the reverse move")],
                 )
+            # Report an impossible rollback before asking the owner to close live work.
+            _rollback_actions(ctx, journal)
             if _route_mutations_applied(ctx, journal):
                 _require_quiescent(ctx, document, {"migration_id": journal.data["migration_id"]})
             _run(ctx, journal, _run_rollback)

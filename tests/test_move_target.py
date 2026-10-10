@@ -450,6 +450,12 @@ def test_rollback_after_a_new_epoch_started_refuses_without_writing_then_resume_
     # The route is consistent after the portfolio write, so a launch starts the new epoch.
     assert deployment.prepare()["target_root"] == str(new)
     deployment.launch("alpha", new)
+    # Live work on the new target must not hide that the rollback is impossible.
+    workflow = _module("odibi_anchor.codebase._workflow")
+    workflow.create_workflow(deployment.state / ".agent_memory.db", owner={
+        "project_id": "alpha", "target_root": str(new), "artifact_root": str(artifact),
+        "anchor_home": str(deployment.state.resolve()), "trust_domain": "work",
+    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only"})
     before = _snapshot_bytes(deployment)
 
     with pytest.raises(Exception) as refused:
@@ -518,3 +524,20 @@ def test_cli_bad_mapping_file_is_an_input_error(deployment, tmp_path, capsys):
 
     assert code == cli.EXIT_INPUT
     assert json.loads(capsys.readouterr().out)["error"]["type"] == "input"
+
+
+def test_original_owner_already_naming_the_destination_is_archived_not_mistaken_for_a_new_epoch(deployment, targets):
+    old, new = targets
+    owner_path = deployment.artifact() / "continuity" / "v1" / "OWNER.json"
+    owner = json.loads(owner_path.read_bytes())
+    owner_path.write_text(json.dumps({**owner, "target_root": str(new)}, sort_keys=True, separators=(",", ":")) + "\n",
+                          encoding="utf-8")
+    original = owner_path.read_bytes()
+    deployment.write_portfolio({"alpha": str(new)})
+
+    result = deployment.move(source=old, destination=new)
+
+    assert result["status"] == "completed"
+    archive = deployment.artifact() / "continuity" / "archive" / result["migration_id"]
+    assert (archive / "OWNER.json").read_bytes() == original and not owner_path.exists()
+    assert result["steps"]["continuity"]["new_epoch_started"] is False
