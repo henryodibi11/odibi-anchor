@@ -306,6 +306,13 @@ def _project(
         return InvocationSemantics("artifact_write", "task_required")
     if selector in {"create", "set_target"}:
         return InvocationSemantics("artifact_write", "task_required")
+    if selector == "repair-descriptor":
+        approve = kwargs.get("approve", False)
+        if not isinstance(approve, bool):
+            raise ValueError("approve must be boolean")
+        if approve:
+            return InvocationSemantics("artifact_write", "task_required")
+        return InvocationSemantics("read", "safe_orientation")
     if selector == "migrate":
         dry_run = kwargs.get("dry_run", True)
         if not isinstance(dry_run, bool):

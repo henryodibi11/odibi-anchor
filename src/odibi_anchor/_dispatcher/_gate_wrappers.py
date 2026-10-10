@@ -304,6 +304,8 @@ def gate_with_auto_confirm(
     scope_files = set(task_scope.changed_paths) if task_scope is not None else set(session_files_changed)
     scope_created = (set(task_scope.provenance.get("created_paths", ()))
                      if task_scope is not None else set(session_files_created))
+    from odibi_anchor._dispatcher._descriptor_protection import check_descriptor_route_protection
+    check_descriptor_route_protection(session_state, changed_paths=scope_files | set(session_files_changed))
     if (
         memory_db is not None
         and task_scope is not None

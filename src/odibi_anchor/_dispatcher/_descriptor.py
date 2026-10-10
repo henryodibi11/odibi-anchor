@@ -37,6 +37,11 @@ ROUTE_FIELDS = ("id", "project_type", "target_root")
 _PROJECT_TYPES = frozenset({"managed", "referenced"})
 _QUOTES = "\"'"
 _IS_WINDOWS = os.name == "nt"
+_NO_REPAIR_SENTENCE = (
+    "The supported repair needs portfolio authority for the target (`anchor portfolio "
+    "repair-descriptor`), which this call did not have; stop and ask the project owner. "
+    "Do not replace or hand-edit PROJECT.md."
+)
 
 IntegrityStatus = Literal[
     "intact", "missing_frontmatter", "malformed_frontmatter", "missing_fields", "unreadable"
@@ -255,6 +260,141 @@ def write_descriptor_atomic(
     return hashlib.sha256(data).hexdigest()
 
 
+def descriptor_route_claims(text: str) -> dict[str, list[str]]:
+    """Leniently read flat route-field values from a possibly damaged frontmatter block.
+
+    Used only to refuse a repair that would contradict what the damaged descriptor still
+    claims; it never supplies a value to write.
+    """
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
+    if lines[0].lstrip("\ufeff").strip() != "---":
+        return {}
+    claims: dict[str, list[str]] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if not line or line[0] in " \t":
+            continue
+        key, separator, raw = line.partition(":")
+        value = raw.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in _QUOTES:
+            value = value[1:-1]
+        if separator and key.strip() in ROUTE_FIELDS and value:
+            claims.setdefault(key.strip(), []).append(value)
+    return claims
+
+
+def render_descriptor_repair(text: str, route: dict[str, str]) -> tuple[str, str, str]:
+    """Render repaired route frontmatter; return ``(text, mode, preserved_body)``.
+
+    ``route_fields_reconstructed`` rewrites only route lines of a terminated frontmatter
+    block, keeping every other frontmatter line and the body after the closing delimiter
+    byte for byte. Otherwise, or when that result would still not parse intact,
+    ``frontmatter_prepended`` places new route frontmatter above the whole old content.
+    The caller must still verify the result with ``parse_descriptor_text``.
+    """
+    if set(route) != set(ROUTE_FIELDS):
+        raise ValueError("descriptor repair requires every route field")
+    lines = text.split("\n")
+    closing = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None,
+    )
+    if lines[0].lstrip("\ufeff").strip() == "---" and closing is not None:
+        rendered: list[str] = [lines[0]]
+        written: set[str] = set()
+        under_route = False
+        for line in lines[1:closing]:
+            stripped = line.strip()
+            nested = line[:1] in " \t" or stripped == "-" or stripped.startswith("- ")
+            if not stripped or stripped.startswith("#") or nested:
+                if not (nested and stripped and under_route):
+                    rendered.append(line)
+                continue
+            key = line.partition(":")[0].strip()
+            under_route = key in ROUTE_FIELDS
+            if under_route and key not in written:
+                ending = "\r" if line.endswith("\r") else ""
+                rendered.append(f"{key}: {route[key]}{ending}")
+                written.add(key)
+            elif not under_route:
+                rendered.append(line)
+        rendered.extend(f"{key}: {route[key]}" for key in ROUTE_FIELDS if key not in written)
+        candidate = "\n".join(rendered + lines[closing:])
+        check = parse_descriptor_text(candidate, path="", sha256=None, expected_id=route["id"])
+        if check.intact and all(check.fields[key] == route[key] for key in ROUTE_FIELDS):
+            return candidate, "route_fields_reconstructed", "\n".join(lines[closing + 1:])
+    header = "---\n" + "".join(f"{key}: {route[key]}\n" for key in ROUTE_FIELDS) + "---\n"
+    return header + text, "frontmatter_prepended", text
+
+
+def repair_operations(
+    *, config_path: str, host_id: str, project_id: str, expected_sha256: str, approve: bool,
+) -> list[dict[str, Any]]:
+    """Copy-ready portfolio-authorized repair operations (CLI first, then dispatcher)."""
+    import shlex
+
+    from odibi_anchor._recovery import dispatcher_operation
+
+    arguments = {
+        "config_path": config_path, "host_id": host_id, "project_id": project_id,
+        "expected_sha256": expected_sha256, "approve": approve,
+    }
+    reason = (
+        "write the owner-approved repair: backup, receipt and post-write verification"
+        if approve else
+        "dry run: show the exact repaired PROJECT.md for owner review; nothing is written"
+    )
+    command = [
+        "anchor", "portfolio", "repair-descriptor", "--config", config_path, "--host", host_id,
+        "--project", project_id, "--expected-sha256", expected_sha256,
+    ] + (["--approve"] if approve else [])
+    return [
+        {
+            "operation": "repair_descriptor",
+            "arguments": arguments,
+            "copy_ready": shlex.join(command),
+            "python": "odibi_anchor.startup.repair_portfolio_descriptor(**arguments)",
+            "reason": reason,
+            "requires_owner": True,
+            "retry_safety": "refuses unless identity, portfolio target, ownership and the expected sha256 all match",
+        },
+        dispatcher_operation(
+            "project", "repair-descriptor", project_id,
+            kwargs={key: arguments[key] for key in ("config_path", "host_id", "expected_sha256", "approve")},
+            reason=reason, requires_owner=True,
+            retry_safety="refuses unless identity, portfolio target, ownership and the expected sha256 all match",
+        ),
+    ]
+
+
+def attach_repair_recovery(exc: ValueError, *, config_path: str, host_id: str) -> ValueError:
+    """Name the supported repair on a ``managed_descriptor_damaged`` error with portfolio authority.
+
+    Detection is unchanged; an unreadable descriptor has no hash to bind, so it keeps
+    ``supported_repair_available=False``.
+    """
+    from odibi_anchor._recovery import attach_recovery
+
+    context = dict(exc.context)  # type: ignore[attr-defined]
+    context.update(config_path=config_path, host_id=host_id)
+    if context.get("descriptor_sha256") is None:
+        return attach_recovery(exc, error_code="managed_descriptor_damaged", context=context)
+    operations = repair_operations(
+        config_path=config_path, host_id=host_id, project_id=context["project_id"],
+        expected_sha256=context["descriptor_sha256"], approve=False,
+    )
+    context["supported_repair_available"] = True
+    exc.args = (
+        str(exc.args[0]).split(_NO_REPAIR_SENTENCE)[0]
+        + "Stop and ask the project owner to review and approve the supported, "
+        f"portfolio-authorized repair (dry run first): {operations[0]['copy_ready']}. "
+        "Do not replace or hand-edit PROJECT.md.",
+    )
+    return attach_recovery(
+        exc, error_code="managed_descriptor_damaged", context=context, next_operations=operations,
+    )
+
+
 def validate_sha256(value: Any, name: str) -> str:
     """Return a lowercase 64-hex digest or raise a precise ValueError."""
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
@@ -277,9 +417,7 @@ def descriptor_damaged_error(
             f"Managed project '{project_id}' descriptor is damaged "
             f"(managed_descriptor_damaged, {integrity.status}): {integrity.detail}. "
             "Anchor did not substitute the artifact root for the target and did not "
-            "rewrite the descriptor. No supported descriptor repair operation exists in "
-            "this version; stop and ask the project owner. Do not replace or hand-edit "
-            "PROJECT.md."
+            f"rewrite the descriptor. {_NO_REPAIR_SENTENCE}"
         ),
         error_code="managed_descriptor_damaged",
         context={

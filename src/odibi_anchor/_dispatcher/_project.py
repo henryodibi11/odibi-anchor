@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1122,6 +1123,269 @@ def _set_target(
     }
 
 
+_REPAIR_BACKUP_DIRECTORY = ("archive", "descriptor-backups")
+_REPAIR_RECEIPT_FORMAT = "odibi-anchor-descriptor-repair-receipt-v1"
+
+
+def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+
+
+def _write_exclusive(path: Path, data: bytes) -> None:
+    """Create one new file without following links and fsync it."""
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644,
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def repair_descriptor(
+    anchor_home: str | Path,
+    project_id: str,
+    *,
+    portfolio_target: str,
+    expected_sha256: Any,
+    approve: Any = False,
+    authority: dict[str, Any],
+) -> dict[str, Any]:
+    """Reconstruct only the route frontmatter of one damaged ``PROJECT.md``.
+
+    ``portfolio_target`` is the portfolio's host/project target, the only target
+    authority; ``authority`` carries ``config_path``, ``config_sha256`` and ``host_id``.
+    Identity, portfolio target, artifact ownership and the expected current SHA-256 are
+    verified before anything is written. ``approve=False`` returns the exact plan;
+    ``approve=True`` writes a backup, the descriptor and a receipt, then verifies the
+    result. Every refusal is ``descriptor_repair_refused`` with a ``classification``.
+    """
+    from odibi_anchor._dispatcher._descriptor import (
+        descriptor_route_claims,
+        parse_descriptor_text,
+        render_descriptor_repair,
+        repair_operations,
+    )
+    from odibi_anchor._recovery import attach_recovery
+
+    home = Path(anchor_home).resolve()
+    context: dict[str, Any] = {
+        "project_id": project_id,
+        "portfolio_target": portfolio_target,
+        "config_path": authority.get("config_path"),
+        "host_id": authority.get("host_id"),
+        "expected_sha256": expected_sha256,
+    }
+
+    def refuse(classification: str, reason: str, **extra: Any) -> ValueError:
+        return attach_recovery(
+            ValueError(
+                f"Managed project '{project_id}' descriptor repair refused "
+                f"(descriptor_repair_refused, {classification}): {reason}. PROJECT.md was not "
+                "changed; Anchor never guesses a target. Stop and ask the project owner."
+            ),
+            error_code="descriptor_repair_refused",
+            context={**context, "classification": classification, "reason": reason, **extra},
+        )
+
+    try:
+        canonical = _normalize_project_id(project_id)
+    except ValueError as exc:
+        raise refuse("identity_mismatch", f"project ID is not canonical ({exc})") from exc
+    if canonical != project_id:
+        raise refuse("identity_mismatch", f"project ID is not canonical; expected {canonical!r}")
+    try:
+        project_root = _managed_project_root(home, project_id)
+    except ValueError as exc:
+        raise refuse("identity_mismatch", str(exc)) from exc
+    descriptor_path = project_root / _PROJECT_DESCRIPTOR
+    context.update(artifact_root=str(project_root), descriptor_path=str(descriptor_path))
+    if not project_root.is_dir():
+        raise refuse("identity_mismatch", "the managed project directory does not exist")
+    try:
+        data = descriptor_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise refuse("not_damaged", "PROJECT.md is absent, not damaged", integrity_status="absent") from exc
+    except OSError as exc:
+        raise refuse(
+            "unrepairable", f"PROJECT.md cannot be read ({type(exc).__name__})",
+            integrity_status="unreadable",
+        ) from exc
+    current_sha256 = hashlib.sha256(data).hexdigest()
+    context["current_sha256"] = current_sha256
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise refuse(
+            "unrepairable", "PROJECT.md is not valid UTF-8, so its body cannot be preserved",
+            integrity_status="malformed_frontmatter",
+        ) from exc
+    integrity = parse_descriptor_text(
+        text, path=str(descriptor_path), sha256=current_sha256, expected_id=project_id,
+    )
+    context["integrity_status"] = integrity.status
+    if integrity.intact:
+        raise refuse("not_damaged", "PROJECT.md route frontmatter is intact")
+    claims = descriptor_route_claims(text)
+    claimed_ids = sorted(set(claims.get("id", [])) - {project_id})
+    if claimed_ids:
+        raise refuse(
+            "identity_mismatch", f"the damaged frontmatter claims id {claimed_ids[0]!r}",
+            claimed_ids=claimed_ids,
+        )
+    try:
+        target_root = _normalize_target(portfolio_target)
+        if not Path(portfolio_target).is_absolute():
+            raise ValueError("portfolio target must be absolute")
+    except ValueError as exc:
+        raise refuse("portfolio_mismatch", f"the portfolio target is unusable ({exc})") from exc
+    target_identity = route_path_identity(target_root)
+    for claimed in claims.get("target_root", []):
+        resolved = claimed if Path(claimed).is_absolute() else str((project_root / claimed).resolve())
+        if route_path_identity(resolved) != target_identity:
+            raise refuse(
+                "portfolio_mismatch",
+                f"the damaged frontmatter claims target {claimed!r}, not the portfolio target",
+                claimed_target=claimed,
+            )
+    sentinel = project_root / "continuity" / "v1" / "OWNER.json"
+    if sentinel.exists() or sentinel.is_symlink():
+        try:
+            owner = json.loads(sentinel.read_text(encoding="utf-8"))
+            owner_id, owner_artifact = owner["project_id"], owner["artifact_root"]
+            owner_target = owner.get("target_root")
+            owned = owner_id == project_id and route_path_identity(owner_artifact) == (
+                route_path_identity(project_root)
+            )
+            owner_target_matches = owner_target is None or (
+                route_path_identity(owner_target) == target_identity
+            )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise refuse(
+                "ownership_mismatch", f"continuity OWNER.json is unreadable ({type(exc).__name__})",
+                owner_path=str(sentinel),
+            ) from exc
+        if not owned:
+            raise refuse(
+                "ownership_mismatch",
+                "continuity OWNER.json names another project or artifact root",
+                owner_path=str(sentinel), owner_project_id=owner_id, owner_artifact_root=owner_artifact,
+            )
+        if not owner_target_matches:
+            raise refuse(
+                "portfolio_mismatch",
+                "continuity OWNER.json is bound to another target than the portfolio",
+                owner_path=str(sentinel), owner_target_root=owner_target,
+            )
+    validate_sha256(expected_sha256, "expected_sha256")
+    if expected_sha256 != current_sha256:
+        raise refuse("stale_hash", "PROJECT.md changed since expected_sha256 was read")
+    route = {
+        "id": project_id,
+        "project_type": "managed" if target_identity == route_path_identity(project_root) else "referenced",
+        "target_root": target_root,
+    }
+    rendered, mode, body = render_descriptor_repair(text, route)
+    check = parse_descriptor_text(
+        rendered, path=str(descriptor_path), sha256=None, expected_id=project_id,
+    )
+    if not check.intact or any(check.fields[key] != value for key, value in route.items()):
+        raise refuse(
+            "unrepairable",
+            f"the portfolio target cannot be represented in route frontmatter ({check.detail})",
+        )
+    if type(approve) is not bool:
+        raise refuse("approval_required", "approve must be exactly true or false")
+    rendered_sha256 = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    result: dict[str, Any] = {
+        "kind": "descriptor_repair",
+        "project_id": project_id,
+        "artifact_root": str(project_root),
+        "descriptor_path": str(descriptor_path),
+        "integrity_status": integrity.status,
+        "route_fields": route,
+        "mode": mode,
+        "body_preserved": rendered.endswith(body),
+        "pre_sha256": current_sha256,
+        "rendered_sha256": rendered_sha256,
+        "authority": dict(authority),
+    }
+    operation_inputs = {
+        "config_path": str(authority.get("config_path")), "host_id": str(authority.get("host_id")),
+        "project_id": project_id, "expected_sha256": current_sha256,
+    }
+    if not approve:
+        return {
+            **result,
+            "status": "plan",
+            "approved": False,
+            "rendered_text": rendered,
+            "next_operations": repair_operations(**operation_inputs, approve=True),
+        }
+    backup_directory = project_root.joinpath(*_REPAIR_BACKUP_DIRECTORY)
+    for part in (backup_directory.parent, backup_directory):
+        if part.is_symlink() or (part.exists() and not part.is_dir()):
+            raise refuse("unrepairable", f"backup directory {part} is not a real directory")
+    backup_directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    stem = f"PROJECT.{stamp}.{current_sha256[:12]}"
+    backup_path = backup_directory / f"{stem}.md"
+    _write_exclusive(backup_path, data)
+    try:
+        post_sha256 = write_descriptor_atomic(descriptor_path, rendered, expected_sha256=current_sha256)
+    except FileExistsError as exc:
+        actual = hashlib.sha256(descriptor_path.read_bytes()).hexdigest() if descriptor_path.is_file() else None
+        raise refuse(
+            "stale_hash", "PROJECT.md changed before the repair could be written",
+            current_sha256=actual, backup_path=str(backup_path),
+        ) from exc
+    receipt = {
+        "format": _REPAIR_RECEIPT_FORMAT,
+        "operation": "repair_descriptor",
+        "repaired_at": stamp,
+        "project_id": project_id,
+        "artifact_root": str(project_root),
+        "descriptor_path": str(descriptor_path),
+        "integrity_status_before": integrity.status,
+        "mode": mode,
+        "route_fields": route,
+        "pre_sha256": current_sha256,
+        "post_sha256": post_sha256,
+        "backup_path": str(backup_path),
+        "authority": dict(authority),
+    }
+    receipt_path = backup_directory / f"{stem}.receipt.json"
+    _write_exclusive(receipt_path, _canonical_json_bytes(receipt))
+    after = read_descriptor(project_root)
+    verified = (
+        after.intact and after.sha256 == post_sha256 == rendered_sha256
+        and all(after.fields[key] == value for key, value in route.items())
+        and after.text.endswith(body)
+    )
+    if not verified:
+        raise attach_recovery(
+            RuntimeError(
+                f"Managed project '{project_id}' descriptor repair could not be verified "
+                f"(descriptor_repair_unverified): PROJECT.md is now {after.status} with sha256 "
+                f"{after.sha256}. The original bytes are preserved at {backup_path}. Stop and ask "
+                "the project owner."
+            ),
+            error_code="descriptor_repair_unverified",
+            context={**context, "backup_path": str(backup_path), "receipt_path": str(receipt_path),
+                     "observed_sha256": after.sha256, "observed_status": after.status},
+        )
+    return {
+        **result,
+        "status": "repaired",
+        "approved": True,
+        "post_sha256": post_sha256,
+        "backup_path": str(backup_path),
+        "receipt_path": str(receipt_path),
+        "receipt": receipt,
+        "verified": True,
+    }
+
+
 def project_action(
     anchor_home: str | Path,
     *args: Any,
@@ -1133,6 +1397,9 @@ def project_action(
     routing_stale: bool = False,
     dry_run: bool = True,
     expected_sha256: str | None = None,
+    config_path: str | None = None,
+    host_id: str | None = None,
+    approve: Any = False,
     output_format: str = "markdown",
     **_extra: Any,
 ) -> dict[str, Any] | str:
@@ -1223,8 +1490,24 @@ def project_action(
             "target_root": str(source_root),
             "project_type": resolved["project_type"],
         })
+    elif command == "repair-descriptor":
+        if not config_path or not host_id:
+            raise ValueError(
+                "repair-descriptor requires config_path=... and host_id=...: the portfolio "
+                "host/project target is the only target authority"
+            )
+        from odibi_anchor.startup import repair_portfolio_descriptor
+
+        result["descriptor_repair"] = repair_portfolio_descriptor(
+            config_path=config_path, host_id=host_id,
+            project_id=command_arg or name or "", expected_sha256=expected_sha256,
+            approve=approve, anchor_home=anchor_home_path,
+        )
     else:
-        raise ValueError("Unknown project sub-command. Valid: list, create, use, status, set_target, migrate")
+        raise ValueError(
+            "Unknown project sub-command. Valid: list, create, use, status, set_target, "
+            "migrate, repair-descriptor"
+        )
 
     active, active_damage = _remembered_project(anchor_home_path)
     if active_damage is not None:
@@ -1250,7 +1533,8 @@ def project_action(
         result["suggested_next_actions"].insert(0, (
             f"Stop and ask the project owner: the remembered project "
             f"'{active_damage['project_id']}' has a damaged PROJECT.md route descriptor "
-            f"({active_damage['integrity_status']}); no supported repair exists in this version."
+            f"({active_damage['integrity_status']}); only the owner can approve the "
+            "portfolio-authorized `anchor portfolio repair-descriptor` operation."
         ))
     # Discovery follows the immutable runtime binding, never a changed legacy selector.
     discovery_root = route_binding.artifact_root if route_binding is not None else result.get("artifact_root")
