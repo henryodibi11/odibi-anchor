@@ -125,8 +125,11 @@ def run_pre_dispatch_enforcement(
             )
         if kwargs.get("outcome") == "nothing_reusable_learned":
             epoch = getattr(session_state, "task_verification_epoch", None)
+            # A rejected closure or help attempt is lifecycle bookkeeping, not a
+            # failed task action that could carry a reusable observation.
             observed_failures = [
-                row for row in session_timings[epoch or 0:] if row.get("error")
+                row for row in session_timings[epoch or 0:]
+                if row.get("error") and row.get("action") not in {"learning", "learn", "help"}
             ]
             if observed_failures and not str(kwargs.get("notes") or "").strip():
                 actions = sorted({str(row.get("action") or "unknown") for row in observed_failures})
@@ -169,10 +172,8 @@ def run_pre_dispatch_enforcement(
         continuation = kwargs.get("continuation", False)
         if type(continuation) is not bool:
             raise TypeError("continuation must be a bool")
-        if continuation and any(
-            timing["action"] == "new_session" and timing.get("error") is None
-            for timing in session_timings
-        ):
+        from odibi_anchor._dispatcher._enforcement import inline_session_since_closure
+        if continuation and inline_session_since_closure(session_timings):
             raise ValueError(
                 "continuation=True replaces the inline new_session call; do not use both"
             )
@@ -316,21 +317,39 @@ def run_pre_dispatch_enforcement(
     # ── Ungated edit limit ──
     from odibi_anchor._dispatcher._limits import lifecycle_limits
     limits = lifecycle_limits(root, session_state.active_task_profile)
+    # Exact accepted-plan source paths of a workflow-bound producer are planned work:
+    # they do not consume either cap. Unplanned paths keep both caps unchanged.
+    planned_paths: frozenset[str] = frozenset()
+    planned_touch = False
     if action in ("safe", "semantic", "touched"):
+        from odibi_anchor._dispatcher._boot import _ENV
+        from odibi_anchor._dispatcher._workflow_evidence import planned_source_paths
+        from odibi_anchor._utils._session_state import canonical_session_path
+        planned_paths = planned_source_paths(_ENV["memory_db"], session_state=session_state)
+        planned_touch = bool(
+            action == "touched" and args and isinstance(args[0], str) and args[0].strip()
+            and canonical_session_path(args[0], root) in planned_paths
+        )
+    if action in ("safe", "semantic", "touched") and not planned_touch:
         from odibi_anchor._dispatcher._enforcement import should_block_edit_limit
         max_ungated = int(limits["max_ungated_edits"])
-        blocked, msg = should_block_edit_limit(session_timings, max_ungated=max_ungated)
+        blocked, msg = should_block_edit_limit(
+            session_timings, max_ungated=max_ungated, exempt_paths=planned_paths,
+        )
         if blocked:
             raise RuntimeError(
                 f"BLOCKED: {msg}\n"
                 f"Run anchor(\"gate\") or anchor(\"checkpoint\", ...) to verify quality before continuing.\n"
                 f"Maximum ungated edits: {max_ungated}."
+                + (f" {len(planned_paths)} accepted-plan source paths are exempt; this edit is unplanned."
+                   if planned_paths else "")
             )
 
     # ── Auto-checkpoint nudge ──
-    if action == "touched":
+    if action == "touched" and not planned_touch:
         _check_checkpoint_threshold(
             args, root, session_files_changed, session_boot_manifest, session_state, limits,
+            planned_paths=planned_paths,
         )
 
     # Production passes the already-resolved invocation. The contract fallback
@@ -524,8 +543,9 @@ def _check_checkpoint_threshold(
     session_boot_manifest: dict[str, Any],
     session_state: Any,
     limits: dict[str, int | str],
+    planned_paths: frozenset[str] = frozenset(),
 ) -> None:
-    """Block when too many files without checkpoint."""
+    """Block when too many unplanned files are registered without checkpoint."""
     threshold = int(limits["checkpoint_file_threshold"])
     current_touch = args[0] if args else ""
     is_reconciliation = False
@@ -550,15 +570,42 @@ def _check_checkpoint_threshold(
         current_touch=current_touch,
         threshold=threshold,
         is_reconciliation=is_reconciliation,
+        exempt_paths=planned_paths,
     )
     if blocked:
-        raise RuntimeError(
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+        if planned_paths:
+            remedy = (
+                f"{len(planned_paths)} accepted-plan source paths do not count; "
+                f"{current_touch!r} is unplanned. A checkpoint would close this workflow "
+                "producer before `implemented`; add the path through a workflow replan instead.\n"
+            )
+            operation = dispatcher_operation(
+                "help", "workflow",
+                reason="read the replan procedure for adding an unplanned path to the accepted plan",
+            )
+        else:
+            remedy = (
+                "Run anchor(\"checkpoint\", label=\"<feature>\", "
+                "learning_assessment={\"outcome\": \"nothing_reusable_learned\"}) "
+                "before touching more files.\n"
+            )
+            operation = dispatcher_operation(
+                "checkpoint", kwargs={
+                    "label": "<feature>",
+                    "learning_assessment": {"outcome": "nothing_reusable_learned"},
+                },
+                reason="close this feature boundary before registering more unplanned files",
+                retry_safety="not_idempotent",
+            )
+        raise attach_recovery(RuntimeError(
             f"BLOCKED: {msg}\n"
-            "Run anchor(\"checkpoint\", label=\"<feature>\", "
-            "learning_assessment={\"outcome\": \"nothing_reusable_learned\"}) "
-            "before touching more files.\n"
-            f"This prevents the 'many files changed without checkpoint between features' compliance gap.\n"
+            + remedy
+            + "This prevents the 'many files changed without checkpoint between features' compliance gap.\n"
             f"Effective files per checkpoint: {threshold} "
             f"(risk={limits['checkpoint_risk']}, configured upper bound="
             f"{limits['checkpoint_configured_upper_bound']})."
-        )
+        ), error_code="checkpoint_file_cap", context={
+            "path": current_touch, "threshold": threshold, "risk": limits["checkpoint_risk"],
+            "planned_paths_exempt": len(planned_paths),
+        }, next_operations=[operation])

@@ -233,6 +233,35 @@ def _paths(plan, key):
     return paths
 
 
+def planned_source_paths(path: str | Path, *, session_state: Any) -> frozenset[str]:
+    """Return accepted-plan source paths that count as planned producer work.
+
+    Only an active, accepted (planned or implemented) source_change producer binding
+    qualifies. Any other or unreadable state returns no paths, so the ordinary
+    checkpoint and ungated-edit caps apply unchanged. The plan only bounds counting;
+    candidate collection still rejects every changed path outside the plan.
+    """
+    import sqlite3
+
+    from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+
+    binding = getattr(session_state, "workflow_binding", None)
+    profile = getattr(session_state, "active_task_profile", None)
+    if (not isinstance(binding, dict) or "review_candidate_sha256" in binding
+            or getattr(profile, "execution_mode", None) != "source_change"):
+        return frozenset()
+    try:
+        state = bound_workflow(path, session_state=session_state)
+        if (state is None or state["status"] != "active"
+                or state["phase"] != "implement_and_qualify"
+                or state["progress"] not in {"planned", "implemented"}
+                or state["plan"].get("execution_mode") != "source_change"):
+            return frozenset()
+        return frozenset(_paths(state["plan"], "source_paths"))
+    except (WorkflowError, sqlite3.Error, OSError, KeyError, TypeError, ValueError):
+        return frozenset()
+
+
 def collect_candidate(path: str | Path, *, session_state: Any,
                       workflow_id: str) -> dict[str, Any]:
     """Read exact current bytes under the persisted producing task's authority."""
@@ -438,6 +467,23 @@ def runtime_environment() -> dict[str, Any]:
                 [[d.metadata["Name"], d.version] for d in importlib.metadata.distributions()],
                 key=lambda item: (item[0] or "", item[1]),
             )}
+
+
+def missing_optional_dependencies(skip_reasons: Any) -> list[str]:
+    """Name top-level modules that pytest skip reasons report as not importable.
+
+    Recognizes ``pytest.importorskip`` ("could not import 'x'") and
+    ``ModuleNotFoundError`` ("No module named 'x'") text. Diagnostic only.
+    """
+    import re
+
+    if not isinstance(skip_reasons, list):
+        return []
+    pattern = re.compile(r"(?:could not import|No module named) '([A-Za-z_][\w.]*)'")
+    found = {match.group(1).split(".")[0]
+             for reason in skip_reasons if isinstance(reason, str)
+             for match in pattern.finditer(reason)}
+    return sorted(found)
 
 
 def collect_test_measurement(*, state: dict[str, Any], before: dict[str, Any],

@@ -54,6 +54,9 @@ qualify against the same failure modes from an installed wheel.
     transport.
   - Every test starts with no `ANCHOR_*` variables and gets its environment
     restored afterward.
+- `test_lifecycle_friction_replay.py` drives one high-risk workflow candidate with more than 15
+  planned files from inquiry through a dispatcher restart to `qualify` on a local Git target
+  (issue #39). It needs no fake Databricks runtime.
 - `test_incident_replay.py` holds the scenarios. `test_replay_harness.py` holds
   the harness's own contract tests, including a crash matrix over durable snapshot
   publication.

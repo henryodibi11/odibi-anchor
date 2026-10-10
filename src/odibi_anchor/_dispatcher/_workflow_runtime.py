@@ -14,6 +14,8 @@ from odibi_anchor.codebase._workflow import (
     transition_workflow,
 )
 
+DEFAULT_APPROVAL_TIMEOUT_MINUTES = 5
+MAX_APPROVAL_TIMEOUT_MINUTES = 240
 READ_COMMANDS = frozenset({"status", "prepare_delivery", "prepare_revocation"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
                             "request_delivery_approval", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan"})
@@ -22,12 +24,14 @@ WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "q
 def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     request_id=None, expected_generation=None, plan=None, findings=None,
                     reason=None, blocker_kind=None, resolution=None, criterion_id=None,
-                    output_format="dict"):
+                    timeout_minutes=None, output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
     Create returns a draft ID to bind at a fresh task acceptance via workflow_id.
     All transitions require a caller-observed generation and idempotency key.
     No actor, approval, measurement, candidate, or receipt payload is accepted.
+    ``timeout_minutes`` (integer 1-240, default 5) bounds the owner's response window
+    for request_delivery_approval and revoke_delivery only; it grants no authority.
     """
     from odibi_anchor._dispatcher._workflow_delivery import (
         observe_destination,
@@ -54,11 +58,23 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         raise ValueError("workflow output_format must be dict or markdown")
     if command in WRITE_COMMANDS and output_format != "dict":
         raise ValueError("workflow writes require dict output for durability checkpointing")
+    if timeout_minutes is not None:
+        if command not in {"request_delivery_approval", "revoke_delivery"}:
+            raise ValueError("timeout_minutes applies only to request_delivery_approval and revoke_delivery")
+        if type(timeout_minutes) is not int or not 1 <= timeout_minutes <= MAX_APPROVAL_TIMEOUT_MINUTES:
+            raise ValueError(
+                f"timeout_minutes must be an integer from 1 to {MAX_APPROVAL_TIMEOUT_MINUTES} "
+                f"(default {DEFAULT_APPROVAL_TIMEOUT_MINUTES})"
+            )
     public_request = {"command": command, "expected_generation": expected_generation,
                       "plan": plan, "findings": findings, "reason": reason,
                       "blocker_kind": blocker_kind, "resolution": resolution}
     if criterion_id is not None:
         public_request["criterion_id"] = criterion_id
+    # The default stays out of the replay key so existing receipts and retries match.
+    if timeout_minutes not in (None, DEFAULT_APPROVAL_TIMEOUT_MINUTES):
+        public_request["timeout_minutes"] = timeout_minutes
+    approval_timeout = timeout_minutes or DEFAULT_APPROVAL_TIMEOUT_MINUTES
     replayed = False
     if command == "status":
         if workflow_id is None:
@@ -120,10 +136,12 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             elif command == "request_delivery_approval":
                 state = request_delivery_approval(path, session_state=session_state,
                                                   workflow_id=workflow_id, request_id=request_id,
+                                                  timeout_minutes=approval_timeout,
                                                   public_request=public_request)
             elif command == "revoke_delivery":
                 state = request_delivery_revocation(path, session_state=session_state,
                                                     workflow_id=workflow_id, request_id=request_id,
+                                                    timeout_minutes=approval_timeout,
                                                     public_request=public_request)
             else:
                 operation = command
@@ -181,8 +199,12 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
 
 
-def bind_task_workflow(path, *, session_state, workflow_id):
-    """Prepare binding before immutable task persistence; never alter an old record."""
+def bind_task_workflow(path, *, session_state, workflow_id, task_call=None):
+    """Prepare binding before immutable task persistence; never alter an old record.
+
+    ``task_call`` is the caller's ``(args, kwargs)`` and only shapes the copy-ready
+    correction in a rejection; it never contributes authority.
+    """
     from odibi_anchor._dispatcher._workflow_admission import bind_workflow
     from odibi_anchor._dispatcher._workflow_evidence import bind_review, validate_producer_policy
 
@@ -192,8 +214,27 @@ def bind_task_workflow(path, *, session_state, workflow_id):
     state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
     validate_producer_policy(state["plan"], profile)
     ranks = {"low": 0, "medium": 1, "high": 2}
-    if ranks[profile.risk] < ranks[state["plan"]["risk"]]:
-        raise WorkflowError("wrong_authority", "accepted task cannot downgrade workflow risk")
+    required = state["plan"]["risk"]
+    if ranks[profile.risk] < ranks[required]:
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        call_args, call_kwargs = task_call if task_call is not None else ((), {})
+        corrected = {key: value for key, value in dict(call_kwargs).items()
+                     if not str(key).startswith("_")}
+        corrected.update(risk=required, workflow_id=workflow_id)
+        raise attach_recovery(WorkflowError(
+            "wrong_authority",
+            f"accepted task cannot downgrade workflow risk: workflow {workflow_id} requires "
+            f"risk={required!r}, but the task was accepted with risk={profile.risk!r}. "
+            f"Restate risk={required!r} explicitly on the producer task.",
+        ), error_code="workflow_risk_downgrade", context={
+            "workflow_id": workflow_id, "required_risk": required, "requested_risk": profile.risk,
+            "execution_mode": state["plan"]["execution_mode"],
+        }, next_operations=[dispatcher_operation(
+            "task", *call_args, kwargs=corrected,
+            reason=f"accept the producer at the workflow's exact risk ({required})",
+            retry_safety="not_idempotent",
+        )])
     return bind_workflow(path, session_state=session_state, workflow_id=workflow_id)
 
 
@@ -205,22 +246,40 @@ def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
         collect_test_measurement,
         runtime_environment,
     )
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    def rejected(exc, *operations):
+        # Nothing ran, so the call is neither passing nor failing evidence.
+        return attach_recovery(exc, error_code="workflow_measurement_rejected", context={
+            "executed": False, "criterion_id": criterion_id,
+            "reason_code": getattr(exc, "code", "invalid_request"),
+        }, next_operations=operations)
 
     state = bound_workflow(path, session_state=session_state)
     if state is None or state["progress"] != "implemented" or state["status"] != "active":
-        raise WorkflowError("missing_evidence", "measurement requires a bound implemented candidate")
-    if args or kwargs.get("mark"):
-        raise ValueError("workflow measurement requires exact keyword target list without marker filters")
+        raise rejected(WorkflowError("missing_evidence", "measurement requires a bound implemented candidate"))
     criteria = [c for c in state["plan"]["criteria"] if c["id"] == criterion_id]
+    exact = []
+    if len(criteria) == 1 and criteria[0]["method"] == "pytest":
+        exact = [dispatcher_operation(
+            "test", kwargs={"target": criteria[0].get("test_targets"), "workflow_criterion": criterion_id,
+                            "timeout": kwargs.get("timeout", 600), "output_format": "dict"},
+            reason="measure with the criterion's exact test_targets", retry_safety="not_idempotent",
+        )]
+    if args or kwargs.get("mark"):
+        raise rejected(ValueError(
+            "workflow measurement requires exact keyword target list without marker filters"), *exact)
     targets = kwargs.get("target")
     if (len(criteria) != 1 or criteria[0]["method"] != "pytest"
             or not isinstance(targets, list) or targets != criteria[0].get("test_targets")):
-        raise WorkflowError("missing_evidence", "test target must exactly match the workflow criterion")
-    before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
-    environment = runtime_environment()
+        raise rejected(WorkflowError(
+            "missing_evidence", "test target must exactly match the workflow criterion"), *exact)
     output_format = kwargs.get("output_format", "dict")
     if output_format != "dict":
-        raise ValueError("workflow measurements require dict output for durability checkpointing")
+        raise rejected(ValueError("workflow measurements require dict output for durability checkpointing"),
+                       *exact)
+    before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
+    environment = runtime_environment()
     result = runner(**{**kwargs, "output_format": "dict"})
     after = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
     measurement = collect_test_measurement(state=state, before=before, after=after,
@@ -233,4 +292,17 @@ def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
     )
     result["workflow_measurement"] = {"workflow_id": state["workflow_id"], "criterion_id": criterion_id,
                                       "status": measurement["status"], "generation": updated["generation"]}
+    if measurement["status"] == "failed" and measurement["counts"]["skipped"]:
+        from odibi_anchor._dispatcher._workflow_evidence import missing_optional_dependencies
+
+        missing = missing_optional_dependencies((result.get("samples") or {}).get("skip_reasons"))
+        result["workflow_measurement"]["skipped"] = measurement["counts"]["skipped"]
+        result["workflow_measurement"]["missing_dependencies"] = missing
+        result.setdefault("findings", []).append(
+            f"Criterion {criterion_id!r} requires zero skipped tests; "
+            f"{measurement['counts']['skipped']} skipped."
+            + (f" Install the missing optional dependencies in the qualification environment and "
+               f"re-measure: {', '.join(missing)}." if missing
+               else " Inspect samples.skip_reasons for the skip causes.")
+        )
     return _format_test_result(result, output_format)

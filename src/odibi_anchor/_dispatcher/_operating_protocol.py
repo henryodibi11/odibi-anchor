@@ -119,12 +119,27 @@ def build_operating_protocol(
         else:
             required.append({"id": "start_session", "satisfy_with": {"route": "new_session"}})
     else:
-        skills = _required_skills(profile, session_state)
+        skills, spec_disposition = _required_skills_and_spec(profile, session_state)
         loaded = set(getattr(session_state, "skills_loaded", set()))
         missing = sorted(set(skills) - loaded)[:20]
         for skill in missing:
             required.append({"id": "load_required_skill", "satisfy_with": {
                 "route": "skill_loaded", "skill": skill,
+            }})
+        linked_spec = getattr(session_state, "linked_spec", None)
+        spec_ready = bool(
+            linked_spec
+            and getattr(session_state, "persisted_spec_name", None) == linked_spec
+            and getattr(session_state, "reviewed_spec_name", None) == linked_spec
+            and getattr(session_state, "spec_review_rating", None) in {"good", "excellent"}
+        )
+        if spec_disposition == "required" and not spec_ready:
+            # Surface the Spec requirement at acceptance, before any edit is blocked.
+            required.append({"id": "required_spec", "satisfy_with": {
+                "route": "spec",
+                "sequence": ["spec create (or link an existing spec)", "spec execute", "spec review"],
+                "minimum_review_rating": "good",
+                "blocks": ["source_write", "artifact_write", "data_write"],
             }})
 
     compatible = [effect for effect in _PROFILE_EFFECTS
@@ -187,8 +202,8 @@ def build_operating_protocol(
     }
 
 
-def _required_skills(profile: Any, session_state: Any) -> tuple[str, ...]:
-    """Resolve skills through the same accepted-task policy used by pre-dispatch."""
+def _required_skills_and_spec(profile: Any, session_state: Any) -> tuple[tuple[str, ...], str | None]:
+    """Resolve required skills and the Spec disposition from the accepted-task policy."""
     try:
         from odibi_anchor.planning._task_builders import required_skills_for_task
         from odibi_anchor.planning._task_policy import evaluate_fresh_task_policies
@@ -197,12 +212,11 @@ def _required_skills(profile: Any, session_state: Any) -> tuple[str, ...]:
             profile, session_state=session_state,
             current_action="operating_protocol", current_effect="orient",
         )
-        return required_skills_for_task(
-            context, specification_disposition=policies.specification.disposition,
-        )
+        disposition = policies.specification.disposition
+        return required_skills_for_task(context, specification_disposition=disposition), disposition
     except (AttributeError, TypeError, ValueError):
         # A projection must never manufacture requirements from incomplete state.
-        return ()
+        return (), None
 
 
 def _latest_action_status(window: Sequence[Mapping[str, Any]], action: str) -> str:

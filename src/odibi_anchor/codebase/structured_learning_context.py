@@ -129,6 +129,35 @@ def _text(value: Any, field: str, limit: int, *, empty: bool = False, free: bool
     return value
 
 
+_SENSITIVE_CATEGORIES = (
+    ("an absolute host path (/home, /workspace, /Users, /dbfs or /Volumes); use a "
+     "repository-relative path and cite locations as file evidence",
+     re.compile(r"(?<![A-Za-z0-9._-])/(?:home|workspace|Users|dbfs|Volumes)(?:/|(?=$|\s|[^A-Za-z0-9._-]))", re.I)),
+    ("a URL or protocol-relative link", re.compile(r"\b[a-z][a-z0-9+.-]{1,31}://|//\S+", re.I)),
+    ("an email address", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I)),
+    ("a hostname such as name.com, .io, .dev or .local",
+     re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cloud|app|local)\b", re.I)),
+)
+
+
+def _summary_rejection_reason(value: Any) -> str:
+    """Explain a rejected summary without echoing the matched text."""
+    if not isinstance(value, str):
+        return f"expected a string, got {type(value).__name__}"
+    if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in unicodedata.normalize("NFC", value)):
+        return "contains control characters (newlines and tabs are not allowed)"
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return "is empty"
+    if len(normalized) > 1000:
+        return f"is {len(normalized)} characters; the limit is 1000"
+    for description, pattern in _SENSITIVE_CATEGORIES:
+        if pattern.search(normalized):
+            return f"contains {description}"
+    return ("contains a credential-like or signed-URL token (for example token=, password:, "
+            "bearer, signature=, or a private key block)")
+
+
 def _ident(value: Any, field: str, limit: int = 256) -> str:
     value = _text(value, field, limit)
     if not ID.fullmatch(value):
@@ -1257,13 +1286,33 @@ def _capture(payload: dict[str, Any]) -> dict:
             f"invalid capture payload: unknown field(s) {', '.join(sorted(unknown_keys))}; "
             f"allowed fields are {', '.join(sorted(allowed_keys))}"
         )
+    required_keys = ("observation_type", "summary", "signal_key", "evidence")
+    missing_keys = [key for key in required_keys if payload.get(key) in (None, "", [])]
+    if missing_keys:
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        raise attach_recovery(ValueError(
+            f"invalid capture payload: missing required field(s) {', '.join(missing_keys)}; "
+            f"required fields are {', '.join(required_keys)} (signal_key: lowercase "
+            "[a-z0-9._:-], at most 128 characters; evidence: non-empty list of "
+            "{reference_type, reference}); optional fields are "
+            f"{', '.join(sorted(allowed_keys - set(required_keys)))}"
+        ), error_code="learning_capture_fields_missing", context={
+            "missing_fields": missing_keys, "required_fields": list(required_keys),
+            "optional_fields": sorted(allowed_keys - set(required_keys)),
+        }, next_operations=[dispatcher_operation(
+            "help", "learning", reason="inspect the complete learning capture contract",
+        )])
     otype = payload.get("observation_type")
     if otype not in ("friction", "blocker", "near_miss", "reusable_practice", "evidence_gap"):
         raise ValueError(
             f"invalid observation_type {otype!r}; expected one of: "
             "blocker, evidence_gap, friction, near_miss, reusable_practice"
         )
-    summary = _text(payload.get("summary"), "summary", 1000, free=True)
+    try:
+        summary = _text(payload.get("summary"), "summary", 1000, free=True)
+    except ValueError as exc:
+        raise ValueError(f"invalid summary: {_summary_rejection_reason(payload.get('summary'))}") from exc
     signal = _text(payload.get("signal_key"), "signal_key", 128)
     if not SIGNAL.fullmatch(signal) or SENSITIVE.search(signal):
         raise ValueError("invalid signal_key")
@@ -1554,7 +1603,23 @@ def _assess(payload: dict[str, Any]) -> dict:
                             ),
                         ],
                     )
-                raise ValueError("invalid assessment observation")
+                from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+                raise attach_recovery(
+                    ValueError(
+                        "invalid assessment observation: "
+                        + ("it is not an observation" if row and row[0] != "observation" else
+                           "it was not captured under the current learning obligation (another "
+                           "task's observation cannot be reused); capture a new observation in this "
+                           "task" if row else "no such observation exists")
+                    ),
+                    error_code="learning_observation_not_in_obligation",
+                    context={"observation_id": item, "current_obligation_id": oid},
+                    next_operations=[dispatcher_operation(
+                        "learning", "list", kwargs={"kind": "observation", "status": "open"},
+                        reason="inspect observations captured for the current assessment",
+                    )],
+                )
         aid = _uid("las_")
         now = _now()
         c.execute(
