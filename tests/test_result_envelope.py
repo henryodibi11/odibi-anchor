@@ -163,6 +163,45 @@ def test_compact_task_projection_meets_budget_and_keeps_decision_fields():
     assert {"plan", "handoff"} <= set(compact["transport"]["omitted_sections"])
 
 
+def test_obligation_required_now_and_pending_is_counted_once():
+    protocol = {
+        "phase": "learning",
+        "required_now": [{"id": "learning_closure", "satisfy_with": {"route": "learning.assess"}}],
+        "verification_obligations": [
+            {"id": "learning_closure", "status": "pending"},
+            {"id": "test", "status": "pending"},
+        ],
+    }
+
+    envelope = _envelope.build_envelope("gate", {"passed": True, "operating_protocol": protocol})
+
+    assert envelope["obligations"] == [
+        {"id": "learning_closure", "status": "required", "route": "learning.assess"},
+        {"id": "test", "status": "pending", "route": None},
+    ]
+    assert envelope["state"]["open_obligations"] == 2
+
+
+def test_compact_task_keeps_bound_workflow_identity_and_source_status():
+    full = {
+        "kind": "task_execution_context", "task_window_id": "ltw_1",
+        "workflow": {"kind": "workflow_packet", "authority": "projection", "state": {
+            "workflow_id": "wf_1", "phase": "implement_and_qualify", "progress": "planned",
+            "generation": 3, "status": "active", "plan": {"scope": ["x"] * 50},
+        }},
+        "source_authority": {"status": "available_local_git", "reason": "baseline captured",
+                             "capabilities": {"a": "available"}, "guidance": "g" * 500},
+    }
+
+    compact = _envelope.compact_task_result(full)
+
+    assert compact["workflow"] == {
+        "workflow_id": "wf_1", "status": "active", "phase": "implement_and_qualify",
+        "progress": "planned", "generation": 3,
+    }
+    assert compact["source_authority"] == {"status": "available_local_git", "reason": "baseline captured"}
+
+
 def test_read_only_readiness_is_ready_once_the_task_is_acceptable():
     from odibi_anchor.planning._task_builders import _build_readiness
 

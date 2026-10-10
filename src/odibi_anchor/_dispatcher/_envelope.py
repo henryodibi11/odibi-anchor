@@ -123,8 +123,12 @@ def _obligations(protocol: Mapping[str, Any]) -> list[dict[str, Any]]:
         if target.get("skill"):
             route = f"{route}:{target['skill']}"
         rows.append({"id": str(item.get("id")), "status": "required", "route": route})
+    # One obligation can appear as both required now and a pending verification;
+    # report it once (as required) so open_obligations counts real debts.
+    required = {row["id"] for row in rows}
     for item in protocol.get("verification_obligations", ()) or ():
-        if isinstance(item, Mapping) and item.get("status") == "pending":
+        if (isinstance(item, Mapping) and item.get("status") == "pending"
+                and str(item.get("id")) not in required):
             rows.append({"id": str(item.get("id")), "status": "pending", "route": None})
     return rows
 
@@ -657,14 +661,16 @@ def compact_task_result(result: Mapping[str, Any]) -> dict[str, Any]:
         for item in (result.get("required_skills") or [])[:6]
     ]
     if isinstance(workflow, Mapping):
+        # Bound packets keep identity under ``state``; unphased packets are top-level.
+        state = workflow.get("state") if isinstance(workflow.get("state"), Mapping) else {}
         compact["workflow"] = {
-            key: workflow[key] for key in ("workflow_id", "status", "phase", "progress", "bound")
-            if key in workflow
+            **{key: workflow[key] for key in ("status", "next_step") if key in workflow},
+            **{key: state[key] for key in ("workflow_id", "status", "phase", "progress", "generation")
+               if key in state},
         } or {"present": True}
     if isinstance(authority, Mapping):
         compact["source_authority"] = {
-            key: authority[key] for key in ("status", "authority_kind", "execution_mode", "source_write")
-            if key in authority
+            key: _text(authority[key], 160) for key in ("status", "reason") if key in authority
         } or {"present": True}
     if "memory_context" in result:
         compact["memory_context"] = _compact_memory(result["memory_context"])
