@@ -217,10 +217,13 @@ def _next_from_message(action: str, message: str) -> dict[str, Any] | None:
         if name == action:
             continue
         lead = message[max(0, start - 12):start].lower()
-        candidates.append((0 if ("run" in lead or "call" in lead) else 1, start, call, name))
+        # An exact call beats a template such as anchor("skill_loaded", "<name>").
+        placeholder = 1 if ("<" in call or "..." in call) else 0
+        directed = 0 if ("run" in lead or "call" in lead or "register" in lead) else 1
+        candidates.append((placeholder, directed, start, call, name))
     if not candidates:
         return None
-    _rank, _start, call, name = min(candidates)
+    _placeholder, _directed, _start, call, name = min(candidates)
     return _next_from({
         "copy_ready": call, "action": name,
         "reason": "recovery call named by the blocking message",

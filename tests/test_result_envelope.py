@@ -106,6 +106,14 @@ def test_legacy_blocked_message_yields_the_recovery_call_not_the_refused_call():
     assert envelope["next_operation"]["copy_ready"] == 'anchor("known_bad", changed_files=["a.py"])'
     assert envelope["next_operation"]["retry_safety"] == "read_only"
 
+    template = RuntimeError(
+        'BLOCKED: Mode "implementation" requires skills not yet loaded: writing-specs.\n'
+        'Load the skills, then register: anchor("skill_loaded", "writing-specs")\n'
+        'Call anchor("skill_loaded", "<name>") for each to receive its complete guidance.'
+    )
+    exact = _envelope.build_failure_envelope("workflow", template)
+    assert exact["next_operation"]["copy_ready"] == 'anchor("skill_loaded", "writing-specs")'
+
 
 def test_dict_outcomes_are_exclusive_and_warnings_are_explicit():
     blocked = _envelope.build_envelope("gate", {"passed": False, "status": "blocked"})
