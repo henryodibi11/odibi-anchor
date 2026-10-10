@@ -327,3 +327,11 @@ frontmatter blocks the gate with `managed_descriptor_route_change`, whose contex
 supported operations: `project move-target` for a target change and `project repair-descriptor`
 for damage. Body-only edits pass. Any write to `PROJECT.md` still marks a running dispatcher's
 routing stale, so continue from a fresh process with `task_rebind` before gating.
+
+Durable snapshots report descriptor integrity without blocking. Each v2 manifest carries
+`descriptor_integrity`, a list of `{project_id, status, sha256}` entries, one for each
+`<project>/PROJECT.md` in the artifact bundle, where `status` uses the same values as
+`managed_descriptor_damaged`. The `snapshot_state` result returns the same list, including when an
+existing checkpoint is reused, and `restore_latest` returns the restored manifest's list. It is
+`null` for a snapshot written before v0.3.26. The key is part of the manifest body, so
+`manifest_sha256` covers it. Older readers verify that checksum and ignore keys they do not know.

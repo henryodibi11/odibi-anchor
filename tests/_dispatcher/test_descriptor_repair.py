@@ -364,3 +364,26 @@ def test_unbound_runtime_target_override_does_not_block_body_edits(deployment, t
     session.target_root = str(tmp_path / "override")
     deployment.descriptor.write_bytes(deployment.intact + b"\nBody.\n")
     check_descriptor_route_protection(session, changed_paths=set())
+
+
+@pytest.mark.parametrize(("project_type", "blocked"), [(None, False), ("managed", True)])
+def test_gate_accepts_descriptors_with_defaulted_id_and_project_type(
+    deployment, monkeypatch, project_type, blocked,
+) -> None:
+    # Since v0.3.25 the parser defaults id and project_type; simulate that intact shape.
+    from odibi_anchor._dispatcher import _descriptor_protection
+    from odibi_anchor._dispatcher._descriptor import DescriptorIntegrity
+
+    fields = {"target_root": str(deployment.target)}
+    if project_type is not None:
+        fields["project_type"] = project_type
+    monkeypatch.setattr(_descriptor_protection, "read_descriptor", lambda _root: DescriptorIntegrity(
+        str(deployment.descriptor), "intact", "0" * 64, fields=fields,
+    ))
+
+    if not blocked:
+        check_descriptor_route_protection(_session(deployment), changed_paths=set())
+        return
+    with pytest.raises(RuntimeError) as caught:
+        check_descriptor_route_protection(_session(deployment), changed_paths=set())
+    assert caught.value.context["changed_fields"] == ["project_type"]  # type: ignore[attr-defined]

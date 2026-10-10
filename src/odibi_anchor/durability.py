@@ -414,8 +414,15 @@ def _read_restore_record(destination: Path) -> dict[str, Any] | None:
         if not stat.S_ISREG(os.lstat(marker).st_mode):
             return None
         raw = marker.read_bytes()
+    except OSError:
+        return None
+    return _parse_restore_record(raw)
+
+
+def _parse_restore_record(raw: bytes) -> dict[str, Any] | None:
+    try:
         value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     if (
         not isinstance(value, dict)
@@ -600,6 +607,190 @@ def _claim_restore_destination(destination: Path, base: Mapping[str, Any]) -> di
     return record
 
 
+# Restore fill and cleanup act relative to held directory descriptors where the platform
+# supports it, so a parent swapped for a symlink or another directory after a check cannot
+# redirect the following create, unlink or rmdir. Elsewhere the path-based code runs.
+_DIR_FD_CLEANUP = (
+    hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW")
+    and {os.open, os.stat, os.unlink, os.rmdir, os.mkdir} <= os.supports_dir_fd
+    and os.scandir in os.supports_fd
+)
+
+
+def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
+    return os.open(
+        name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=dir_fd,
+    )
+
+
+def _fd_identity(name: str, dir_fd: int) -> tuple[int, int]:
+    metadata = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    return metadata.st_dev, metadata.st_ino
+
+
+def _fd_owned(root_fd: int, record: Mapping[str, Any]) -> bool:
+    """The held directory is the claimed one and still carries this invocation's marker."""
+    metadata = os.fstat(root_fd)
+    if (metadata.st_dev, metadata.st_ino) != (record["device"], record["inode"]):
+        return False
+    try:
+        marker = os.open(_RESTORE_OWNER, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=root_fd)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(marker).st_mode):
+            return False
+        with os.fdopen(os.dup(marker), "rb") as stream:
+            raw = stream.read()
+    finally:
+        os.close(marker)
+    return _parse_restore_record(raw) == record
+
+
+def _open_owned_root(destination: Path, record: Mapping[str, Any]) -> int | None:
+    try:
+        root_fd = _open_directory(destination)
+    except OSError:
+        return None
+    if not _fd_owned(root_fd, record):
+        os.close(root_fd)
+        return None
+    return root_fd
+
+
+def _fill_owned_destination_fd(
+    staged: Path,
+    destination: Path,
+    record: Mapping[str, Any],
+    created: list[tuple[Path, str, tuple[int, int]]],
+) -> None:
+    root_fd = _open_owned_root(destination, record)
+    if root_fd is None:
+        raise RuntimeError("restore destination changed during copy: .")
+    directories = {Path("."): root_fd}
+    expected: set[Path] = set()
+
+    def require_unchanged(relative_directory: Path) -> int:
+        # Acting through the held descriptor keeps writes in the claimed tree; the path
+        # check still detects a substituted parent so the restore cannot report success.
+        held = directories.get(relative_directory)
+        if held is None or _identity(destination / relative_directory) != (
+            os.fstat(held).st_dev, os.fstat(held).st_ino,
+        ):
+            raise RuntimeError(f"restore destination changed during copy: {relative_directory.as_posix()}")
+        return held
+
+    try:
+        for source in sorted(staged.rglob("*"), key=lambda item: item.relative_to(staged).parts):
+            relative = source.relative_to(staged)
+            expected.add(relative)
+            parent_fd = require_unchanged(relative.parent)
+            name = relative.name
+            try:
+                existing = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing = None
+            if source.is_dir():
+                if existing is None:
+                    os.mkdir(name, dir_fd=parent_fd)
+                    identity = _fd_identity(name, parent_fd)
+                    created.append((relative, "directory", identity))
+                elif not stat.S_ISDIR(existing.st_mode):
+                    raise RuntimeError(f"restored artifact differs from the snapshot: {relative.as_posix()}")
+                else:
+                    identity = (existing.st_dev, existing.st_ino)
+                child = _open_directory(name, dir_fd=parent_fd)
+                directories[relative] = child
+                if (os.fstat(child).st_dev, os.fstat(child).st_ino) != identity:
+                    raise RuntimeError(f"restore destination changed during copy: {relative.as_posix()}")
+                continue
+            if existing is not None:
+                if not stat.S_ISREG(existing.st_mode):
+                    raise RuntimeError(f"restored artifact differs from the snapshot: {relative.as_posix()}")
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                digest = hashlib.sha256()
+                with os.fdopen(descriptor, "rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != _sha256(source):
+                    raise RuntimeError(f"restored artifact differs from the snapshot: {relative.as_posix()}")
+                continue
+            descriptor = os.open(
+                name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644, dir_fd=parent_fd,
+            )
+            metadata = os.fstat(descriptor)
+            created.append((relative, "file", (metadata.st_dev, metadata.st_ino)))
+            with source.open("rb") as incoming, os.fdopen(descriptor, "wb") as outgoing:
+                shutil.copyfileobj(incoming, outgoing)
+                outgoing.flush()
+                os.fsync(outgoing.fileno())
+        for relative_directory in directories:
+            require_unchanged(relative_directory)
+    finally:
+        for descriptor in directories.values():
+            os.close(descriptor)
+    for path in destination.rglob("*"):
+        relative = path.relative_to(destination)
+        if relative not in expected and relative not in (Path(_RESTORE_OWNER), Path(_RESTORE_PENDING)):
+            raise RuntimeError(f"restored artifact tree has an unexpected entry: {relative.as_posix()}")
+
+
+def _release_owned_destination_fd(
+    destination: Path,
+    record: Mapping[str, Any],
+    created: list[tuple[Path, str, tuple[int, int]]],
+    *,
+    remove_root: bool,
+) -> str:
+    root_fd = _open_owned_root(destination, record)
+    if root_fd is None:
+        return "not_owned"
+    try:
+        for relative, kind, identity in reversed(created):
+            opened: list[int] = []
+            try:
+                parent_fd = root_fd
+                for part in relative.parent.parts:
+                    parent_fd = _open_directory(part, dir_fd=parent_fd)
+                    opened.append(parent_fd)
+                if _fd_identity(relative.name, parent_fd) != identity:
+                    continue
+                if kind == "directory":
+                    os.rmdir(relative.name, dir_fd=parent_fd)
+                else:
+                    os.unlink(relative.name, dir_fd=parent_fd)
+            except OSError:
+                continue
+            finally:
+                for descriptor in opened:
+                    os.close(descriptor)
+        if not remove_root:
+            return "retained"
+        with os.scandir(root_fd) as entries:
+            if any(entry.name != _RESTORE_OWNER for entry in entries):
+                return "retained"
+        if not _fd_owned(root_fd, record):
+            return "not_owned"
+        os.unlink(_RESTORE_OWNER, dir_fd=root_fd)
+    finally:
+        os.close(root_fd)
+    try:
+        parent_fd = _open_directory(destination.parent)
+    except OSError:
+        return "not_owned"
+    try:
+        if _fd_identity(destination.name, parent_fd) != (record["device"], record["inode"]):
+            return "not_owned"
+        os.rmdir(destination.name, dir_fd=parent_fd)
+    except OSError:
+        return "not_owned"
+    finally:
+        os.close(parent_fd)
+    _fsync_directory(destination.parent)
+    return "removed"
+
+
 def _fill_owned_destination(
     staged: Path,
     destination: Path,
@@ -607,6 +798,8 @@ def _fill_owned_destination(
     created: list[tuple[Path, str, tuple[int, int]]],
 ) -> None:
     """Create absent snapshot entries exclusively and require existing ones to match exactly."""
+    if _DIR_FD_CLEANUP:
+        return _fill_owned_destination_fd(staged, destination, record, created)
     expected: set[Path] = set()
     directories = {Path("."): (record["device"], record["inode"])}
     for source in sorted(staged.rglob("*"), key=lambda item: item.relative_to(staged).parts):
@@ -655,6 +848,8 @@ def _release_owned_destination(
     remove_root: bool,
 ) -> str:
     """Remove only entries this invocation created while the owned identity still holds."""
+    if _DIR_FD_CLEANUP:
+        return _release_owned_destination_fd(destination, record, created, remove_root=remove_root)
     if not _restore_owned(destination, record):
         return "not_owned"
     for relative, kind, identity in reversed(created):
@@ -755,6 +950,29 @@ def _stage_artifact_bundle(source: Path, destination: Path) -> dict[str, Any]:
         "directory_count": len(directories),
         "content_size_bytes": total_bytes,
     }
+
+
+def _descriptor_integrity(bundle: Path) -> list[dict[str, Any]]:
+    """Report each bundled project's ``PROJECT.md`` route integrity; never blocks a snapshot."""
+    from odibi_anchor._dispatcher._descriptor import DESCRIPTOR_NAME, parse_descriptor_text
+
+    summary: list[dict[str, Any]] = []
+    with tarfile.open(bundle, mode="r:") as archive:
+        for info in archive:
+            parts = PurePosixPath(info.name).parts
+            if not info.isfile() or len(parts) != 2 or parts[1] != DESCRIPTOR_NAME:
+                continue
+            stream = archive.extractfile(info)
+            data = stream.read() if stream is not None else b""
+            digest = hashlib.sha256(data).hexdigest()
+            try:
+                status = parse_descriptor_text(
+                    data.decode("utf-8"), path=info.name, sha256=digest, expected_id=parts[0],
+                ).status
+            except UnicodeDecodeError:
+                status = "malformed_frontmatter"
+            summary.append({"project_id": parts[0], "status": status, "sha256": digest})
+    return sorted(summary, key=lambda item: item["project_id"])
 
 
 def _extract_artifact_bundle(bundle: Path, destination: Path) -> dict[str, int]:
@@ -1569,6 +1787,10 @@ def snapshot_state(
                 raise RuntimeError("draft artifact baseline changed during snapshot")
             if proofs:
                 artifact_manifest["workflow_baselines"] = proofs
+        # Additive v2 body key: manifest_sha256 covers it and older readers ignore it.
+        descriptor_integrity = (
+            _descriptor_integrity(staged_artifacts) if artifact_manifest is not None else None
+        )
         with _snapshot_view(
             root,
             qualified["authority_id"],
@@ -1653,6 +1875,7 @@ def snapshot_state(
                     "kind": "durable_snapshot",
                     "action": "reused",
                     "manifest": existing,
+                    "descriptor_integrity": descriptor_integrity,
                     "manifest_path": published_manifest_path,
                     "snapshot_path": published_snapshot_path,
                     "artifacts_path": published_artifacts_path,
@@ -1706,6 +1929,7 @@ def snapshot_state(
             }
             if artifact_manifest is not None:
                 body["artifacts"] = artifact_manifest
+                body["descriptor_integrity"] = descriptor_integrity
             manifest = dict(body)
             manifest["manifest_sha256"] = hashlib.sha256(_canonical_bytes(body)).hexdigest()
             staged_manifest = Path(temporary_directory) / "manifest.json"
@@ -1760,6 +1984,7 @@ def snapshot_state(
                 "kind": "durable_snapshot",
                 "action": "created",
                 "manifest": manifest,
+                "descriptor_integrity": descriptor_integrity,
                 "manifest_path": published_manifest_path,
                 "snapshot_path": published_snapshot_path,
                 "artifacts_path": published_artifacts_path,
@@ -2051,6 +2276,7 @@ def _restore_manifest(
         "integrity_check": "ok",
         "format": manifest["format"],
         "artifacts": artifacts_status,
+        "descriptor_integrity": manifest.get("descriptor_integrity"),
         "authority": authority,
         "transport": "databricks_files_api" if databricks else "local_filesystem",
         "next_operation": _next("inspect_restored_state", destination_db=str(destination)),

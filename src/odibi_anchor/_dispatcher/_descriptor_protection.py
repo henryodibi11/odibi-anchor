@@ -59,12 +59,21 @@ def check_descriptor_route_protection(session_state: Any, *, changed_paths: Iter
     if integrity is None or not integrity.intact:
         changed = ["frontmatter"]
     else:
-        observed = {key: integrity.fields[key] for key in ("id", "project_type", "target_root")}
-        configured = observed["target_root"]
+        configured = integrity.fields["target_root"]
         resolved = configured if Path(configured).is_absolute() else str(
             (Path(artifact_root) / configured).resolve()
         )
         target_identity = route_path_identity(resolved)
+        managed = target_identity == route_path_identity(artifact_root)
+        # Since v0.3.25 an intact descriptor may default id (directory name) and
+        # project_type (managed iff the target is the artifact root).
+        observed = {
+            "id": integrity.fields.get("id") or Path(artifact_root).name,
+            "project_type": integrity.fields.get("project_type") or (
+                "managed" if managed else "referenced"
+            ),
+            "target_root": configured,
+        }
         # An unbound legacy runtime may run with an environment-local target override,
         # so only a RouteBinding makes the target part of the accepted route authority.
         bound = getattr(session_state, "route_fingerprint", None) is not None
@@ -72,9 +81,7 @@ def check_descriptor_route_protection(session_state: Any, *, changed_paths: Iter
             changed.append("id")
         if bound and target_identity != route_path_identity(target_root):
             changed.append("target_root")
-        if bound and observed["project_type"] == "managed" and target_identity != (
-            route_path_identity(artifact_root)
-        ):
+        if bound and observed["project_type"] == "managed" and not managed:
             changed.append("project_type")
     if not changed:
         return

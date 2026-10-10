@@ -29,7 +29,11 @@ def test_damaged_descriptor_new_compute_repair_then_boot(replay):
     created = replay.create_project("alpha", target)
     descriptor = Path(created["startup_packet"]["artifact_root"]) / "PROJECT.md"
     descriptor.write_text(PLAIN_MARKDOWN_DESCRIPTOR, encoding="utf-8")
-    replay.snapshot(created)
+    published = replay.snapshot(created)
+    # The snapshot still publishes and reports the damaged descriptor.
+    assert [(item["project_id"], item["status"]) for item in published["descriptor_integrity"]] == [
+        ("alpha", "missing_frontmatter"),
+    ]
     replay.new_compute()
 
     with pytest.raises(Exception) as caught:
@@ -64,6 +68,8 @@ def test_damaged_descriptor_new_compute_repair_then_boot(replay):
     replay.start_analysis_task(anchor)
     closure = anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
     assert closure["accepted_task_closure"]["status"] == "closed"
+    integrity = closure["durable_state"]["manifest"]["descriptor_integrity"]
+    assert [(item["project_id"], item["status"]) for item in integrity] == [("alpha", "intact")]
 
 
 @pytest.mark.parametrize("edit", ["body", "project_type"])
