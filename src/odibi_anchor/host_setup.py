@@ -795,10 +795,14 @@ def _read_guidance_receipt(path: Path | None) -> dict[str, Any] | None:
 
 
 def _write_guidance_receipt(path: Path | None, binding: dict[str, Any], metadata: dict[str, Any] | None) -> None:
-    if path is None or metadata is None:
+    if path is None:
         return
     try:
+        # A successful first boot leaves only this cheap local marker. Metadata
+        # seeding is worth doing only if the compute is used for another boot.
         path.parent.mkdir(parents=True, exist_ok=True)
+        if metadata is None:
+            return
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
             temporary = Path(stream.name)
             try:
@@ -832,6 +836,7 @@ def _setup_databricks_workspace(
         {"version": _MANIFEST_VERSION, "adapter": "databricks", "files": desired_hashes}
     )
     receipt_path = _guidance_receipt_path(receipt_root, target)
+    metadata_enabled = receipt_path is not None and receipt_path.parent.is_dir()
     binding = {"schema": 1, "package_version": __version__, "adapter": "databricks",
                "target_root": str(target), "manifest_sha256": _sha256(expected_manifest)}
     receipt = _read_guidance_receipt(receipt_path)
@@ -859,7 +864,7 @@ def _setup_databricks_workspace(
         if object_type not in {"DIRECTORY", "REPO"}:
             raise HostSetupError("Databricks Workspace target must be a directory or Git Folder")
 
-        if receipt_path is not None:
+        if metadata_enabled:
             metadata_before = _workspace_metadata(workspace, target, metadata_contents, policy)
         if (metadata_before is not None and receipt is not None
                 and receipt.get("binding") == binding
@@ -936,10 +941,12 @@ def _setup_databricks_workspace(
         # manifest. Re-reading the same publication doubles Workspace API traffic
         # without adding drift evidence; post-mutation verification remains below.
         record_phase("publish", outcome="not_required", reason="managed files unchanged")
+        verified_metadata = None
         if metadata_before is not None and manifest_content == expected_manifest:
             metadata_after = _workspace_metadata(workspace, target, metadata_contents, policy)
             if metadata_before == metadata_after:
-                _write_guidance_receipt(receipt_path, binding, metadata_after)
+                verified_metadata = metadata_after
+        _write_guidance_receipt(receipt_path, binding, verified_metadata)
         return _result(
             target, "databricks", "unchanged", hashes, compatible_unmanaged,
             legacy_managed,
@@ -949,10 +956,11 @@ def _setup_databricks_workspace(
         verified_metadata = _publish_workspace(
             workspace, target, desired=desired, obsolete=sorted(set(previous) - set(desired)),
             existing=existing, manifest_content=manifest_content, manifest_bytes=manifest_bytes,
-            import_format=import_format, record_metadata=receipt_path is not None,
+            import_format=import_format, record_metadata=metadata_enabled,
         )
-    if manifest_bytes == expected_manifest:
-        _write_guidance_receipt(receipt_path, binding, verified_metadata)
+    _write_guidance_receipt(
+        receipt_path, binding, verified_metadata if manifest_bytes == expected_manifest else None,
+    )
 
     status = "upgraded" if manifest is not None or legacy_managed else "installed"
     return _result(

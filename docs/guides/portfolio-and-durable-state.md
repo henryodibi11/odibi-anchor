@@ -28,9 +28,15 @@ SQLite database under `/Workspace`, `/Volumes`, or `/dbfs`. `repository` and
 
 ### Guidance verification on Databricks
 
-Cold boots verify the manifest and every managed guidance file's content. After successful
-content verification, Anchor can retain a compute-local metadata receipt beside the runtime
-state root, isolated by effective UID and account fingerprint. It is never published to
+The first boot on fresh compute verifies the manifest and every managed guidance file's
+content with **zero metadata-list calls**, including installation and upgrades. After success,
+Anchor creates a local receipt directory as a prior-boot marker. Only the second boot pays
+for metadata observations before and after full content verification to seed a receipt;
+the third and subsequent unchanged boots can use the shortcut. This avoids seeding overhead
+for scheduled runs whose compute is discarded after one boot.
+
+The receipt lives beside the runtime state root, isolated by effective UID and account
+fingerprint. It is never published to
 Workspace or included in durable project snapshots. Standalone `setup_host` uses content
 verification unless explicitly given a local `receipt_root`.
 

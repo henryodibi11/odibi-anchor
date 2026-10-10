@@ -625,12 +625,32 @@ def test_databricks_workspace_install_uses_api_without_staging(tmp_path, monkeyp
     assert not any("__pycache__" in path or path.endswith(".pyc") for path in workspace.files)
 
 
-def test_workspace_receipt_skips_content_and_reports_metadata(tmp_path, monkeypatch):
+@pytest.mark.parametrize("initial_status", ["installed", "unchanged", "upgraded"])
+def test_workspace_receipt_skips_content_and_reports_metadata(tmp_path, monkeypatch, initial_status):
     _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
     target = "/Workspace/Users/test@example.invalid/anchor-host"
     state = tmp_path / "local-state"
+    if initial_status != "installed":
+        setup_host(target, adapter="databricks")
+    if initial_status == "upgraded":
+        manifest_path = "/Users/test@example.invalid/anchor-host/" + module._MANIFEST
+        manifest = json.loads(workspace.files[manifest_path])
+        del manifest["files"][".assistant/README.md"]
+        del workspace.files["/Users/test@example.invalid/anchor-host/.assistant/README.md"]
+        workspace.files[manifest_path] = module._canonical_json(manifest)
+    workspace.calls.clear()
     first = setup_host(target, adapter="databricks", receipt_root=state)
     assert first["verification"] == "content"
+    assert first["status"] == initial_status
+    assert not any(operation == "list" for operation, _ in workspace.calls)
+    assert (state / "host-guidance-receipts").is_dir()
+    assert not list(state.rglob("*.json"))
+    workspace.calls.clear()
+    second = setup_host(target, adapter="databricks", receipt_root=state)
+    assert second["verification"] == "content"
+    seed_lists = sum(operation == "list" for operation, _ in workspace.calls)
+    assert seed_lists > 0
+    assert sum(operation == "download" for operation, _ in workspace.calls) == first["verified_file_count"] + 1
     receipt_files = list(state.rglob("*.json"))
     assert len(receipt_files) == 1
     receipt = json.loads(receipt_files[0].read_text())
@@ -652,6 +672,7 @@ def test_workspace_receipt_skips_content_and_reports_metadata(tmp_path, monkeypa
     list_calls = sum(operation == "list" for operation, _ in workspace.calls)
     content_calls = first["verified_file_count"] + 1
     assert 0 < list_calls < content_calls
+    assert seed_lists == 2 * list_calls
     print(f"Workspace receipt: {content_calls} content reads -> {list_calls} lists; "
           f"at 50ms/call: {content_calls * 50}ms -> {list_calls * 50}ms API service time")
 
@@ -664,6 +685,7 @@ def test_workspace_receipt_falls_back_to_content(tmp_path, monkeypatch, change):
     _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
     target = "/Workspace/Users/test@example.invalid/anchor-host"
     state = tmp_path / "state"
+    setup_host(target, adapter="databricks", receipt_root=state)
     setup_host(target, adapter="databricks", receipt_root=state)
     managed = "/Users/test@example.invalid/anchor-host/.assistant/README.md"
     receipt_file = next(state.rglob("*.json"))
@@ -698,6 +720,7 @@ def test_workspace_receipt_does_not_hide_drift(tmp_path, monkeypatch, change):
     target = "/Workspace/Users/test@example.invalid/anchor-host"
     state = tmp_path / "state"
     setup_host(target, adapter="databricks", receipt_root=state)
+    setup_host(target, adapter="databricks", receipt_root=state)
     managed = "/Users/test@example.invalid/anchor-host/.assistant/README.md"
     if change == "edit":
         workspace.files[managed] = b"unapproved edit"
@@ -718,8 +741,8 @@ def test_workspace_receipt_does_not_hide_drift(tmp_path, monkeypatch, change):
 def test_workspace_receipt_not_recorded_when_metadata_changes_during_verification(tmp_path, monkeypatch):
     _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
     target = "/Workspace/Users/test@example.invalid/anchor-host"
-    setup_host(target, adapter="databricks")
     state = tmp_path / "state"
+    setup_host(target, adapter="databricks", receipt_root=state)
     original = workspace.download
 
     def changing_download(path):

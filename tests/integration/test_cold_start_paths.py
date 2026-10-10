@@ -53,7 +53,13 @@ def test_cold_restore_warm_receipt_and_new_compute(replay, databricks, monkeypat
     assert {path.name: path.read_text() for path in restored_records.iterdir()} == {
         f"{index}.txt": f"record-{index}" for index in range(600)
     }
+    databricks.calls.clear()
     assert guidance()["verification"] == "content"
+    assert not any(method == "list" for _api, method, _path in databricks.calls)
+    replay.new_process()
+    databricks.calls.clear()
+    assert guidance()["verification"] == "content"
+    assert sum(method == "list" for _api, method, _path in databricks.calls) == 90
     replay.new_process()
     databricks.calls.clear()
     warm = guidance()
@@ -63,4 +69,6 @@ def test_cold_restore_warm_receipt_and_new_compute(replay, databricks, monkeypat
     assert sum(method == "list" for _api, method, _path in databricks.calls) == 45
     assert not any("receipt" in path for path in workspace.files)
     replay.new_compute()
+    databricks.calls.clear()
     assert guidance()["verification"] == "content"
+    assert not any(method == "list" for _api, method, _path in databricks.calls)
