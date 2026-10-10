@@ -240,6 +240,19 @@ def bind_task_workflow(path, *, session_state, workflow_id, task_call=None):
 
 def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
     """Retain actual runner output with exact before/after candidate and environment."""
+    from odibi_anchor._dispatcher._session_tools import finish_test_steps
+
+    steps = measured_test_steps(path, session_state=session_state, criterion_id=criterion_id,
+                                args=args, kwargs=kwargs)
+    options = next(steps)
+    try:
+        return finish_test_steps(steps, runner(**options))
+    finally:
+        steps.close()
+
+
+def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
+    """Suspend after capturing admission, candidate and environment; resume in the caller."""
     from odibi_anchor._dispatcher._session_tools import _format_test_result
     from odibi_anchor._dispatcher._workflow_evidence import (
         collect_candidate,
@@ -280,7 +293,7 @@ def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
                        *exact)
     before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
     environment = runtime_environment()
-    result = runner(**{**kwargs, "output_format": "dict"})
+    result = yield {**kwargs, "output_format": "dict"}
     after = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
     measurement = collect_test_measurement(state=state, before=before, after=after,
                                           criterion_id=criterion_id, targets=targets,

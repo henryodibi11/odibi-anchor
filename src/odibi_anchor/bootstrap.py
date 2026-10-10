@@ -982,6 +982,8 @@ def init(
 
     def _test_run(*args, **kwargs):
         request_id = kwargs.pop("request_id", None)
+        wait_seconds = kwargs.pop("wait_seconds", None)
+        poll = kwargs.pop("poll", False)
 
         def _execute():
             options = dict(kwargs)
@@ -997,13 +999,36 @@ def init(
                 )
             return _test_run_impl(ROOT, _debugging_mod.failure_pattern_context, *args, **options)
 
-        if request_id is None:
+        def _start():
+            from odibi_anchor._dispatcher._session_tools import finish_test_steps, test_run_steps
+            from odibi_anchor._dispatcher._workflow_runtime import measured_test_steps
+
+            options = dict(kwargs)
+            criterion_id = options.pop("workflow_criterion", None)
+            measurement = None
+            try:
+                if criterion_id is not None:
+                    measurement = measured_test_steps(
+                        _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                        criterion_id=criterion_id, args=args, kwargs=options,
+                    )
+                    options = next(measurement)
+                result = yield from test_run_steps(
+                    ROOT, _debugging_mod.failure_pattern_context, *args, **options,
+                )
+                return finish_test_steps(measurement, result) if measurement is not None else result
+            finally:
+                if measurement is not None:
+                    measurement.close()
+
+        if request_id is None and wait_seconds is None and poll is False:
             return _execute()
         from odibi_anchor._dispatcher._session_tools import run_retained_test
         result = run_retained_test(
             request_id, task_window_id=_SESSION_STATE.task_window_id,
             arguments={"args": list(args), **kwargs},
             scope_fingerprint=_test_scope_fingerprint, execute=_execute,
+            wait_seconds=wait_seconds, poll=poll, start=_start,
         )
         criterion_id = kwargs.get("workflow_criterion")
         if criterion_id is not None and isinstance(result, dict) and result.get("request", {}).get("replayed"):
@@ -1424,6 +1449,8 @@ def init(
             )
         if action == "test" and pre_dispatch_test_mark:
             entry["test_mark"] = str(pre_dispatch_test_mark)
+        if action == "test" and isinstance(result, dict) and result.get("status") == "running":
+            entry["executed"] = False  # No completed evidence or discharged test obligation yet.
         if action == "touched" and passed and isinstance(result, dict) and isinstance(result.get("registered"), str):
             entry["touched_path"] = result["registered"]  # Cap accounting for accepted-plan paths.
         if err is not None and isinstance(getattr(err, "context", None), dict) and err.context.get("executed") is False:
@@ -1646,8 +1673,18 @@ def init(
         """
         from odibi_anchor._dispatcher._envelope import dispatch_with_envelope
 
+        def core_with_diagnostics(action, *call_args, **call_kwargs):
+            try:
+                return _anchor_core(action, *call_args, **call_kwargs)
+            except Exception as exc:
+                if action == "task":
+                    from odibi_anchor._dispatcher._action_preparation import enrich_task_exception
+                    enrich_task_exception(exc, call_args, call_kwargs, session_state=_SESSION_STATE,
+                                          session_timings=_SESSION_TIMINGS)
+                raise
+
         return dispatch_with_envelope(
-            _anchor_core, _action, args, kwargs,
+            core_with_diagnostics, _action, args, kwargs,
             session_state=_SESSION_STATE, session_timings=_SESSION_TIMINGS,
             contracts=_ACTION_CONTRACTS, registry=_tool_registry,
             files_changed=_SESSION_FILES_CHANGED, root=str(ROOT), memory_db=_DEFAULT_DB_PATH,

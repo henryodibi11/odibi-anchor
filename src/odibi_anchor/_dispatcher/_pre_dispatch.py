@@ -164,44 +164,53 @@ def run_pre_dispatch_enforcement(
 
     # ── Enforce prerequisite sequence before task ──
     if action == "task":
-        from odibi_anchor._dispatcher._enforcement import (
-            should_block_task_inputs,
-            should_block_task_prerequisites,
-        )
-        from odibi_anchor._dispatcher._protocol import STARTUP_SEQUENCE, protocol_invocation
-        continuation = kwargs.get("continuation", False)
-        if type(continuation) is not bool:
-            raise TypeError("continuation must be a bool")
-        from odibi_anchor._dispatcher._enforcement import inline_session_since_closure
-        if continuation and inline_session_since_closure(session_timings):
-            raise ValueError(
-                "continuation=True replaces the inline new_session call; do not use both"
+        # Every independent defect is attached to the first original failure;
+        # the exception type, message and blocking order are unchanged.
+        try:
+            from odibi_anchor._dispatcher._enforcement import (
+                should_block_task_inputs,
+                should_block_task_prerequisites,
             )
-        blocked, msg = should_block_task_prerequisites(
-            session_timings, allow_inline_continuation=continuation,
-        )
-        if blocked:
-            from odibi_anchor._dispatcher._blocked_action import BlockedActionError
-            from odibi_anchor._dispatcher._enforcement import required_task_prerequisite
-            _seq = " → ".join(protocol_invocation(step) for step in STARTUP_SEQUENCE)
-            raise BlockedActionError(
-                f"BLOCKED: {msg}\n"
-                f"Sequence: bootstrap → {_seq}",
-                required_action=required_task_prerequisite(session_timings) or STARTUP_SEQUENCE[0],
-                resume_action="task",
-                argument_guidance=("Complete the startup sequence in this process.",),
+            from odibi_anchor._dispatcher._protocol import STARTUP_SEQUENCE, protocol_invocation
+            continuation = kwargs.get("continuation", False)
+            if type(continuation) is not bool:
+                raise TypeError("continuation must be a bool")
+            from odibi_anchor._dispatcher._enforcement import inline_session_since_closure
+            if continuation and inline_session_since_closure(session_timings):
+                raise ValueError(
+                    "continuation=True replaces the inline new_session call; do not use both"
+                )
+            blocked, msg = should_block_task_prerequisites(
+                session_timings, allow_inline_continuation=continuation,
             )
-        task_desc = args[0] if args else ""
-        task_goal = kwargs.get("goal", "")
-        blocked, msg = should_block_task_inputs(task_desc, task_goal)
-        if blocked:
-            raise RuntimeError(
-                f"BLOCKED: {msg}\n"
-                "Provide a clear description and goal: "
-                "anchor(\"task\", \"what you are doing\", goal=\"intended outcome\", mode=\"...\")"
+            if blocked:
+                from odibi_anchor._dispatcher._blocked_action import BlockedActionError
+                from odibi_anchor._dispatcher._enforcement import required_task_prerequisite
+                _seq = " → ".join(protocol_invocation(step) for step in STARTUP_SEQUENCE)
+                raise BlockedActionError(
+                    f"BLOCKED: {msg}\n"
+                    f"Sequence: bootstrap → {_seq}",
+                    required_action=required_task_prerequisite(session_timings) or STARTUP_SEQUENCE[0],
+                    resume_action="task",
+                    argument_guidance=("Complete the startup sequence in this process.",),
+                )
+            task_desc = args[0] if args else ""
+            task_goal = kwargs.get("goal", "")
+            blocked, msg = should_block_task_inputs(task_desc, task_goal)
+            if blocked:
+                raise RuntimeError(
+                    f"BLOCKED: {msg}\n"
+                    "Provide a clear description and goal: "
+                    "anchor(\"task\", \"what you are doing\", goal=\"intended outcome\", mode=\"...\")"
+                )
+            if continuation and not kwargs.get("acceptance_criteria"):
+                raise ValueError("continuation=True requires explicit acceptance_criteria")
+        except Exception as exc:
+            from odibi_anchor._dispatcher._action_preparation import enrich_task_exception
+            enrich_task_exception(
+                exc, args, kwargs, session_state=session_state, session_timings=session_timings,
             )
-        if continuation and not kwargs.get("acceptance_criteria"):
-            raise ValueError("continuation=True requires explicit acceptance_criteria")
+            raise
 
     # ── Data write-safety gate (shift-left, D-001) ──
     _check_data_write(action, kwargs, session_timings)
@@ -252,10 +261,20 @@ def run_pre_dispatch_enforcement(
     # Validate caller-supplied semantics only after lifecycle and authority
     # repair diagnostics have had deterministic precedence, but before a
     # covered handler can perform a persistent mutation.
-    from odibi_anchor._dispatcher._action_preparation import validate_mutation_submission
-    validate_mutation_submission(
-        action, args, kwargs, session_state=session_state, route_binding=route_binding,
+    from odibi_anchor._dispatcher._action_preparation import (
+        enrich_task_exception,
+        validate_mutation_submission,
     )
+    try:
+        validate_mutation_submission(
+            action, args, kwargs, session_state=session_state, route_binding=route_binding,
+        )
+    except Exception as exc:
+        if action == "task":
+            enrich_task_exception(
+                exc, args, kwargs, session_state=session_state, session_timings=session_timings,
+            )
+        raise
 
     # Resolve current policy and direct skill requirements from the same accepted
     # immutable task profile. Consequential-effect enforcement below consumes this

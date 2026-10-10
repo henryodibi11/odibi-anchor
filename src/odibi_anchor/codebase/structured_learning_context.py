@@ -1141,10 +1141,11 @@ def _read(command: str, payload: dict[str, Any]) -> dict:
         c.close()
 
 
-def _evidence(value: Any) -> list[dict]:
-    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+_EVIDENCE_FIELDS = frozenset({"reference_type", "reference", "summary", "observed_at"})
 
-    schema = {
+
+def _evidence_schema() -> dict[str, Any]:
+    return {
         "type": "non_empty_list",
         "item": {
             "required": ["reference_type", "reference"],
@@ -1154,11 +1155,126 @@ def _evidence(value: Any) -> list[dict]:
         },
     }
 
-    def invalid(detail: str) -> ValueError:
-        return attach_recovery(
-            ValueError(f"invalid evidence: {detail}"),
+
+def _evidence_item_failures(index: int, e: Any) -> tuple[dict | None, list[tuple[str | None, str, str, BaseException | None]]]:
+    """Validate one evidence item; return it or every independent ``(detail, field, fix, cause)``."""
+    at = f"evidence[{index}]"
+    failures: list[tuple[str | None, str, str, BaseException | None]] = []
+    if not isinstance(e, dict):
+        return None, [("each item must contain only documented evidence fields", at,
+                       "make each item an object with reference_type and reference", None)]
+    extra = set(e) - _EVIDENCE_FIELDS
+    if extra:
+        failures.append((
+            "each item must contain only documented evidence fields",
+            f"{at}.{sorted(extra)[0]}" if len(extra) == 1 else at,
+            f"remove {', '.join(sorted(extra))}; allowed fields are "
+            "reference_type, reference, summary, observed_at",
+            None,
+        ))
+    typ = e.get("reference_type")
+    ref = None
+    try:
+        ref = _text(e.get("reference"), "evidence.reference", 512)
+    except ValueError as exc:
+        failures.append((str(exc), f"{at}.reference",
+                         "supply a non-empty reference of at most 512 characters", exc))
+    try:
+        known = typ in REFS
+    except TypeError as exc:  # unhashable: enforcement has always raised this TypeError
+        known = None
+        failures.append((None, f"{at}.reference_type",
+                         f"use one of: {', '.join(sorted(REFS))}", exc))
+    if known is False:
+        failures.append((
+            f"reference_type {typ!r} is not one of: {', '.join(sorted(REFS))}",
+            f"{at}.reference_type", f"use one of: {', '.join(sorted(REFS))}", None,
+        ))
+    elif known and ref is not None and not REFS[typ].fullmatch(ref):
+        failures.append((
+            f"reference {ref!r} does not match the {typ!r} form "
+            f"{REFS[typ].pattern!r}"
+            + (
+                " — session references are slugs, so use dots, colons or hyphens "
+                "instead of spaces and put prose in `summary`"
+                if typ == "session"
+                else ""
+            ),
+            f"{at}.reference", f"rewrite the reference in the {typ!r} form", None,
+        ))
+    summary = ""
+    try:
+        summary = _text(
+            e.get("summary", ""), "evidence.summary", 500, empty=True, free=True,
+        )
+    except ValueError as exc:
+        failures.append((str(exc), f"{at}.summary",
+                         "use plain prose of at most 500 characters without host paths, "
+                         "URLs, emails, hostnames or credentials", exc))
+    observed = e.get("observed_at")
+    if observed is not None:
+        observed_fix = "use UTC ISO-8601 ending in Z, for example 2026-01-01T00:00:00Z"
+        try:
+            observed = _text(observed, "evidence.observed_at", 32)
+        except ValueError as exc:
+            failures.append((str(exc), f"{at}.observed_at", observed_fix, exc))
+        else:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", observed):
+                failures.append(("observed_at must be UTC ISO-8601 ending in Z",
+                                 f"{at}.observed_at", observed_fix, None))
+            else:
+                try:
+                    datetime.fromisoformat(observed[:-1] + "+00:00")
+                except ValueError as exc:
+                    failures.append(("observed_at is not a valid timestamp",
+                                     f"{at}.observed_at", observed_fix, exc))
+    if failures:
+        return None, failures
+    assert ref is not None and typ is not None
+    return {
+        "reference_type": typ,
+        "reference": ref,
+        "summary": summary,
+        "observed_at": observed,
+        "reference_sha256": _sha({"reference_type": typ, "reference": ref}),
+    }, []
+
+
+def _evidence(value: Any) -> list[dict]:
+    """Validate every evidence item, raising the first failure with all of them attached."""
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    schema = _evidence_schema()
+    failures: list[tuple[str | None, str, str, BaseException | None]] = []
+    out = []
+    if not isinstance(value, list) or not value:
+        failures.append(("expected a non-empty list of evidence objects", "evidence",
+                         "supply a non-empty list of {reference_type, reference} objects", None))
+    else:
+        for index, e in enumerate(value):
+            item, item_failures = _evidence_item_failures(index, e)
+            failures.extend(item_failures)
+            if item is not None:
+                out.append(item)
+    result = sorted(out, key=lambda x: x["reference_sha256"])
+    if len({entry["reference_sha256"] for entry in result}) != len(result):
+        failures.append(("duplicate evidence references are not allowed", "evidence",
+                         "cite each reference once", None))
+    if failures:
+        detail, _, _, cause = failures[0]
+        original = cause if detail is None and cause is not None else ValueError(
+            f"invalid evidence: {detail}"
+        )
+        error = attach_recovery(
+            original,
             error_code="learning_evidence_invalid",
-            context={"expected_schema": schema},
+            context={
+                "expected_schema": schema,
+                "problems": [
+                    {"field": field, "problem": problem or str(item_cause), "fix": fix}
+                    for problem, field, fix, item_cause in failures
+                ],
+            },
             next_operations=[
                 dispatcher_operation(
                     "help", "learning",
@@ -1166,63 +1282,11 @@ def _evidence(value: Any) -> list[dict]:
                 ),
             ],
         )
-
-    if not isinstance(value, list) or not value:
-        raise invalid("expected a non-empty list of evidence objects")
-    out = []
-    for e in value:
-        if not isinstance(e, dict) or set(e) - {"reference_type", "reference", "summary", "observed_at"}:
-            raise invalid("each item must contain only documented evidence fields")
-        typ = e.get("reference_type")
-        try:
-            ref = _text(e.get("reference"), "evidence.reference", 512)
-        except ValueError as exc:
-            raise invalid(str(exc)) from exc
-        if typ not in REFS:
-            raise invalid(
-                f"reference_type {typ!r} is not one of: {', '.join(sorted(REFS))}"
-            )
-        if not REFS[typ].fullmatch(ref):
-            raise invalid(
-                f"reference {ref!r} does not match the {typ!r} form "
-                f"{REFS[typ].pattern!r}"
-                + (
-                    " — session references are slugs, so use dots, colons or hyphens "
-                    "instead of spaces and put prose in `summary`"
-                    if typ == "session"
-                    else ""
-                )
-            )
-        try:
-            summary = _text(
-                e.get("summary", ""), "evidence.summary", 500, empty=True, free=True,
-            )
-        except ValueError as exc:
-            raise invalid(str(exc)) from exc
-        observed = e.get("observed_at")
-        if observed is not None:
-            try:
-                observed = _text(observed, "evidence.observed_at", 32)
-            except ValueError as exc:
-                raise invalid(str(exc)) from exc
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", observed):
-                raise invalid("observed_at must be UTC ISO-8601 ending in Z")
-            try:
-                datetime.fromisoformat(observed[:-1] + "+00:00")
-            except ValueError as exc:
-                raise invalid("observed_at is not a valid timestamp") from exc
-        out.append(
-            {
-                "reference_type": typ,
-                "reference": ref,
-                "summary": summary,
-                "observed_at": observed,
-                "reference_sha256": _sha({"reference_type": typ, "reference": ref}),
-            }
-        )
-    result = sorted(out, key=lambda x: x["reference_sha256"])
-    if len({entry["reference_sha256"] for entry in result}) != len(result):
-        raise invalid("duplicate evidence references are not allowed")
+        if error is cause:
+            raise error
+        if cause is not None:
+            raise error from cause
+        raise error
     return result
 
 
@@ -1264,10 +1328,24 @@ def _obligation_for_operation(
     return _ident(selected, "obligation_id"), retry_latest, owner_project, owner_task
 
 
-def _capture(payload: dict[str, Any]) -> dict:
-    oid, retry_latest, owner_project, owner_task = _obligation_for_operation(
-        payload, "capture"
-    )
+def _capture_fields(payload: dict[str, Any], *, retry_latest: bool = False) -> tuple:
+    """Validate every capture field before any read or write.
+
+    Independent defects are listed in ``context["problems"]``; the raised exception
+    is the first failure capture has always raised, with its own metadata kept.
+    """
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    failures: list[tuple[BaseException, list[dict[str, str]]]] = []
+
+    def problem(field: str, text: str, fix: str) -> dict[str, str]:
+        return {"field": field, "problem": text, "fix": fix}
+
+    def fail(exc: BaseException, field: str, fix: str, cause: BaseException | None = None) -> None:
+        if cause is not None:
+            exc.__cause__ = cause
+        failures.append((exc, [problem(field, str(exc), fix)]))
+
     allowed_keys = {
         "observation_type",
         "summary",
@@ -1282,16 +1360,22 @@ def _capture(payload: dict[str, Any]) -> dict:
     }
     unknown_keys = set(payload) - allowed_keys
     if unknown_keys:
-        raise ValueError(
+        failures.append((ValueError(
             f"invalid capture payload: unknown field(s) {', '.join(sorted(unknown_keys))}; "
             f"allowed fields are {', '.join(sorted(allowed_keys))}"
-        )
+        ), [problem(key, "unknown capture field",
+                    f"remove it; allowed fields are {', '.join(sorted(allowed_keys))}")
+            for key in sorted(unknown_keys)]))
     required_keys = ("observation_type", "summary", "signal_key", "evidence")
     missing_keys = [key for key in required_keys if payload.get(key) in (None, "", [])]
+    required_fixes = {
+        "observation_type": "use one of: blocker, evidence_gap, friction, near_miss, reusable_practice",
+        "summary": "state the observation in plain prose of at most 1000 characters",
+        "signal_key": "use a stable lowercase key [a-z0-9._:-] of at most 128 characters",
+        "evidence": "supply a non-empty list of {reference_type, reference} objects",
+    }
     if missing_keys:
-        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
-
-        raise attach_recovery(ValueError(
+        failures.append((attach_recovery(ValueError(
             f"invalid capture payload: missing required field(s) {', '.join(missing_keys)}; "
             f"required fields are {', '.join(required_keys)} (signal_key: lowercase "
             "[a-z0-9._:-], at most 128 characters; evidence: non-empty list of "
@@ -1302,64 +1386,160 @@ def _capture(payload: dict[str, Any]) -> dict:
             "optional_fields": sorted(allowed_keys - set(required_keys)),
         }, next_operations=[dispatcher_operation(
             "help", "learning", reason="inspect the complete learning capture contract",
-        )])
+        )]), [problem(key, "required field is missing", required_fixes[key])
+              for key in missing_keys]))
     otype = payload.get("observation_type")
-    if otype not in ("friction", "blocker", "near_miss", "reusable_practice", "evidence_gap"):
-        raise ValueError(
+    if "observation_type" not in missing_keys and otype not in (
+        "friction", "blocker", "near_miss", "reusable_practice", "evidence_gap",
+    ):
+        fail(ValueError(
             f"invalid observation_type {otype!r}; expected one of: "
             "blocker, evidence_gap, friction, near_miss, reusable_practice"
-        )
-    try:
-        summary = _text(payload.get("summary"), "summary", 1000, free=True)
-    except ValueError as exc:
-        raise ValueError(f"invalid summary: {_summary_rejection_reason(payload.get('summary'))}") from exc
-    signal = _text(payload.get("signal_key"), "signal_key", 128)
-    if not SIGNAL.fullmatch(signal) or SENSITIVE.search(signal):
-        raise ValueError("invalid signal_key")
+        ), "observation_type", required_fixes["observation_type"])
+    summary = None
+    if "summary" not in missing_keys:
+        try:
+            summary = _text(payload.get("summary"), "summary", 1000, free=True)
+        except ValueError as exc:
+            fail(ValueError(f"invalid summary: {_summary_rejection_reason(payload.get('summary'))}"),
+                 "summary", "rewrite it as plain prose of at most 1000 characters without host "
+                 "paths, URLs, emails, hostnames or credentials", exc)
+    signal = None
+    if "signal_key" not in missing_keys:
+        try:
+            signal = _text(payload.get("signal_key"), "signal_key", 128)
+            if not SIGNAL.fullmatch(signal) or SENSITIVE.search(signal):
+                raise ValueError("invalid signal_key")
+        except ValueError as exc:
+            fail(exc, "signal_key", "use lowercase [a-z0-9._:-], starting with a letter or "
+                 "digit, at most 128 characters, with no sensitive content")
     impact = payload.get("impact", "medium")
     scope = payload.get("applicability_scope", "workbench")
     if impact not in ("low", "medium", "high", "critical"):
-        raise ValueError(
+        fail(ValueError(
             f"invalid impact {impact!r}; expected one of: critical, high, low, medium"
-        )
-    if scope not in ("project_local", "workbench", "cross_project"):
-        raise ValueError(
+        ), "impact", "use one of: critical, high, low, medium")
+    scope_valid = scope in ("project_local", "workbench", "cross_project")
+    if not scope_valid:
+        fail(ValueError(
             f"invalid applicability_scope {scope!r}; expected one of: "
             "cross_project, project_local, workbench"
-        )
-    projects = _list(payload.get("project_refs"), "project_refs")
-    wp = _list(payload.get("work_package_refs"), "work_package_refs")
-    env = _list(payload.get("environment_refs"), "environment_refs")
-    if scope == "project_local" and len(projects) != 1:
-        raise ValueError(
-            "invalid project_refs: applicability_scope 'project_local' requires "
-            f"exactly 1 project_refs entry, got {len(projects)}"
-        )
-    if scope == "workbench" and projects:
-        raise ValueError(
-            "invalid project_refs: applicability_scope 'workbench' accepts no "
-            f"project_refs entries, got {len(projects)}"
-        )
-    if scope == "cross_project" and len(projects) < 2:
-        raise ValueError(
-            "invalid project_refs: applicability_scope 'cross_project' requires "
-            f"at least 2 project_refs entries, got {len(projects)}; use "
-            "applicability_scope 'workbench' for a single-project observation"
-        )
-    ev = _evidence(payload.get("evidence"))
+        ), "applicability_scope", "use one of: cross_project, project_local, workbench")
+    refs: dict[str, list[str] | None] = {}
+    for field in ("project_refs", "work_package_refs", "environment_refs"):
+        try:
+            refs[field] = _list(payload.get(field), field)
+        except ValueError as exc:
+            refs[field] = None
+            fail(exc, field, "use a list of at most 32 identifiers [A-Za-z0-9._:-]")
+    projects = refs["project_refs"]
+    if scope_valid and projects is not None:
+        message = None
+        if scope == "project_local" and len(projects) != 1:
+            message = (
+                "invalid project_refs: applicability_scope 'project_local' requires "
+                f"exactly 1 project_refs entry, got {len(projects)}"
+            )
+        if scope == "workbench" and projects:
+            message = (
+                "invalid project_refs: applicability_scope 'workbench' accepts no "
+                f"project_refs entries, got {len(projects)}"
+            )
+        if scope == "cross_project" and len(projects) < 2:
+            message = (
+                "invalid project_refs: applicability_scope 'cross_project' requires "
+                f"at least 2 project_refs entries, got {len(projects)}; use "
+                "applicability_scope 'workbench' for a single-project observation"
+            )
+        if message is not None:
+            fail(ValueError(message), "project_refs",
+                 "match project_refs to applicability_scope: workbench 0, project_local 1, "
+                 "cross_project 2 or more")
+    ev = None
+    if "evidence" not in missing_keys:
+        try:
+            ev = _evidence(payload.get("evidence"))
+        except Exception as exc:
+            nested = (getattr(exc, "context", None) or {}).get("problems")
+            failures.append((exc, list(nested) if nested else [problem(
+                "evidence", str(exc), required_fixes["evidence"],
+            )]))
     prov = payload.get("provenance", {})
+    provenance_fix = "use an object with only source_action and/or source_version identifiers"
     if not isinstance(prov, dict):
-        raise ValueError(
+        fail(ValueError(
             "invalid provenance: expected an object with only source_action "
             f"and/or source_version, got {type(prov).__name__}"
-        )
-    if set(prov) - {"source_action", "source_version"}:
-        raise ValueError(
+        ), "provenance", provenance_fix)
+        prov = None
+    elif set(prov) - {"source_action", "source_version"}:
+        fail(ValueError(
             "invalid provenance: unknown field(s) "
             f"{', '.join(sorted(set(prov) - {'source_action', 'source_version'}))}; "
             "allowed fields are source_action, source_version"
+        ), "provenance", provenance_fix)
+    if isinstance(prov, dict):
+        checked = {}
+        for key, value in prov.items():
+            if key not in {"source_action", "source_version"}:
+                continue
+            try:
+                checked[key] = _ident(value, f"provenance.{key}")
+            except ValueError as exc:
+                fail(exc, f"provenance.{key}", provenance_fix)
+        prov = checked
+    if failures:
+        first = failures[0][0]
+        problems = [item for _, items in failures for item in items]
+        context = getattr(first, "context", None)
+        operations = getattr(first, "next_operations", None)
+        code = getattr(first, "error_code", None)
+        if len(failures) == 1 and unknown_keys:
+            operations = [dispatcher_operation(
+                "learning", "capture", kwargs={
+                    **{key: value for key, value in payload.items() if key in allowed_keys},
+                    **({"retry_latest": True} if retry_latest else {}),
+                },
+                reason="remove only unsupported fields; preserve the supplied observation and evidence",
+                retry_safety="state_checked",
+            )]
+        raise attach_recovery(
+            first,  # type: ignore[type-var]
+            error_code=code if isinstance(code, str) else "learning_capture_invalid",
+            context={**(context if isinstance(context, dict) else {}), "problems": problems},
+            next_operations=operations if isinstance(operations, list) and operations else [
+                dispatcher_operation(
+                    "help", "learning", reason="inspect the complete learning capture contract",
+                ),
+            ],
         )
-    prov = {k: _ident(v, f"provenance.{k}") for k, v in prov.items()}
+    return otype, summary, signal, impact, scope, projects, refs["work_package_refs"], \
+        refs["environment_refs"], ev, prov
+
+
+def _capture(payload: dict[str, Any]) -> dict:
+    try:
+        oid, retry_latest, owner_project, owner_task = _obligation_for_operation(payload, "capture")
+    except Exception as exc:
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        problems = [{"prerequisite": "learning_obligation", "problem": str(exc),
+                     "fix": "establish the exact task's learning obligation before capture"}]
+        try:
+            _capture_fields({key: value for key, value in payload.items()
+                             if not key.startswith("_") and key != "retry_latest"})
+        except Exception as invalid:
+            problems.extend(getattr(invalid, "context", {}).get("problems", []))
+        attach_recovery(exc, error_code="learning_capture_invalid",
+                        context={"problems": problems,
+                                 "prerequisite_order": ["learning_obligation", "capture"]},
+                        next_operations=[dispatcher_operation(
+                            "help", "learning", reason="inspect capture ownership and field requirements",
+                        )])
+        raise
+    otype, summary, signal, impact, scope, projects, wp, env, ev, prov = _capture_fields(
+        payload, retry_latest=retry_latest,
+    )
     provenance_connection = _connect(_db_path(), ro=True)
     try:
         _verify(provenance_connection)
