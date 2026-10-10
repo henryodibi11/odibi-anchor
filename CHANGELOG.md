@@ -17,20 +17,24 @@ Faster cold starts and fewer wasted agent round trips.
   compute-local receipt instead of re-reading every guidance file. The first boot on a compute adds
   no calls, the second records the receipt, and any difference falls back to full content
   verification. The startup packet reports `guidance.verification` (`content` or
-  `metadata_receipt`); metadata equality is not a content hash.
+  `metadata_receipt`); metadata equality is not a content hash. Receipts must be owned by the
+  current user and not group- or world-writable, or they are ignored.
 - **Every missing prerequisite at once.** `anchor("task")` and `anchor("learning", "capture")`
   refusals keep their first message but list every independent problem in
-  `context.problems`, with one copy-ready corrected call where it can be determined.
+  `context.problems`. Task refusals point to the matching `prepare` operation; capture refusals
+  give a corrected call when only unknown fields were wrong.
 - **Start-then-check for long test runs.** `anchor("test", ..., wait_seconds=N)` (0–90) returns a
   `running` packet with a copy-ready `poll=True` call when the run outlives the wait; finalization
   and workflow measurement happen in the polling call. A `request_id` is reserved before the run
-  starts, so a concurrent duplicate never runs twice; after a restart, polling fails closed.
+  starts, so a concurrent duplicate never runs twice; after a restart, polling fails closed. A
+  poll is refused if any target file changed during the run, even if its bytes were restored.
+  Running requests left by another task window are stopped when the request table is full.
 
 ### Fixed
 
 - **Clearer edge failures.**
-  - The launcher and `doctor` install with `pip --no-cache-dir` and explain that a just-published
-    release can take minutes to appear (never add `--pre`).
+  - The launcher and `doctor` install with `pip --no-cache-dir`, and the launcher explains that a
+    just-published release can take minutes to appear (never add `--pre`).
   - A rejected delivery approval names each failed check (reply text, owner, transport, message
     ids) without echoing the reply (`delivery_approval_mismatch`).
   - Delivery readback failures report the endpoint, HTTP status and retry-after

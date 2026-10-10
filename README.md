@@ -64,7 +64,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install "odibi-anchor[databricks]==0.3.22"
+%pip install --no-cache-dir "odibi-anchor[databricks]==0.3.28"
 dbutils.library.restartPython()
 ```
 

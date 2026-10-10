@@ -18,8 +18,11 @@ Every dict result from `anchor()` carries one additive `envelope` key (schema
 `exc.envelope`, and the CLI and MCP v2 error objects include it as `error["envelope"]`. It is
 identical across in-process, CLI and MCP calls. Existing result keys are unchanged.
 
-- `outcome`: exactly one of `succeeded`, `succeeded_with_warnings`, `blocked`, `failed`.
-  Only `succeeded` is a clean success.
+- `outcome`: exactly one of `succeeded`, `succeeded_with_warnings`, `blocked`, `failed`, or
+  `running`. Only `succeeded` is a clean success. `running` comes only from a test started with
+  `wait_seconds` that outlived the wait: it is not test evidence; copy
+  `next_operation.copy_ready` (same arguments and `request_id`, plus `poll=True`) until a final
+  result arrives. A poll is refused if target files changed during the run, even if restored.
 - `state`: `project`, `target`, `task_window_id`, lifecycle `phase`, bound `workflow`
   (id, phase, progress, generation when known) and `open_obligations`.
 - `effects` (mutating calls only, else `null`): `changed` (`null` after a failure),

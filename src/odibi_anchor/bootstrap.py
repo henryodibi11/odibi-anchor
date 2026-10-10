@@ -1029,6 +1029,7 @@ def init(
             arguments={"args": list(args), **kwargs},
             scope_fingerprint=_test_scope_fingerprint, execute=_execute,
             wait_seconds=wait_seconds, poll=poll, start=_start,
+            stat_fingerprint=_test_stat_fingerprint,
         )
         criterion_id = kwargs.get("workflow_criterion")
         if criterion_id is not None and isinstance(result, dict) and result.get("request", {}).get("replayed"):
@@ -1060,6 +1061,36 @@ def init(
             except OSError:
                 content = "unreadable"
             digest.update(f"{relative}\0{content}\n".encode())
+        return digest.hexdigest()
+
+    def _test_stat_fingerprint():
+        """Digest inode, size, mtime and ctime of every tracked or unignored target file."""
+        import subprocess
+
+        root = Path(ROOT)
+        try:
+            listing = subprocess.run(
+                ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                check=True, capture_output=True, timeout=60,
+            ).stdout.split(b"\0")
+            names = sorted({os.fsdecode(name) for name in listing if name})
+        except (OSError, subprocess.SubprocessError):
+            # Not a Git checkout: walk the target, skipping hidden and bytecode directories.
+            names = []
+            for directory, directories, files in os.walk(root):
+                directories[:] = [d for d in directories if not d.startswith(".") and d != "__pycache__"]
+                names.extend(os.path.relpath(os.path.join(directory, name), root) for name in files)
+            names.sort()
+        digest = hashlib.sha256()
+        for relative in names:
+            try:
+                st = os.lstat(root / relative)
+                entry = f"{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}"
+            except FileNotFoundError:
+                entry = "absent"
+            except OSError:
+                entry = "unreadable"
+            digest.update(f"{relative}\0{entry}\n".encode())
         return digest.hexdigest()
 
     def _auto_scope_tests(kwargs):

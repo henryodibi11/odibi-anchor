@@ -680,6 +680,7 @@ def test_workspace_receipt_skips_content_and_reports_metadata(tmp_path, monkeypa
 @pytest.mark.parametrize("change", [
     "object_id", "size", "modified_at", "unavailable", "extra", "corrupt_receipt",
     "version", "adapter", "target", "manifest_binding", "missing_receipt", "list_failure",
+    "writable_receipt", "writable_directory",
 ])
 def test_workspace_receipt_falls_back_to_content(tmp_path, monkeypatch, change):
     _resources_root, workspace = _workspace_setup(tmp_path, monkeypatch)
@@ -699,6 +700,11 @@ def test_workspace_receipt_falls_back_to_content(tmp_path, monkeypatch, change):
         receipt_file.write_text("{")
     elif change == "missing_receipt":
         receipt_file.unlink()
+    elif change == "writable_receipt":
+        # Another local identity could have written it: never let it vouch for the Workspace.
+        receipt_file.chmod(0o666)
+    elif change == "writable_directory":
+        receipt_file.parent.chmod(0o777)
     elif change == "list_failure":
         def unavailable_list(_path):
             raise TimeoutError("metadata unavailable")

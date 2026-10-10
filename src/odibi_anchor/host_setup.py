@@ -765,6 +765,24 @@ def _workspace_metadata(
             return None
 
 
+def _private_to_this_identity(path: Path) -> bool:
+    """True when an existing path is no symlink, owned by this user, and not group/world-writable.
+
+    The same rule the compute-local runtime root applies: a receipt another local identity can
+    write could otherwise vouch for drifted Workspace guidance.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return (not stat.S_ISLNK(metadata.st_mode)
+            and (geteuid is None or metadata.st_uid == geteuid())
+            and not metadata.st_mode & 0o022)
+
+
 def _guidance_receipt_path(receipt_root: str | os.PathLike[str] | None, target: Path) -> Path | None:
     if receipt_root is None:
         return None
@@ -777,7 +795,7 @@ def _guidance_receipt_path(receipt_root: str | os.PathLike[str] | None, target: 
         if any(prefix == path or prefix in path.parents for path in (root, resolved) for prefix in forbidden):
             return None
         directory = resolved / "host-guidance-receipts"
-        if directory.is_symlink():
+        if not (_private_to_this_identity(resolved) and _private_to_this_identity(directory)):
             return None
         return directory / f"{_sha256(str(target).encode())}.json"
     except OSError:
@@ -785,7 +803,7 @@ def _guidance_receipt_path(receipt_root: str | os.PathLike[str] | None, target: 
 
 
 def _read_guidance_receipt(path: Path | None) -> dict[str, Any] | None:
-    if path is None:
+    if path is None or not _private_to_this_identity(path):
         return None
     try:
         value = json.loads(_regular_bytes(path, "guidance receipt"))
@@ -800,7 +818,7 @@ def _write_guidance_receipt(path: Path | None, binding: dict[str, Any], metadata
     try:
         # A successful first boot leaves only this cheap local marker. Metadata
         # seeding is worth doing only if the compute is used for another boot.
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if metadata is None:
             return
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:

@@ -324,7 +324,7 @@ _TEST_REQUEST_LOCK = threading.RLock()
 
 
 def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprint, execute,
-                      wait_seconds=None, poll=False, start=None):
+                      wait_seconds=None, poll=False, start=None, stat_fingerprint=None):
     """Run ``execute`` once per request_id; return the retained result on exact retries.
 
     A retry replays only when the arguments and the byte fingerprint of the change scope
@@ -420,6 +420,15 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
                 evict = next((k for k, v in _RETAINED_TEST_RESULTS.items()
                               if "result" in v or "error" in v), None)
                 if evict is None:
+                    # A running request from another task window can never be polled from this
+                    # one; stop it rather than let abandoned windows exhaust the table.
+                    evict = next((k for k, v in _RETAINED_TEST_RESULTS.items()
+                                  if k[0] != str(task_window_id) and "process" in v), None)
+                    if evict is not None:
+                        orphan = _RETAINED_TEST_RESULTS[evict]
+                        orphan.pop("process").close()
+                        orphan.pop("steps").close()
+                if evict is None:
                     raise invalid("too many running test requests; poll an existing request first",
                                   "test_requests_full")
                 del _RETAINED_TEST_RESULTS[evict]
@@ -427,6 +436,10 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
             _RETAINED_TEST_RESULTS[key] = retained  # reserve before any child can launch
             if wait_seconds is not None:
                 try:
+                    if stat_fingerprint is not None:
+                        # Bytes alone miss a file changed and restored between polls (ABA);
+                        # inode, size, mtime and ctime of every target file do not.
+                        retained["stat_sha256"] = stat_fingerprint()
                     steps = start()
                     pytest_args, options = next(steps)
                     retained.update(steps=steps, process=start_pytest(pytest_args, **options))
@@ -445,6 +458,12 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
                 if scope_fingerprint() != fingerprint:
                     raise invalid("file bytes changed while pytest ran; use a new request_id",
                                   "test_request_id_conflict")
+                if "stat_sha256" in retained and stat_fingerprint() != retained["stat_sha256"]:
+                    raise invalid(
+                        "target files changed while pytest ran (even if their bytes were restored), "
+                        "so the result cannot be attributed to the current files; use a new request_id",
+                        "test_files_changed_during_run",
+                    )
                 return complete(retained, finish_test_steps(retained["steps"], raw))
             except Exception as exc:
                 retained["error"] = exc

@@ -106,7 +106,10 @@ def test_poll_conflicts_and_lost_request_never_start_a_second_process(lifecycle,
         (lifecycle.target / lifecycle.paths[0]).write_text(original)
     finally:
         release.touch()
-    _finish(anchor, operation)
+    # The bytes match again, but the file changed during the run: never attribute the result.
+    with pytest.raises(ValueError, match="changed while pytest ran") as changed:
+        _finish(anchor, operation)
+    assert changed.value.error_code == "test_files_changed_during_run"
     assert counter.read_text() == "run\n"
     with pytest.raises(ValueError, match="no such running request; rerun") as lost:
         anchor("test", **{**operation["kwargs"], "request_id": "lost-runtime-request"})

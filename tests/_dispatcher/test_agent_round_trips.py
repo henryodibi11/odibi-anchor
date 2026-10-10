@@ -270,3 +270,65 @@ def test_invalid_wait_refuses_without_test_execution(runtime, wait):
         anchor("test", target=["not_present.py"], wait_seconds=wait, output_format="dict")
     assert rejected.value.context["executed"] is False
     assert rejected.value.next_operation["kwargs"]["wait_seconds"] == 0
+
+
+def test_poll_refuses_a_result_when_a_file_changed_and_was_restored_mid_run(tmp_path, monkeypatch):
+    """ABA: the bytes match again at the poll, but the run may have read the changed file."""
+    import time
+
+    from tests._dispatcher.test_lifecycle_friction import _implemented
+    from tests._dispatcher.test_lifecycle_friction import lifecycle as lifecycle_fixture
+    from tests.integration.test_long_call_polling import _controlled_test, _poll
+
+    lifecycle = lifecycle_fixture.__wrapped__(tmp_path, monkeypatch)
+    release, _counter = _controlled_test(lifecycle, tmp_path)
+    _implemented(lifecycle, criteria_targets=("test_poll.py",))
+    anchor = lifecycle.anchor
+    started = anchor("test", target=["test_poll.py"], workflow_criterion="ok",
+                     wait_seconds=0, request_id="aba", output_format="dict")
+    assert started["status"] == "running"
+    module = lifecycle.target / lifecycle.paths[0]
+    original = module.read_bytes()
+    module.write_text("VALUE = 3\n")
+    time.sleep(0.01)
+    module.write_bytes(original)  # same bytes again; ctime still moved
+    release.touch()
+
+    deadline = time.monotonic() + 20
+    with pytest.raises(ValueError, match="changed while pytest ran") as refused:
+        while time.monotonic() < deadline:
+            if _poll(anchor, started["next_operation"]).get("status") != "running":
+                break
+            time.sleep(0.02)
+    assert refused.value.error_code == "test_files_changed_during_run"  # type: ignore[attr-defined]
+    assert anchor("workflow", output_format="dict")["state"]["measurements"] == {}
+
+
+def test_full_request_table_stops_running_requests_from_other_task_windows():
+    from odibi_anchor._dispatcher import _session_tools
+
+    class Running:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    orphans = {}
+    saved = dict(_session_tools._RETAINED_TEST_RESULTS)
+    _session_tools._RETAINED_TEST_RESULTS.clear()
+    try:
+        for index in range(_session_tools._MAX_RETAINED_TEST_RESULTS):
+            orphans[index] = Running()
+            _session_tools._RETAINED_TEST_RESULTS[("abandoned-window", f"r{index}")] = {
+                "request_sha256": "x", "scope_sha256": "y", "process": orphans[index], "steps": Running(),
+            }
+        result = _session_tools.run_retained_test(
+            "fresh", task_window_id="current-window", arguments={"target": ["test_one.py"]},
+            scope_fingerprint=lambda: "bytes", execute=lambda: {"metrics": {"exit_code": 0}},
+        )
+        assert result["metrics"]["exit_code"] == 0
+        assert orphans[0].closed is True
+        assert ("abandoned-window", "r0") not in _session_tools._RETAINED_TEST_RESULTS
+    finally:
+        _session_tools._RETAINED_TEST_RESULTS.clear()
+        _session_tools._RETAINED_TEST_RESULTS.update(saved)
