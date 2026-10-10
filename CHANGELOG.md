@@ -2,6 +2,23 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.27] - 2026-10-10
+
+Hotfix for a Databricks serverless install failure.
+
+### Fixed
+
+- **No protobuf downgrade on Databricks serverless.** The `databricks` and `all` extras pinned
+  `protobuf<6` (added in 0.3.4 after a non-blocking resolver warning). On current serverless,
+  `%pip install "odibi-anchor[databricks]==…"`, the command the launcher and `doctor` print,
+  downgraded protobuf 6.33.5 to 5.29.6, which breaks Spark Connect and crashed the kernel. The
+  extras no longer mention protobuf; `databricks-sdk` declares its own supported range
+  (`>=4.25.8,<7`). An environment whose preinstalled protobuf falls outside that range may see pip
+  upgrade it with a non-blocking resolver warning, as before 0.3.4.
+- For 0.3.26 and earlier on serverless, install without the extra
+  (`%pip install "odibi-anchor==0.3.26"`): the base package has no dependencies, and serverless
+  already provides a qualified `databricks-sdk`.
+
 ## [0.3.26] - 2026-10-10
 
 Recovery and agent-experience release: the supported descriptor repair and target move for #29

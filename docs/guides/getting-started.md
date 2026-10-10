@@ -15,7 +15,9 @@ python -m pip install "odibi-anchor==<version>"
 python -m pip install "odibi-anchor[mcp]==<version>"
 ```
 
-In Databricks use the qualified SDK extra and restart Python:
+In Databricks use the qualified SDK extra and restart Python. The extra adds only
+`databricks-sdk`; Anchor never constrains protobuf, so the runtime's own protobuf (Spark Connect
+on serverless needs 6.x) is kept:
 
 ```python
 %pip install "odibi-anchor[databricks]==<version>"
