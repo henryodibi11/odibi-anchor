@@ -2,6 +2,91 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.24] - 2026-10-10
+
+Hardening release: contain and diagnose the incidents reported in #24, #28, #29, #30 and #31.
+The safe target-migration and descriptor-repair operations ship in 0.3.25.
+
+### Fixed
+
+- **Restore ownership (#24).** `restore_latest` claims its artifact destination exclusively
+  (exclusive `mkdir`, inode identity and a per-invocation ownership marker). Cleanup removes only
+  entries that invocation created, while its identity still holds. A directory created by a
+  competing writer is never deleted; that case raises `restore_destination_conflict`.
+- **Restore qualification.** Startup initializes empty local state only on confirmed first use
+  (restore `classification: no_lineage`). An unreachable durable root raises
+  `durable_root_unavailable`. A lineage whose authority marker exists but whose snapshots are gone
+  raises `durable_lineage_missing`. A plain `FileNotFoundError` during restore is no longer read
+  as "no snapshot". The startup packet reports `restore.classification`
+  (`restored`, `no_lineage`, `local_present`, `not_configured`). A durable root writes
+  `<durable_root>/<authority_id>/AUTHORITY.json` on its first publication, and existing lineages
+  get it on their next publication. Older readers ignore the marker.
+- **Recoverable partial restore.** A failure after the artifact copy leaves an owned record and
+  raises `restore_incomplete`, with public, reversible `anchor state resume` and
+  `anchor state abandon` operations (also `odibi_anchor.resume_restore` / `abandon_restore`).
+  Abandon moves the owned tree to a preserved quarantine path and never deletes it.
+- **Descriptor integrity (#29).** `PROJECT.md` route frontmatter is parsed strictly. A missing,
+  malformed, unreadable or incomplete descriptor raises `managed_descriptor_damaged` with exact
+  context. A referenced project no longer silently falls back to its artifact root as its target.
+  Damaged descriptors are never rewritten during detection. A damaged project that is the
+  remembered selector no longer breaks `project list` and `status` for other projects.
+- **Structured route conflicts (#30).** The generic target-hint error is now
+  `route_target_conflict`, with requested and descriptor targets, artifact root and a
+  `probable_move` or `ambiguous` classification. The message keeps "conflicts with target hint"
+  for existing callers.
+- **Safe `set_target` (#30).** Writes are atomic, with optional `expected_sha256`
+  (`managed_descriptor_changed` on a stale hash). `set_target` refuses with
+  `project_retarget_requires_migration` when a continuity owner or authority records (accepted
+  tasks, workflows, memory receipts) are bound to the old target. Before, it reported success and
+  left the project unbootable (`ContinuityUnavailable: continuity owner mismatch`). Never-launched
+  projects can still be retargeted.
+- **MCP typed table resolution (#28).** The MCP gateway converts strings into DataFrames only for
+  parameters that an action takes as tables. Paths such as `touched("…/manifest.json")` reach the
+  action unchanged, with or without pandas. Dotted text is never sent to Spark. A missing table
+  reader raises `table_input_dependency_unavailable`. The file cache is invalidated when a file's
+  stat identity changes.
+- **Truthful test measurement.** The pytest runner reports `xfailed` and `xpassed` separately from
+  `skipped`. Workflow pytest criteria still require zero skipped and xpassed, and an `xfailed` count
+  equal to the criterion's optional `expected_xfailed` (default 0).
+- **Agent lifecycle fixes.** `anchor("memory", "status")` returns a clear error instead of a
+  `TypeError`. `preflight` also looks for ruff and pyright beside the running interpreter and
+  reports the resolved paths. `anchor("test")` accepts `timeout=` or `ANCHOR_TEST_TIMEOUT`
+  (bounded to 600 s) and reports per-test timeouts explicitly. The review diffstat counts
+  deletions. `touched` marks untracked new files as created. Workflow plan list fields are
+  shape-checked at create. A gate before `implemented` warns with the exact next call.
+  `task_rebind` returns its required next operations. `help("workflow")` documents the enforced
+  order and the review findings schema.
+
+### Added
+
+- Bootstrap phase timings in the managed startup packet (`timings`), bounded Workspace API and
+  package-index timeouts (`bootstrap_phase_timeout`), and `scripts/bootstrap_benchmark.py` (#31).
+- Optional exact package pin: `ANCHOR_PACKAGE_VERSION` or `hosts.<id>.package_version`. A pinned
+  launcher skips the package index. Pins must be 0.3.24 or newer, and every host must run 0.3.24
+  or newer before the portfolio field is added.
+- Portfolio-not-found errors list every searched path in precedence order (#30). The search
+  precedence itself is unchanged.
+- An incident replay harness (`tests/integration`) with a fake Databricks runtime and crash
+  injection replays the reported incidents end to end.
+- The owner Slack transport accepts the legacy `CW_SLACK_*` names, only when every
+  `ANCHOR_SLACK_*` name is absent. The two sets are never mixed.
+
+### Changed
+
+- Examples, packaged guidance and test fixtures use one neutral retail domain. A guard test blocks
+  reintroduction. Memory project routing keeps only the `odibi_anchor` fragment; other roots
+  resolve to their directory name, so exact roots are unchanged. The table profiler no longer
+  treats `mw`, `kwh` and `mwh` name suffixes as measure-name hints (`capacity` still is), and such
+  numeric columns remain MEASURE through the fallback.
+
+### Unchanged boundaries
+
+- Single-writer restore remains required. Ownership protects against a competing local writer but
+  is not a distributed lock. On Databricks, the root check confirms the Unity Catalog Volume, so a
+  mistyped subdirectory inside an existing Volume is treated as first use. All Databricks paths in
+  this release are verified with fakes, not live workspaces.
+- Relative `touched` paths still resolve against `target_root` in every mode.
+
 ## [0.3.23] - 2026-10-02
 
 ### Added

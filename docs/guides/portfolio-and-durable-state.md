@@ -101,6 +101,39 @@ downloads one latest manifest and only its referenced database and artifact payl
 payloads are not fetched. It does not mutate the caller's environment.
 `.active_project` is never consulted.
 
+## Package version policy and bootstrap telemetry
+
+On Databricks, the managed launcher requires the latest stable release from the package index
+by default. To control upgrades, or to start without package-index access, pin an exact release.
+The launcher reads the first pin it finds, in this order:
+
+1. the `ANCHOR_PACKAGE_VERSION` launcher init global;
+2. the `ANCHOR_PACKAGE_VERSION` environment variable;
+3. the optional portfolio field `hosts.<id>.package_version`, for the host whose
+   `instruction_root` matches the launcher;
+4. otherwise, the latest stable release.
+
+With a pin, the launcher requires `installed == pin`, does not call the package index, and
+prints the exact `%pip install` command on a mismatch. Pins must be exact `MAJOR.MINOR.PATCH`
+releases of 0.3.24 or newer, because older launchers ignore pins. Anchor versions before 0.3.24
+reject the `package_version` portfolio field as unknown, so upgrade every host before adding it.
+
+Remote bootstrap calls are bounded. `ANCHOR_WORKSPACE_API_TIMEOUT_SECONDS` (default 30) bounds
+Workspace API calls during host-guidance reconciliation, and `ANCHOR_VERSION_CHECK_TIMEOUT_SECONDS`
+(default 5) bounds the package-index lookup. Both accept values above 0 and up to 600. A timeout
+fails closed with `error_code="bootstrap_phase_timeout"`, naming the phase, layer, elapsed time
+and item. No integrity check is skipped.
+
+The managed startup packet includes `timings` (schema `odibi-anchor-bootstrap-timings-v1`). It
+records elapsed milliseconds and an outcome for each phase, including launcher-side portfolio
+discovery and the version check, host guidance with the slowest files, local-state identity,
+restore, route binding, repository provider, init and orient. A failed bootstrap carries the same
+summary as `exc.bootstrap_timings`. To measure cold and warm bootstraps on a target compute, run
+`python scripts/bootstrap_benchmark.py --launcher <instruction-root>/.assistant/agent_bootstrap.py
+--project-id <project-id> --runs 3`. Use `--isolation in-process --runs 1` when notebook
+credentials are not inherited by child processes. The helper performs no writes beyond the
+launcher's normal bootstrap effects.
+
 ## Durable state lifecycle
 
 The live database and managed project artifact tree stay on local compute. Substantive authority
