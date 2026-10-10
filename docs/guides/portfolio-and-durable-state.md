@@ -297,8 +297,8 @@ Run it on the host whose local state holds the project; on a fresh compute, run
 The read-only preflight reports the portfolio, descriptor and `OWNER.json` SHA-256 and the
 expected post-move hashes. It refuses with `target_migration_blocked` and a `classification`:
 
-- `state_mismatch`: `--from` is not both the portfolio and the descriptor target, local state is
-  absent, or the descriptor is damaged. A damaged descriptor is never rewritten; repair it first.
+- `state_mismatch`: the targets match neither accepted start state below, local state is absent,
+  or the descriptor is damaged. A damaged descriptor is never rewritten; repair it first.
 - `destination_unsuitable`: `--to` is missing, not a directory, a symlink or under a symlink, is
   another project's target, or lies inside `ANCHOR_HOME`, the configured local state root, the
   durable root or an artifact root. Private targets such as `projects/_scratch` are valid.
@@ -319,7 +319,9 @@ it. The steps run in this order, and each one checks the store's current hash ag
 recorded pre-state and the expected post-state:
 
 1. Durable snapshot (when a durable root is configured).
-2. Descriptor route update, then `continuity/v1` renamed to `continuity/archive/<migration-id>`.
+2. Descriptor route update and `continuity/v1` renamed to `continuity/archive/<migration-id>`.
+   When the portfolio already names `--to`, continuity is archived first, so no split state can
+   reach the old continuity owner.
 3. Journal state `portfolio_pending`, then a durable snapshot that contains it.
 4. Compare-and-swap write of the portfolio target.
 5. Create-only receipt `<migration-id>.receipt.json`, then a post-move snapshot.
@@ -328,9 +330,11 @@ If the process stops part-way, the next bootstrap of a split route raises
 `route_target_conflict` with `classification: migration_pending` and copy-ready operations. This
 includes a fresh compute that restored the step 3 snapshot before the portfolio write. A new
 move of the same project raises `target_migration_incomplete`. Finish or reverse it with the same
-arguments plus `--resume` or `--rollback`. Rollback restores the saved bytes under the same hash
-checks and is refused once a receipt exists; reverse a completed move with a new move in the other
-direction. An epoch archived on a different compute stays archived after rollback, because its
+arguments plus `--resume` or `--rollback`. Rollback checks every store before its first write,
+then restores the saved bytes under the same hash checks. It is refused, with nothing changed, once
+a receipt file exists or once the project has been launched on the new target (which starts a new
+epoch); finish with `--resume` and reverse a completed move with a new move in the other
+direction. Quiescence is checked again just before the first route change. An epoch archived on a different compute stays archived after rollback, because its
 owner names that compute's home; the next launch starts a new epoch. Whenever a store matches
 neither its expected pre-state nor its post-state, the command stops with the exact hashes and
 does not guess.

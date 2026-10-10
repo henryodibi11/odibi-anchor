@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.fixtures.fake_databricks.crash import CrashInjector
+from tests.fixtures.fake_databricks.crash import CrashInjector, InjectedCrash
 
 HOST = "local"
 
@@ -431,3 +431,90 @@ def test_cli_move_target_emits_structured_json(deployment, targets, capsys):
     capsys.readouterr()
     assert cli.main(base) == 0
     assert json.loads(capsys.readouterr().out)["result"]["status"] == "completed"
+
+
+def _crash_before_receipt(artifact: Path):
+    return lambda point: point.operation == "os.open" and ".receipt.json." in point.path
+
+
+def _snapshot_bytes(deployment: Deployment) -> dict[str, str]:
+    return {"portfolio": _sha(deployment.config), **_tree(deployment.artifact())}
+
+
+def test_rollback_after_a_new_epoch_started_refuses_without_writing_then_resume_converges(deployment, targets):
+    old, new = targets
+    artifact = deployment.artifact()
+    injector = CrashInjector(scope=[deployment.root], crash_if=_crash_before_receipt(artifact))
+    with injector, pytest.raises(InjectedCrash):
+        deployment.move(source=old, destination=new)
+    # The route is consistent after the portfolio write, so a launch starts the new epoch.
+    assert deployment.prepare()["target_root"] == str(new)
+    deployment.launch("alpha", new)
+    before = _snapshot_bytes(deployment)
+
+    with pytest.raises(Exception) as refused:
+        deployment.move(source=old, destination=new, rollback=True)
+
+    code, context = _code(refused.value)
+    assert (code, context["classification"], context["state"]) == ("target_migration_blocked", "state_mismatch", "portfolio_written")
+    assert refused.value.next_operations[0]["arguments"]["resume"] is True
+    assert _snapshot_bytes(deployment) == before
+    assert deployment.move(source=old, destination=new, resume=True)["status"] == "completed"
+    assert deployment.prepare()["target_root"] == str(new)
+
+
+def test_rollback_is_refused_when_the_receipt_exists_but_its_journal_update_was_lost(deployment, targets):
+    old, new = targets
+    artifact = deployment.artifact()
+
+    def after_receipt(point):
+        receipts = list((artifact / "migrations").glob("tm_*.receipt.json"))
+        return bool(receipts) and point.operation == "os.open" and "/migrations/.tm_" in point.path
+
+    injector = CrashInjector(scope=[deployment.root], crash_if=after_receipt)
+    with injector, pytest.raises(InjectedCrash):
+        deployment.move(source=old, destination=new)
+    before = _snapshot_bytes(deployment)
+
+    with pytest.raises(Exception) as refused:
+        deployment.move(source=old, destination=new, rollback=True)
+
+    assert _code(refused.value)[1]["receipt_path"].endswith(".receipt.json")
+    assert _snapshot_bytes(deployment) == before
+    assert deployment.move(source=old, destination=new, resume=True)["status"] == "completed"
+
+
+def test_receipt_chain_with_a_return_trip_names_the_latest_move_off_the_prior_target(deployment, targets, tmp_path):
+    old, new = targets
+    third = tmp_path / "third" / "alpha"
+    third.mkdir(parents=True)
+    deployment.move(source=old, destination=new)
+    deployment.move(source=new, destination=old)
+    last = deployment.move(source=old, destination=third)
+    migration = _module("odibi_anchor._migration")
+
+    receipt = migration.migration_receipt_for(deployment.artifact(), "alpha", str(old), str(third))
+
+    assert receipt is not None and receipt["migration_id"] == last["migration_id"]
+    assert migration.migration_receipt_for(deployment.artifact(), "alpha", str(old), str(tmp_path / "never")) is None
+
+
+def test_destination_containing_anchor_state_is_refused(deployment, targets):
+    old, _new = targets
+    with pytest.raises(Exception) as refused:
+        deployment.move(source=old, destination=deployment.root)
+    code, context = _code(refused.value)
+    assert (code, context["classification"]) == ("target_migration_blocked", "destination_unsuitable")
+    assert any("contains the ANCHOR_HOME" in problem for problem in context["problems"])
+
+
+def test_cli_bad_mapping_file_is_an_input_error(deployment, tmp_path, capsys):
+    cli = _module("odibi_anchor.cli")
+    mapping = tmp_path / "moves.json"
+    mapping.write_text('{"moves": [{"project": "alpha"}]}', encoding="utf-8")
+
+    code = cli.main(["portfolio", "move-target", "--config", str(deployment.config), "--host", HOST,
+                     "--mapping", str(mapping)])
+
+    assert code == cli.EXIT_INPUT
+    assert json.loads(capsys.readouterr().out)["error"]["type"] == "input"

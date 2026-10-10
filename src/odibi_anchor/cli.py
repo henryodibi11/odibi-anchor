@@ -183,9 +183,12 @@ def _portfolio_command(ns: argparse.Namespace) -> dict[str, Any]:
         if ns.mapping is not None:
             if any(value is not None for value in single) or ns.resume or ns.rollback:
                 raise RequestError("--mapping excludes --project/--from/--to, --resume and --rollback")
+            try:
+                moves = load_mapping(ns.mapping)
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise RequestError(f"invalid --mapping file: {exc}") from exc
             return move_targets(
-                config_path=ns.config, host_id=ns.host, moves=load_mapping(ns.mapping),
-                dry_run=ns.dry_run,
+                config_path=ns.config, host_id=ns.host, moves=moves, dry_run=ns.dry_run,
             )
         if any(value is None for value in single):
             raise RequestError("move-target requires --project, --from and --to (or --mapping)")

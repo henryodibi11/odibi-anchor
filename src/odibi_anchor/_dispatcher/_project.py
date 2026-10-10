@@ -555,9 +555,9 @@ def _route_target_conflict(
             f"(route_target_conflict, {classification}): requested target {requested!r} "
             f"differs from the intact descriptor target {descriptor_target!r}. "
             f"{explanation} Do not proceed: stop and ask the project owner. If the move is "
-            "intended, the supported operation is `anchor portfolio move-target` (run it "
-            "with --dry-run first). Do not edit PROJECT.md, the portfolio, or Anchor state "
-            "manually."
+            "intended and the project is portfolio-managed, the supported operation is "
+            "`anchor portfolio move-target` (run it with --dry-run first). Do not edit "
+            "PROJECT.md, the portfolio, or Anchor state manually."
         ),
         error_code="route_target_conflict",
         context={
@@ -1109,9 +1109,9 @@ def _set_target(
                     "(project_retarget_requires_migration): records bound to the current "
                     "target would be invalidated or could not be verified: "
                     f"{', '.join(sorted(invalidated))}. The descriptor was not changed. Stop "
-                    "and ask the project owner; the supported operation for a launched project "
-                    "is `anchor portfolio move-target` (dry-run first). Do not edit PROJECT.md, "
-                    "continuity files, or SQLite manually."
+                    "and ask the project owner; for a launched portfolio-managed project the "
+                    "supported operation is `anchor portfolio move-target` (dry-run first). Do "
+                    "not edit PROJECT.md, continuity files, or SQLite manually."
                 ),
                 error_code="project_retarget_requires_migration",
                 context={

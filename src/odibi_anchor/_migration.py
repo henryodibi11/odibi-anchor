@@ -281,10 +281,13 @@ def _migrations_root(artifact_root: str | Path) -> Path:
 
 def _journal_paths(artifact_root: str | Path) -> list[Path]:
     root = _migrations_root(artifact_root)
-    if not root.is_dir():
+    try:
+        candidates = list(root.glob("tm_*.json")) if root.is_dir() else []
+    except OSError:
+        # Unreadable journals can never be matched; callers that act on them re-read and refuse.
         return []
     return sorted(
-        path for path in root.glob("tm_*.json")
+        path for path in candidates
         if not path.name.endswith(".receipt.json") and _ID_PATTERN.fullmatch(path.name.removesuffix(".json"))
     )
 
@@ -357,16 +360,22 @@ def migration_receipt_for(
             receipt = json.loads(path.read_bytes())
             if receipt.get("format") == RECEIPT_FORMAT and receipt.get("project_id") == project_id:
                 receipts.append({"migration_id": receipt["migration_id"], "receipt_path": str(path),
-                                 "from_target": receipt["from_target"], "to_target": receipt["to_target"]})
+                                 "from_target": receipt["from_target"], "to_target": receipt["to_target"],
+                                 "completed_at": str(receipt.get("completed_at", ""))})
         except (OSError, ValueError, KeyError, TypeError):
             continue
+    receipts.sort(key=lambda item: (item["completed_at"], item["migration_id"]))
     first = None
     cursor = prior_target
+    used: set[str] = set()
     for _hop in range(20):
-        step = next((item for item in receipts if _same_target(item["from_target"], cursor)), None)
+        step = next((item for item in receipts if item["migration_id"] not in used
+                     and _same_target(item["from_target"], cursor)), None)
         if step is None:
             return None
-        first = first or step
+        used.add(step["migration_id"])
+        # Name the most recent move off the prior target on the path to the current one.
+        first = step if first is None or _same_target(step["from_target"], prior_target) else first
         if current_target is None or _same_target(step["to_target"], current_target):
             return first
         cursor = step["to_target"]
@@ -545,6 +554,8 @@ def _destination_problems(ctx: _Context, document: Mapping[str, Any], to_target:
         normalized = Path(os.path.normcase(str(Path(root).resolve())))
         if resolved == normalized or normalized in resolved.parents:
             problems.append(f"destination is inside the {label} {root}")
+        elif resolved in normalized.parents:
+            problems.append(f"destination contains the {label} {root}")
     return problems
 
 
@@ -593,7 +604,10 @@ def _quiescence(ctx: _Context) -> dict[str, list[Any]]:
     return result
 
 
-def _require_quiescent(ctx: _Context, document: Mapping[str, Any], extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _require_quiescent(
+    ctx: _Context, document: Mapping[str, Any], extra: Mapping[str, Any] | None = None,
+    next_operations: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     quiescence = _quiescence(ctx)
     if any(quiescence.values()):
         blocking = [*quiescence["open_task_windows"], *quiescence["non_terminal_workflows"]]
@@ -603,6 +617,7 @@ def _require_quiescent(ctx: _Context, document: Mapping[str, Any], extra: Mappin
             + (", ".join(blocking) if blocking else "task and workflow authority could not be verified")
             + ". Close or cancel them first; a migration never orphans live authority",
             {**_base_context(ctx, document), **quiescence, **(extra or {})},
+            next_operations,
         )
     return quiescence
 
@@ -772,13 +787,36 @@ def _descriptor_after(ctx: _Context, journal: _Journal, pre_bytes: bytes) -> str
     return text
 
 
-def _apply_descriptor(ctx: _Context, journal: _Journal, pre_bytes: bytes) -> None:
+def _local_order(journal: _Journal) -> tuple[str, str]:
+    """Order the two local steps so every split state fails route resolution.
+
+    An aligned start updates the descriptor first: until the portfolio write, the
+    portfolio still names ``from`` and bootstrap stops at ``migration_pending``. When the
+    portfolio already names ``to``, a descriptor written first would let a launch reach
+    the old continuity owner, so continuity is archived first instead.
+    """
+    if journal.data["intent"]["start_state"] == "portfolio_already_moved":
+        return ("continuity", "descriptor")
+    return ("descriptor", "continuity")
+
+
+def _owner_names(path: Path, ctx: _Context, target: str) -> bool:
+    """Whether a continuity owner sentinel is bound to ``target`` in this artifact root."""
+    owner = _read_owner(path)
+    return bool(
+        owner and isinstance(owner.get("target_root"), str) and _same_target(owner["target_root"], target)
+        and owner.get("artifact_root") == str(ctx.artifact_root)
+    )
+
+
+def _apply_descriptor(ctx: _Context, journal: _Journal, *, last: bool) -> None:
     from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
 
     path = ctx.artifact_root / "PROJECT.md"
     pre, after = journal.data["pre"]["descriptor_sha256"], journal.data["expected"]["descriptor_sha256"]
     current = _file_sha256(path)
     if current == pre:
+        pre_bytes = journal.relative(journal.data["backups"]["descriptor"]).read_bytes()
         try:
             write_descriptor_atomic(path, _descriptor_after(ctx, journal, pre_bytes), expected_sha256=pre)
         except FileExistsError as exc:
@@ -786,35 +824,41 @@ def _apply_descriptor(ctx: _Context, journal: _Journal, pre_bytes: bytes) -> Non
         current = _file_sha256(path)
     if current != after:
         raise _mismatch(journal, "descriptor", {"pre_sha256": pre, "after_sha256": after}, {"sha256": current})
-    journal.update(steps={"descriptor": {"status": "done", "sha256": after}})
+    journal.update(state="portfolio_pending" if last else None,
+                   steps={"descriptor": {"status": "done", "sha256": after}})
 
 
-def _apply_continuity(ctx: _Context, journal: _Journal) -> None:
+def _apply_continuity(ctx: _Context, journal: _Journal, *, last: bool) -> None:
     pre = journal.data["pre"]
+    to_target = journal.data["intent"]["to_target"]
     v1, archive = _continuity_paths(ctx.artifact_root, journal.data["migration_id"])
     assert archive is not None
+    state = "portfolio_pending" if last else None
     owner_sha = _owner_sha_for(journal, ctx)
     expected = {"owner_sha256": owner_sha, "continuity_present": pre["continuity_present"],
                 "archive": str(archive)}
+    # A launch on the finished route may already have started the new epoch in v1.
+    new_epoch = v1.exists() and _owner_names(v1 / "OWNER.json", ctx, to_target)
     if not pre["continuity_present"]:
-        if v1.exists():
+        if v1.exists() and not new_epoch:
             raise _mismatch(journal, "continuity", expected, {"v1_present": True})
-        journal.update(state="portfolio_pending", steps={"continuity": {"status": "not_applicable"}})
+        journal.update(state=state, steps={"continuity": {"status": "not_applicable", "new_epoch_started": new_epoch}})
         return
-    if v1.exists() and not archive.exists():
+    if v1.exists() and not new_epoch and not archive.exists():
         if _file_sha256(v1 / "OWNER.json") != owner_sha:
             raise _mismatch(journal, "continuity", expected, {"owner_sha256": _file_sha256(v1 / "OWNER.json")})
         archive.parent.mkdir(parents=True, exist_ok=True)
         os.rename(v1, archive)
         _fsync_directory(archive.parent)
-    if v1.exists() or not archive.is_dir() or _file_sha256(archive / "OWNER.json") != owner_sha:
+        new_epoch = False
+    if (v1.exists() and not new_epoch) or not archive.is_dir() or _file_sha256(archive / "OWNER.json") != owner_sha:
         raise _mismatch(journal, "continuity", expected, {
             "v1_present": v1.exists(), "archive_present": archive.exists(),
             "archived_owner_sha256": _file_sha256(archive / "OWNER.json"),
         })
-    journal.update(state="portfolio_pending", steps={"continuity": {
+    journal.update(state=state, steps={"continuity": {
         "status": "done", "archive": str(archive.relative_to(ctx.artifact_root)), "owner_sha256": owner_sha,
-        "anchor_home": str(ctx.anchor_home),
+        "anchor_home": str(ctx.anchor_home), "new_epoch_started": new_epoch,
     }})
 
 
@@ -882,7 +926,8 @@ def _route_mutations_remaining(ctx: _Context, journal: _Journal) -> bool:
     v1, archive = _continuity_paths(ctx.artifact_root, data["migration_id"])
     assert archive is not None
     descriptor_pending = _file_sha256(ctx.artifact_root / "PROJECT.md") != data["expected"]["descriptor_sha256"]
-    continuity_pending = data["pre"]["continuity_present"] and not (archive.is_dir() and not v1.exists())
+    archived = archive.is_dir() and (not v1.exists() or _owner_names(v1 / "OWNER.json", ctx, data["intent"]["to_target"]))
+    continuity_pending = data["pre"]["continuity_present"] and not archived
     portfolio_pending = (
         data["steps"]["portfolio"]["status"] != "already_applied"
         and _file_sha256(ctx.config_path) != data["expected"]["portfolio_sha256"]
@@ -902,15 +947,25 @@ def _route_mutations_applied(ctx: _Context, journal: _Journal) -> bool:
     )
 
 
+def _journal_context(ctx: _Context, journal: _Journal) -> dict[str, Any]:
+    return {"migration_id": journal.data["migration_id"], "journal_path": str(journal.path),
+            "state": journal.data["state"]}
+
+
 def _run_forward(ctx: _Context, journal: _Journal) -> None:
     _ensure_backup(journal, "portfolio", ctx.config_path, journal.data["pre"]["portfolio_sha256"])
-    descriptor_pre = _ensure_backup(journal, "descriptor", ctx.artifact_root / "PROJECT.md", journal.data["pre"]["descriptor_sha256"])
+    _ensure_backup(journal, "descriptor", ctx.artifact_root / "PROJECT.md", journal.data["pre"]["descriptor_sha256"])
     if journal.step("pre_snapshot")["status"] == "pending":
         journal.update(steps={"pre_snapshot": _snapshot(ctx)})
-    if journal.step("descriptor")["status"] == "pending":
-        _apply_descriptor(ctx, journal, descriptor_pre)
-    if journal.step("continuity")["status"] == "pending":
-        _apply_continuity(ctx, journal)
+    order = _local_order(journal)
+    if any(journal.step(name)["status"] == "pending" for name in order) and _route_mutations_remaining(ctx, journal):
+        # Re-check right before the first route change; the snapshot may have taken a while.
+        _require_quiescent(ctx, {"sha256": _file_sha256(ctx.config_path)}, _journal_context(ctx, journal),
+                           _recovery_operations(journal.data["intent"])[::-1])
+    for name in order:
+        if journal.step(name)["status"] == "pending":
+            apply = _apply_descriptor if name == "descriptor" else _apply_continuity
+            apply(ctx, journal, last=name == order[-1])
     if journal.step("pending_snapshot")["status"] == "pending":
         journal.update(steps={"pending_snapshot": _snapshot(ctx)})
     if journal.data["state"] == "portfolio_pending":
@@ -921,81 +976,113 @@ def _run_forward(ctx: _Context, journal: _Journal) -> None:
         journal.update(state="completed", steps={"post_snapshot": _snapshot(ctx)})
 
 
-def _run_rollback(ctx: _Context, journal: _Journal) -> None:
-    from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
-    from odibi_anchor.portfolio import _atomic_write, load_portfolio_document
+def _refuse_rollback(ctx: _Context, journal: _Journal, reason: str, **context: Any) -> TargetMigrationError:
+    intent = journal.data["intent"]
+    return _blocked(
+        "state_mismatch",
+        f"migration {journal.data['migration_id']} cannot be rolled back: {reason}. Nothing was changed; "
+        "finish it with --resume, then move back with a new move-target if needed",
+        {**_journal_context(ctx, journal), **{key: intent[key] for key in ("project_id", "host_id", "from_target", "to_target", "config_path")},
+         "artifact_root": str(ctx.artifact_root), **context},
+        [_recovery_operations(intent)[0],
+         _cli_operation({**intent, "from_target": intent["to_target"], "to_target": intent["from_target"]},
+                        "dry_run", "preview the reverse move after completion")],
+    )
+
+
+def _rollback_actions(ctx: _Context, journal: _Journal) -> dict[str, str | None]:
+    """Decide every compensation before any write; raise when one cannot be made exactly."""
+    from odibi_anchor.portfolio import load_portfolio_document
 
     data = journal.data
     intent = data["intent"]
-    journal.update(state="rolling_back")
-    # 1. Portfolio: restore the backed-up bytes only when this migration wrote them.
+    receipt = _receipt_path(journal)
+    if receipt.exists():
+        raise _refuse_rollback(ctx, journal, "its receipt already exists", receipt_path=str(receipt))
+    actions: dict[str, str | None] = {"portfolio": None, "continuity": None, "descriptor": None}
     if data["steps"]["portfolio"]["status"] != "already_applied":
         pre, after = data["pre"]["portfolio_sha256"], data["expected"]["portfolio_sha256"]
         current = _file_sha256(ctx.config_path)
         if current == after and pre != after:
-            backup = journal.relative(data["backups"]["portfolio"]).read_bytes()
-            if _sha256(backup) != pre:
-                raise _mismatch(journal, "portfolio backup", {"sha256": pre}, {"sha256": _sha256(backup)})
-            try:
-                _atomic_write(ctx.config_path, backup, after)
-            except ValueError as exc:
-                raise _mismatch(journal, "portfolio", {"after_sha256": after}, {"sha256": _file_sha256(ctx.config_path)}) from exc
+            if _file_sha256(journal.relative(data["backups"]["portfolio"])) != pre:
+                raise _mismatch(journal, "portfolio backup", {"sha256": pre}, {"sha256": _file_sha256(journal.relative(data["backups"]["portfolio"]))})
+            actions["portfolio"] = "restore"
         elif current != pre:
             # A foreign write after a refused compare-and-swap: safe only if it still names --from.
             document = load_portfolio_document(ctx.config_path)
             target = document["portfolio"]["projects"].get(ctx.project_id, {}).get("targets", {}).get(ctx.host_id)
             if data["steps"]["portfolio"]["status"] == "done" or target is None or not _same_target(target, intent["from_target"]):
                 raise _mismatch(journal, "portfolio", {"pre_sha256": pre, "after_sha256": after}, {"sha256": current, "target": target})
-    # 2. Continuity: move the archived epoch back when it belongs to this compute.
     v1, archive = _continuity_paths(ctx.artifact_root, data["migration_id"])
     assert archive is not None
-    left_archived = False
+    observed = {"v1_present": v1.exists(), "archive_present": archive.exists(),
+                "owner_sha256": _file_sha256(v1 / "OWNER.json"),
+                "archived_owner_sha256": _file_sha256(archive / "OWNER.json")}
+    if v1.exists() and _owner_names(v1 / "OWNER.json", ctx, intent["to_target"]):
+        raise _refuse_rollback(ctx, journal, "the project was already launched on the new target, which started a "
+                               "new continuity epoch that a rollback would orphan", continuity=observed)
     if data["pre"]["continuity_present"]:
         owner_sha = _owner_sha_for(journal, ctx)
         archived = data["steps"]["continuity"]
-        observed = {"v1_present": v1.exists(), "archive_present": archive.exists(),
-                    "owner_sha256": _file_sha256(v1 / "OWNER.json"),
-                    "archived_owner_sha256": _file_sha256(archive / "OWNER.json")}
         if archive.exists() and not v1.exists():
             if observed["archived_owner_sha256"] == owner_sha:
-                os.rename(archive, v1)
-                _fsync_directory(v1.parent)
+                actions["continuity"] = "rename_back"
             elif (
                 archived.get("status") == "done" and archived.get("anchor_home") != str(ctx.anchor_home)
                 and observed["archived_owner_sha256"] == archived.get("owner_sha256")
             ):
                 # Archived on another compute, so its owner names that compute's home and
                 # would not bind here. Keep it preserved; the next launch starts a new epoch.
-                left_archived = True
+                actions["continuity"] = "leave_archived"
             else:
                 raise _mismatch(journal, "continuity", {"owner_sha256": owner_sha}, observed)
-        if not left_archived and (
-            archive.exists() or not v1.exists() or _file_sha256(v1 / "OWNER.json") != owner_sha
-        ):
-            raise _mismatch(journal, "continuity", {"owner_sha256": owner_sha}, {
-                **observed, "v1_present": v1.exists(), "archive_present": archive.exists(),
-                "owner_sha256": _file_sha256(v1 / "OWNER.json"),
-            })
+        elif archive.exists() or not v1.exists() or observed["owner_sha256"] != owner_sha:
+            raise _mismatch(journal, "continuity", {"owner_sha256": owner_sha}, observed)
     elif v1.exists():
-        raise _mismatch(journal, "continuity", {"continuity_present": False}, {"v1_present": True})
-    # 3. Descriptor: restore the backed-up bytes.
-    path = ctx.artifact_root / "PROJECT.md"
+        raise _mismatch(journal, "continuity", {"continuity_present": False}, observed)
     pre, after = data["pre"]["descriptor_sha256"], data["expected"]["descriptor_sha256"]
-    current = _file_sha256(path)
+    current = _file_sha256(ctx.artifact_root / "PROJECT.md")
     if current == after and pre != after:
-        backup = journal.relative(data["backups"]["descriptor"]).read_bytes()
-        if _sha256(backup) != pre:
-            raise _mismatch(journal, "descriptor backup", {"sha256": pre}, {"sha256": _sha256(backup)})
-        try:
-            write_descriptor_atomic(path, backup.decode("utf-8"), expected_sha256=after)
-        except FileExistsError as exc:
-            raise _mismatch(journal, "descriptor", {"after_sha256": after}, {"sha256": _file_sha256(path)}) from exc
+        if _file_sha256(journal.relative(data["backups"]["descriptor"])) != pre:
+            raise _mismatch(journal, "descriptor backup", {"sha256": pre}, {"sha256": _file_sha256(journal.relative(data["backups"]["descriptor"]))})
+        actions["descriptor"] = "restore"
     elif current != pre:
         raise _mismatch(journal, "descriptor", {"pre_sha256": pre, "after_sha256": after}, {"sha256": current})
+    return actions
+
+
+def _run_rollback(ctx: _Context, journal: _Journal) -> None:
+    from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
+    from odibi_anchor.portfolio import _atomic_write
+
+    actions = _rollback_actions(ctx, journal)
+    journal.update(state="rolling_back")
+    data = journal.data
+    if actions["portfolio"] == "restore":
+        try:
+            _atomic_write(ctx.config_path, journal.relative(data["backups"]["portfolio"]).read_bytes(),
+                          data["expected"]["portfolio_sha256"])
+        except ValueError as exc:
+            raise _mismatch(journal, "portfolio", {"after_sha256": data["expected"]["portfolio_sha256"]}, {"sha256": _file_sha256(ctx.config_path)}) from exc
+    v1, archive = _continuity_paths(ctx.artifact_root, data["migration_id"])
+    assert archive is not None
+    # Reverse the forward order so a crash here still leaves a route that fails resolution.
+    for name in reversed(_local_order(journal)):
+        if name == "continuity" and actions["continuity"] == "rename_back":
+            os.rename(archive, v1)
+            _fsync_directory(v1.parent)
+        elif name == "descriptor" and actions["descriptor"] == "restore":
+            path = ctx.artifact_root / "PROJECT.md"
+            try:
+                write_descriptor_atomic(path, journal.relative(data["backups"]["descriptor"]).read_bytes().decode("utf-8"),
+                                        expected_sha256=data["expected"]["descriptor_sha256"])
+            except FileExistsError as exc:
+                raise _mismatch(journal, "descriptor", {"after_sha256": data["expected"]["descriptor_sha256"]}, {"sha256": _file_sha256(path)}) from exc
     journal.update(state="rolled_back", steps={
         **{name: {**data["steps"][name], "status": "reverted"}
            for name in ("descriptor", "continuity", "portfolio") if data["steps"][name]["status"] == "done"},
-        **({"continuity": {**data["steps"]["continuity"], "status": "left_archived"}} if left_archived else {}),
+        **({"continuity": {**data["steps"]["continuity"], "status": "left_archived"}}
+           if actions["continuity"] == "leave_archived" else {}),
         "rollback_snapshot": {"status": "pending"},
     })
     _finish_rollback_snapshot(ctx, journal)
@@ -1128,6 +1215,8 @@ def move_target(
         journal = _find_journal(ctx, document, from_value, to_value)
         if journal is None:
             completed = [item for item in _project_journals(ctx) if item.data["state"] in TERMINAL_STATES
+                         and item.data["intent"]["host_id"] == ctx.host_id
+                         and _same_target(item.data["intent"]["from_target"], from_value)
                          and _same_target(item.data["intent"]["to_target"], to_value)]
             if resume and completed and completed[-1].data["state"] == "completed":
                 return _result(ctx, completed[-1], "completed")

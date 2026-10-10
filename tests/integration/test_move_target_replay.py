@@ -53,12 +53,17 @@ def _boot(replay: ReplayHarness) -> dict[str, Any]:
 class Moved:
     """One launched project with its observed pre-migration bytes."""
 
-    def __init__(self, replay: ReplayHarness) -> None:
+    def __init__(self, replay: ReplayHarness, start: str = "aligned") -> None:
         self.replay = replay
+        self.start = start
         self.old = replay.target("alpha")
         self.new = replay.target("projects/alpha")
         created = replay.create_project("alpha", self.old)
         self.artifact = Path(created["startup_packet"]["artifact_root"])
+        if start == "portfolio_already_moved":
+            # The #30 incident: the portfolio was edited by hand; the descriptor still names old.
+            document = importlib.import_module("odibi_anchor.portfolio").load_portfolio_document(replay.config)
+            replay.write_portfolio({"alpha": str(self.new)}, expected_sha256=document["sha256"])
         self.owner = self.artifact / "continuity" / "v1" / "OWNER.json"
         self.pre = {
             "portfolio": replay.config.read_bytes(),
@@ -82,7 +87,7 @@ class Moved:
         for name, path in (("portfolio", self.replay.config), ("descriptor", self.artifact / "PROJECT.md")):
             current = _sha(path)
             assert current in {pre_sha[name], expected_after[name]}, f"{name} is neither old nor new"
-            states[name] = "old" if current == pre_sha[name] else "new"
+            states[name] = "new" if current == expected_after[name] else "old"
         archives = self.archives()
         if self.owner.is_file() and not archives:
             assert _sha(self.owner) == pre_sha["owner"]
@@ -195,78 +200,101 @@ def test_fresh_compute_restoring_before_portfolio_write_is_migration_pending(rep
     assert _boot(replay)["startup_packet"]["target_root"] == str(expected)
 
 
-def _deploy(root: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[ReplayHarness, FakeDatabricks, Moved]:
+def _deploy(root: Path, monkeypatch: pytest.MonkeyPatch, start: str) -> tuple[ReplayHarness, FakeDatabricks, Moved]:
     FakeDatabricks.new_process()
     databricks = FakeDatabricks(root / "databricks").install(monkeypatch)
     replay = ReplayHarness(root / "deployment", databricks)
-    return replay, databricks, Moved(replay)
+    return replay, databricks, Moved(replay, start)
 
 
+def _boot_outcome(replay: ReplayHarness) -> tuple[str, dict[str, Any]]:
+    """Bootstrap and name the outcome: the bound target, or the route-conflict classification."""
+    try:
+        booted = _boot(replay)
+    except Exception as exc:
+        code, context = _recovery(exc)
+        assert code == "route_target_conflict", repr(exc)
+        return context["classification"], context
+    return "booted", {"target_root": booted["startup_packet"]["target_root"]}
+
+
+@pytest.mark.parametrize("start", ["aligned", "portfolio_already_moved"])
 @pytest.mark.parametrize("recovery", ["resume", "rollback"])
-def test_crash_before_every_mutation_point_converges(tmp_path, monkeypatch, recovery):
-    replay, databricks, moved = _deploy(tmp_path / "baseline", monkeypatch)
+def test_crash_before_every_mutation_point_converges(tmp_path, monkeypatch, recovery, start):
+    replay, databricks, moved = _deploy(tmp_path / "baseline", monkeypatch, start)
     _result, points = record_mutations(
         lambda: _move(replay, moved.old, moved.new), scope=[replay.root, databricks.root],
     )
     kinds = {point.kind for point in points}
     assert kinds == {"filesystem", "remote"} and len(points) >= 30
     diagnoses: set[str] = set()
+    # Before the move, an aligned route boots on old; the incident state is ambiguous.
+    initial_outcome = "booted_old" if start == "aligned" else "ambiguous"
 
     for point in points:
-        replay, databricks, moved = _deploy(tmp_path / f"crash-{point.index}", monkeypatch)
+        replay, databricks, moved = _deploy(tmp_path / f"crash-{point.index}", monkeypatch, start)
         preview = _move(replay, moved.old, moved.new, dry_run=True)
         expected_after = {"portfolio": preview["expected"]["portfolio_sha256"],
                           "descriptor": preview["expected"]["descriptor_sha256"]}
+        initial = moved.store_states(expected_after)
         injector = CrashInjector(scope=[replay.root, databricks.root], crash_at=point.index)
         with injector, pytest.raises(InjectedCrash):
             _move(replay, moved.old, moved.new)
         assert injector.crashed is not None
         assert (injector.crashed.kind, injector.crashed.operation) == (point.kind, point.operation)
-        label = f"crash before {point.index} {point.operation}"
+        label = f"{start}: crash before {point.index} {point.operation}"
 
         states = moved.store_states(expected_after)
         moved.assert_nothing_deleted()
         journals = moved.journals()
-        uniform = len(set(states.values())) == 1
-        if not uniform:
+        all_new = set(states.values()) == {"new"}
+        if states != initial and not all_new:
             assert journals and journals[0]["state"] in {"planned", "portfolio_pending", "portfolio_written"}, label
 
         if recovery == "resume":
-            # The next bootstrap is either a consistent route or an exact diagnosis.
-            try:
-                booted = _boot(replay)
-            except Exception as exc:
-                code, context = _recovery(exc)
-                assert (code, context["classification"]) == ("route_target_conflict", "migration_pending"), label
+            # The next bootstrap is a consistent route or an exact diagnosis, never a bare error.
+            outcome, context = _boot_outcome(replay)
+            if outcome == "booted":
+                assert states == initial or all_new, label
+                target = moved.new if all_new else moved.old
+                assert context["target_root"] == str(target), label
+                outcome = "booted_new" if all_new else "booted_old"
+            elif journals and states != initial:
+                assert outcome == "migration_pending", label
                 assert context["migration"]["migration_id"] == journals[0]["migration_id"], label
-                diagnoses.add("migration_pending")
             else:
-                assert uniform, label
-                target = moved.old if states["portfolio"] == "old" else moved.new
-                assert booted["startup_packet"]["target_root"] == str(target), label
-                diagnoses.add(f"booted_{states['portfolio']}")
+                assert outcome in {"migration_pending", initial_outcome}, label
+            diagnoses.add(outcome)
             if journals:
-                outcome = _move(replay, moved.old, moved.new, resume=True)
+                result = _move(replay, moved.old, moved.new, resume=True)
             else:
-                outcome = _move(replay, moved.old, moved.new)
-            assert outcome["status"] == "completed", label
-            final = moved.new
+                result = _move(replay, moved.old, moved.new)
+            assert result["status"] == "completed", label
+            final = "new"
         else:
+            receipt_exists = bool(list((moved.artifact / "migrations").glob("tm_*.receipt.json"))) \
+                if (moved.artifact / "migrations").is_dir() else False
             if not journals:
-                final = moved.old
-            elif journals[0]["state"] in {"receipt_written", "completed"}:
+                final = "initial"
+            elif receipt_exists:
                 with pytest.raises(Exception) as refused:
                     _move(replay, moved.old, moved.new, rollback=True)
                 assert _recovery(refused.value)[1]["classification"] == "state_mismatch", label
                 assert _move(replay, moved.old, moved.new, resume=True)["status"] == "completed", label
-                final = moved.new
+                final = "new"
             else:
                 assert _move(replay, moved.old, moved.new, rollback=True)["status"] == "rolled_back", label
-                assert moved.store_states(expected_after) == {
-                    "portfolio": "old", "descriptor": "old", "continuity": "old",
-                }, label
-                final = moved.old
+                assert moved.store_states(expected_after) == initial, label
+                final = "initial"
         moved.assert_nothing_deleted()
-        assert _boot(replay)["startup_packet"]["target_root"] == str(final), label
+        outcome, context = _boot_outcome(replay)
+        if final == "new":
+            assert (outcome, context.get("target_root")) == ("booted", str(moved.new)), label
+        elif start == "aligned":
+            assert (outcome, context.get("target_root")) == ("booted", str(moved.old)), label
+        else:
+            assert outcome == "ambiguous", label
     if recovery == "resume":
-        assert diagnoses == {"booted_old", "booted_new", "migration_pending"}
+        expected = {"booted_old", "booted_new", "migration_pending"} if start == "aligned" \
+            else {"ambiguous", "booted_new", "migration_pending"}
+        assert diagnoses == expected
