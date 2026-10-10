@@ -5,6 +5,7 @@ Functions that orchestrate subprocesses or session-level actions.
 """
 import os as _os
 import re as _re
+import threading
 
 from odibi_anchor._dispatcher._request_adapter import redact_message
 from odibi_anchor.pytest_runner import run_pytest
@@ -74,6 +75,25 @@ def _per_test_timeout(value):
 
 
 def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
+    """Run pytest synchronously, preserving the existing result and timeout contract."""
+    steps = test_run_steps(root, failure_pattern_fn, *args, **kwargs)
+    pytest_args, options = next(steps)
+    try:
+        return finish_test_steps(steps, run_pytest(pytest_args, **options))
+    finally:
+        steps.close()
+
+
+def finish_test_steps(steps, result):
+    """Resume the single subprocess boundary in the observing caller's thread."""
+    try:
+        steps.send(result)
+    except StopIteration as done:
+        return done.value
+    raise RuntimeError("test continuation yielded more than one subprocess")
+
+
+def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
     """Run pytest and return structured results.
 
     Args:
@@ -132,7 +152,7 @@ def _test_run(root, failure_pattern_fn=None, *args, **kwargs):
     if mark:
         pytest_args.extend(["-m", mark])
 
-    summary_data, proc = run_pytest(pytest_args, cwd=root, timeout=600, capture_output=True)
+    summary_data, proc = yield pytest_args, {"cwd": root, "timeout": 600, "capture_output": True}
     cmd = proc.args
     if summary_data["timed_out"]:
         samples = {
@@ -248,7 +268,7 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
     widening to the full suite.
     """
     supported = {"target", "changed_files", "mark", "timeout", "verbose", "output_format", "workflow_criterion",
-                 "request_id"}
+                 "request_id", "wait_seconds", "poll"}
     unsupported = sorted(set(kwargs) - supported)
     if unsupported:
         raise ValueError(
@@ -296,14 +316,15 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
     )
 
 
-# Completed test results retained by (task window, request_id) in this process.
-# A client timeout does not stop the server-side run; an identical retry after it
-# returns the retained result instead of rerunning or losing it.
+# In-flight reservations and completed results share one request identity. Only
+# subprocess execution is asynchronous; continuations never run in worker threads.
 _RETAINED_TEST_RESULTS: dict[tuple[str, str], dict] = {}
 _MAX_RETAINED_TEST_RESULTS = 64
+_TEST_REQUEST_LOCK = threading.RLock()
 
 
-def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprint, execute):
+def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprint, execute,
+                      wait_seconds=None, poll=False, start=None):
     """Run ``execute`` once per request_id; return the retained result on exact retries.
 
     A retry replays only when the arguments and the byte fingerprint of the change scope
@@ -312,10 +333,42 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
     import copy
     import hashlib
     import json
+    import math
+    import uuid
     from datetime import UTC, datetime
 
     from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+    from odibi_anchor.pytest_runner import start_pytest
 
+    def operation(identifier=None, *, polling=False):
+        options = {key: value for key, value in arguments.items() if key != "args"}
+        if identifier is not None:
+            options["request_id"] = identifier
+        if wait_seconds is not None or polling:
+            options["wait_seconds"] = wait_seconds if wait_seconds is not None else 0
+        if polling:
+            options["poll"] = True
+        return dispatcher_operation(
+            "test", *arguments.get("args", []), kwargs=options,
+            reason="observe this request without starting another run" if polling else "rerun the test",
+            retry_safety="state_checked" if polling else "not_idempotent",
+        )
+
+    def invalid(message, code):
+        return attach_recovery(ValueError(message), error_code=code,
+                               context={"executed": False, "request_id": request_id},
+                               next_operations=[operation()])
+
+    if type(poll) is not bool:
+        raise invalid("poll must be a bool", "test_poll_invalid")
+    if wait_seconds is not None and (
+        isinstance(wait_seconds, bool) or not isinstance(wait_seconds, (int, float))
+        or not math.isfinite(wait_seconds) or not 0 <= wait_seconds <= 90
+    ):
+        wait_seconds = 0  # The recovery call must not repeat the rejected wait.
+        raise invalid("wait_seconds must be a finite number in [0, 90]", "test_wait_invalid")
+    if request_id is None and wait_seconds is not None and not poll:
+        request_id = "test-" + uuid.uuid4().hex
     if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
         raise ValueError("request_id must be a non-empty string of at most 128 characters")
     key = (str(task_window_id), request_id)
@@ -323,35 +376,90 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
         json.dumps(arguments, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
     fingerprint = scope_fingerprint()
-    retained = _RETAINED_TEST_RESULTS.get(key)
-    if retained is not None:
-        reason = None
-        if retained["request_sha256"] != request_sha256:
-            reason = "was used for different test arguments"
-        elif retained["scope_sha256"] != fingerprint:
-            reason = "has a retained result for different file bytes; files changed after it ran"
-        if reason is not None:
-            raise attach_recovery(
-                ValueError(f"test request_id {request_id!r} {reason}; use a new request_id"),
-                error_code="test_request_id_conflict",
-                context={"executed": False, "request_id": request_id,
-                         "completed_at": retained["completed_at"]},
-                next_operations=[dispatcher_operation(
-                    "test", kwargs={**arguments, "request_id": request_id + "-2"},
-                    reason="run the test again under a fresh request_id", retry_safety="not_idempotent",
-                )],
-            )
+    def response(retained, *, replayed):
+        if "error" in retained:
+            raise retained["error"]
+        if "result" not in retained:
+            next_operation = operation(request_id, polling=True)
+            return {"kind": "test_running", "subject": "pytest", "status": "running",
+                    "summary": "Pytest is running; poll this request for its result.",
+                    "metrics": {}, "findings": [], "risks": [], "samples": {},
+                    "request": {"request_id": request_id, "replayed": False},
+                    "next_operation": next_operation,
+                    "suggested_next_actions": [next_operation["copy_ready"]]}
         result = copy.deepcopy(retained["result"])
         if isinstance(result, dict):
-            result["request"] = {"request_id": request_id, "replayed": True,
+            result["request"] = {"request_id": request_id, "replayed": replayed,
                                  "completed_at": retained["completed_at"]}
         return result
-    result = execute()
-    completed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    if len(_RETAINED_TEST_RESULTS) >= _MAX_RETAINED_TEST_RESULTS:
-        _RETAINED_TEST_RESULTS.pop(next(iter(_RETAINED_TEST_RESULTS)))
-    _RETAINED_TEST_RESULTS[key] = {"request_sha256": request_sha256, "scope_sha256": fingerprint,
-                                   "completed_at": completed_at, "result": copy.deepcopy(result)}
-    if isinstance(result, dict):
-        result["request"] = {"request_id": request_id, "replayed": False, "completed_at": completed_at}
-    return result
+
+    def complete(retained, result):
+        retained["result"] = copy.deepcopy(result)
+        retained["completed_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+        return response(retained, replayed=False)
+
+    synchronous_owner = False
+    with _TEST_REQUEST_LOCK:
+        retained = _RETAINED_TEST_RESULTS.get(key)
+        if retained is not None:
+            reason = None
+            if retained["request_sha256"] != request_sha256:
+                reason = "was used for different test arguments"
+            elif retained["scope_sha256"] != fingerprint:
+                reason = "has a retained result for different file bytes; files changed after it ran"
+            if reason is not None:
+                raise invalid(f"test request_id {request_id!r} {reason}; use a new request_id",
+                              "test_request_id_conflict")
+            if "result" in retained or "error" in retained:
+                return response(retained, replayed=True)
+        else:
+            if poll:
+                raise invalid(f"test request_id {request_id!r}: no such running request; rerun",
+                              "test_running_request_missing")
+            if len(_RETAINED_TEST_RESULTS) >= _MAX_RETAINED_TEST_RESULTS:
+                evict = next((k for k, v in _RETAINED_TEST_RESULTS.items()
+                              if "result" in v or "error" in v), None)
+                if evict is None:
+                    raise invalid("too many running test requests; poll an existing request first",
+                                  "test_requests_full")
+                del _RETAINED_TEST_RESULTS[evict]
+            retained = {"request_sha256": request_sha256, "scope_sha256": fingerprint}
+            _RETAINED_TEST_RESULTS[key] = retained  # reserve before any child can launch
+            if wait_seconds is not None:
+                try:
+                    steps = start()
+                    pytest_args, options = next(steps)
+                    retained.update(steps=steps, process=start_pytest(pytest_args, **options))
+                except BaseException:
+                    _RETAINED_TEST_RESULTS.pop(key, None)
+                    raise
+            else:
+                retained["synchronous"] = True
+                # Execute outside the lock: a concurrent duplicate observes the reservation.
+                synchronous_owner = True
+        if "process" in retained:
+            try:
+                raw = retained["process"].wait(wait_seconds if wait_seconds is not None else 0)
+                if raw is None:
+                    return response(retained, replayed=False)
+                if scope_fingerprint() != fingerprint:
+                    raise invalid("file bytes changed while pytest ran; use a new request_id",
+                                  "test_request_id_conflict")
+                return complete(retained, finish_test_steps(retained["steps"], raw))
+            except Exception as exc:
+                retained["error"] = exc
+                raise
+            finally:
+                if "result" in retained or "error" in retained:
+                    retained.pop("process").close()
+                    retained.pop("steps").close()
+        if not synchronous_owner:
+            return response(retained, replayed=False)
+    try:
+        result = execute()
+    except BaseException:
+        with _TEST_REQUEST_LOCK:
+            _RETAINED_TEST_RESULTS.pop(key, None)
+        raise
+    with _TEST_REQUEST_LOCK:
+        return complete(retained, result)

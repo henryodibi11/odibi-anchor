@@ -834,6 +834,18 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'refuses the current task and refuses any task that can still be rebound.',
     ],
     "test": [
+        '`wait_seconds` opts into start-then-check: a finite number from 0 through 90. '
+        'Pytest runs in a subprocess; if not finished within the wait, status and envelope.outcome '
+        'are `running` (not passing test evidence). Copy `next_operation.copy_ready` to poll: '
+        'it retains the same arguments and request_id and adds `poll=True`. The final poll '
+        'records workflow measurement and session evidence in the caller, never a background thread. '
+        'The wait can change between polls; test arguments and file bytes cannot. Without '
+        'wait_seconds, test remains synchronous. A request_id is generated if omitted.',
+        '`poll=True` only observes an existing request. After dispatcher restart or result eviction, '
+        'it refuses with "no such running request; rerun" and an explicit rerun call; it never '
+        'silently starts another process. In-flight duplicates never start another run. '
+        'Keep the dispatcher alive and poll to completion; process-local results are not durable. '
+        'The existing per-test and 600-second suite limits still apply.',
         '`request_id` (string, at most 128 characters) retains the completed result in this '
         'process. If a client times out, the server-side run continues; retry the identical call '
         'with the same request_id to receive the stored result (`request.replayed=True`) without '
@@ -844,6 +856,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'missing optional modules.',
     ],
     "task": [
+        'Refusals retain their original first message and error type and add `context.problems`: '
+        'independent field/prerequisite failures with a problem and fix. `context.prerequisite_order` '
+        'names missing startup steps in order. Preparation supplies shared field/readiness rules; '
+        'missing intent, modes and authority are never fabricated in a corrected call.',
         '`scope`: one optional prose string describing the work boundary; it becomes the first '
         '`in_scope` entry. Use `in_scope=[...]` for lists and `repository_scope=[...]` for paths.',
         '`continuation=True` creates a fresh task window after the prior task in this process '
@@ -867,6 +883,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'not a prose string.',
     ],
     "learning": [
+        'Capture refusals collect independent payload and evidence-item defects in `context.problems` '
+        'before any write, preserving the first message, error type and existing recovery schema. '
+        'Fix all listed fields together; missing observations and evidence are never invented.',
         '`capture`: provide `observation_type` (`friction`, `blocker`, `near_miss`, '
         '`reusable_practice`, or `evidence_gap`), non-empty `summary` and `signal_key`; optional '
         '`impact` (`low`, `medium`, `high`, or `critical`, default `medium`), '

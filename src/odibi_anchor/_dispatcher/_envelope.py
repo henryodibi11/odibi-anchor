@@ -22,7 +22,7 @@ from typing import Any
 ENVELOPE_KEY = "envelope"
 ENVELOPE_SCHEMA = "odibi_anchor.result_envelope"
 ENVELOPE_VERSION = 1
-OUTCOMES = ("succeeded", "succeeded_with_warnings", "blocked", "failed")
+OUTCOMES = ("succeeded", "succeeded_with_warnings", "blocked", "failed", "running")
 RESPONSE_DETAILS = frozenset({"compact", "full"})
 MUTATING_EFFECTS = frozenset({
     "governance_write", "artifact_write", "source_write", "data_write", "external_mutation",
@@ -288,6 +288,8 @@ def _blocked_text(message: str) -> bool:
 def _result_outcome(action: str, result: Any, warnings: Sequence[Any]) -> str:
     from odibi_anchor._dispatcher._effects import dispatch_succeeded
 
+    if action == "test" and isinstance(result, Mapping) and result.get("kind") == "test_running":
+        return "running"
     if not dispatch_succeeded(action, result):
         if isinstance(result, Mapping) and (
             str(result.get("status", "")).lower() == "blocked" or result.get("blocked") is True
@@ -459,7 +461,8 @@ def build_envelope(
         "outcome": outcome,
         "state": _state(action, result, session_state, protocol, obligations),
         "effects": effects_block,
-        "retry_safety": retry_safety_for(action, effects),
+        "retry_safety": "state_checked" if (action == "test" and kwargs.get("request_id"))
+        or outcome == "running" else retry_safety_for(action, effects),
         "warnings": warnings[:_MAX_WARNINGS],
         "obligations": obligations[:_MAX_OBLIGATIONS],
         "next_operation": next_operation,
