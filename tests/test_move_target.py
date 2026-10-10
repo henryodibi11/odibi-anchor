@@ -565,3 +565,38 @@ def test_byte_identical_new_epoch_after_archive_still_counts_as_new(deployment, 
 
     assert "continuity" in _code(refused.value)[1]  # the new-epoch refusal, not a generic mismatch
     assert deployment.move(source=old, destination=new, resume=True)["status"] == "completed"
+
+
+@pytest.mark.parametrize("recovery", [None, "resume", "rollback"])
+def test_defaulted_descriptor_moves_resumes_and_rolls_back_exactly(deployment, targets, recovery):
+    old, new = targets
+    descriptor = deployment.artifact() / "PROJECT.md"
+    # A 0.3.23-style descriptor: no id or project_type lines (both defaulted since v0.3.25).
+    lines = descriptor.read_text(encoding="utf-8").split("\n")
+    stripped = "\n".join(line for line in lines if not line.startswith(("id:", "project_type:")))
+    descriptor.write_text(stripped, encoding="utf-8")
+    reader = _module("odibi_anchor._dispatcher._descriptor")
+    assert set(reader.read_descriptor(deployment.artifact()).defaulted_fields) == {"id", "project_type"}
+    original = descriptor.read_bytes()
+
+    if recovery is None:
+        result = deployment.move(source=old, destination=new)
+    else:
+        injector = CrashInjector(scope=[deployment.root], crash_if=_before_portfolio_write(deployment))
+        with injector, pytest.raises(InjectedCrash):
+            deployment.move(source=old, destination=new)
+        result = deployment.move(source=old, destination=new, **{recovery: True})
+
+    if recovery == "rollback":
+        assert result["status"] == "rolled_back"
+        assert descriptor.read_bytes() == original
+        assert deployment.prepare()["target_root"] == str(old)
+        return
+    assert result["status"] == "completed"
+    moved = descriptor.read_text(encoding="utf-8").split("\n")
+    changed = [(before, after) for before, after in zip(stripped.split("\n"), moved, strict=True) if before != after]
+    assert changed == [(f"target_root: {old}", f"target_root: {new}")]
+    integrity = reader.read_descriptor(deployment.artifact())
+    assert set(integrity.defaulted_fields) == {"id", "project_type"}
+    assert integrity.fields["project_type"] == "referenced"
+    assert deployment.prepare()["target_root"] == str(new)
