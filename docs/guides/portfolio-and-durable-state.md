@@ -86,6 +86,117 @@ SHA-256 matches a known released Anchor artifact. Recognized files are upgraded,
 Anchor operating instructions are preserved as compatible user-owned guidance, and any other
 differing byte still stops setup before publication.
 
+### Recording the portfolio for a host
+
+The managed launcher selects its portfolio in this order:
+
+1. the `ANCHOR_PORTFOLIO_CONFIG` launcher init global;
+2. the `ANCHOR_PORTFOLIO_CONFIG` environment variable;
+3. the host binding sidecar `<instruction-root>/.odibi-anchor-host-binding.json`;
+4. the instruction-root default `<instruction-root>/.odibi-anchor/anchor.toml`.
+
+Record the exact portfolio once per instruction root, especially when it does not live at the
+default path:
+
+```bash
+anchor setup-host databricks --target /Workspace/Users/name \
+  --portfolio /Workspace/Users/name/.odibi-anchor/anchor.toml [--host databricks-work]
+```
+
+The Python equivalent is `setup_host(target, adapter=..., portfolio_config=..., host_id=...)`.
+Setup validates that the portfolio declares the host, with this adapter and this instruction root,
+before it publishes anything. It writes the sidecar only after guidance is verified, through the
+Workspace API for `/Workspace` targets. Without `--host`, exactly one matching host must exist. The
+sidecar is canonical JSON naming the absolute portfolio path, the host and the instruction root.
+It is not listed in the guidance manifest, so older Anchor versions neither manage nor reject it.
+Rerunning with a different portfolio replaces the binding and reports the previous one.
+
+The launcher validates the sidecar strictly: canonical JSON, an absolute portfolio path, its own
+instruction root, and a portfolio host that declares that root. It then passes the recorded host
+to bootstrap. Failures are explicit and list every searched path:
+
+- `managed_host_binding_invalid`: the sidecar is malformed, or names another root or host.
+- `managed_portfolio_ambiguous`: the sidecar and an existing instruction-root default name different
+  portfolios. The owner chooses one, then reruns `setup-host --portfolio` or passes
+  `ANCHOR_PORTFOLIO_CONFIG`.
+- `managed_portfolio_not_found`: the selected portfolio is missing. A sidecar-selected portfolio
+  never falls back to an `ANCHOR_HOME` installed runtime.
+
+A launcher whose instruction root is itself named `.assistant` (a nested
+`.assistant/.assistant` install) is reported as a nested install. The error names the probable
+intended launcher and that launcher's default portfolio. The launcher never switches to either one
+automatically. Hosts without a sidecar keep the v0.3.24 search exactly. Never copy, move or
+hand-edit a portfolio or the sidecar to work around discovery.
+
+Host setup for the `databricks` adapter also installs the source-checkout launcher
+`agent_bootstrap.py` at the instruction root, next to `.assistant/agent_bootstrap.py`. The
+installed file set is unchanged in this release. The root launcher works only beside a `src/`
+checkout. Anywhere else it fails immediately with `source_launcher_outside_checkout` and a
+copy-ready call to `.assistant/agent_bootstrap.py`, which is the only launcher for managed hosts.
+
+### Reconciling host guidance drift
+
+When managed files differ from the manifest, plain `setup-host` (and therefore bootstrap) stops
+before writing anything. It raises `host_guidance_drift`, which lists every drifted file with its
+classification, and its next operation is the read-only reconcile plan:
+
+```bash
+anchor setup-host databricks --target /Workspace/Users/name --reconcile
+```
+
+Reconcile classifies every managed path:
+
+| Classification | Meaning | Applied action |
+|---|---|---|
+| `current` | equals the active package | keep |
+| `released_version` | equals the manifest hash or bytes shipped by a released Anchor version | replace, or delete when no longer packaged |
+| `unmanaged_edit` | matches neither | replace or delete only with explicit approval |
+| `missing` | absent | install, or drop from the manifest |
+
+`--reconcile` alone is a dry run that returns the full plan and writes nothing. To apply it, add
+`--apply`. Unmanaged edits also need `--approve-replace-edited`. The Python equivalent is
+`setup_host(target, adapter=..., reconcile=True, dry_run=False, approve_replace_edited=True)`.
+Applying the plan:
+
+1. backs up every replaced or deleted file, the previous manifest and a `BACKUP.json` receipt to
+   `<instruction-root>/.odibi-anchor-host-backups/<utc>/`, then reads each backup back;
+2. reinstalls from the active package, with the same rollback as plain setup;
+3. verifies every hash and the manifest.
+
+Bootstrap never reconciles. It stays fail-closed, and it never replaces an edited file. The
+released-version table is generated from release tags with
+`python scripts/generate_released_guidance_hashes.py --write`. Regenerate it after each release
+tag. Bytes recorded in a host's manifest are recognized even when they are missing from the table.
+
+### Planning a fresh compute launch
+
+Before launching a project on a new compute identity, inspect the launch without changing anything:
+
+```bash
+anchor doctor --fresh-compute --config <absolute portfolio> --host <host-id> --project <project-id>
+```
+
+The Python equivalent is `doctor(fresh_compute=True, config_path=..., host_id=..., project_id=...)`.
+The plan reports each step with a `status` (`ok`, `action_required`, `blocked` or `not_evaluated`)
+and its exact `next_operation`:
+
+1. `portfolio_discovery`: what the launcher at the host's instruction root would select, including
+   sidecar validation, ambiguity and nested installs.
+2. `host_guidance`: the reconcile dry run, and whether bootstrap would accept the host as it is.
+3. `durable_lineage`: `local_present`, `not_configured`, `no_lineage`, `restored` (bootstrap restores
+   the named latest snapshot), `durable_root_unavailable`, `durable_lineage_missing` or
+   `restore_incomplete`.
+4. `route_comparison`: the managed descriptor that launch would use, read from local state or, in
+   memory, from the latest snapshot. It is compared with the portfolio target by the route
+   classifier (`match`, `unregistered`, `descriptor_damaged`, or a `route_target_conflict`
+   classified as `probable_move` or `ambiguous`).
+5. `launch_inputs`: the exact launcher and init globals.
+
+The plan's `next_operation` is the first blocked or pending step's operation, otherwise the
+launch. Doctor never writes to the portfolio, host guidance, local runtime state or durable
+storage. On Databricks, remote snapshot reads stage downloads in self-deleting temporary
+directories. It never suggests copying local state from another compute.
+
 Prepare one exact runtime after validation:
 
 ```bash

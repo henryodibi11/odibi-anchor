@@ -79,10 +79,30 @@ def _parser() -> argparse.ArgumentParser:
     batch.add_argument("file", nargs="?", default="-", help="UTF-8 input file, or - for stdin")
     commands.add_parser("shell", help="boot once; read one request JSON object per input line")
     commands.add_parser("help", help="discover core actions")
-    commands.add_parser("doctor", help="inspect startup and routing without mutation")
+    doctor = commands.add_parser("doctor", help="inspect startup and routing without mutation")
+    doctor.add_argument(
+        "--fresh-compute", action="store_true",
+        help="plan one project's launch on a fresh compute identity, read-only",
+    )
+    doctor.add_argument("--config", help="absolute portfolio path (with --fresh-compute)")
+    doctor.add_argument("--host", help="portfolio host ID (with --fresh-compute)")
+    doctor.add_argument("--project", help="managed project ID (with --fresh-compute)")
     setup = commands.add_parser("setup-host", help="idempotently install managed host guidance")
     setup.add_argument("adapter", choices=("amp", "chatgpt", "claude", "databricks"))
     setup.add_argument("--target", required=True, help="existing explicit host instruction root")
+    setup.add_argument(
+        "--portfolio", help="absolute portfolio path to record in the host binding sidecar"
+    )
+    setup.add_argument("--host", help="portfolio host ID for --portfolio (default: unique match)")
+    setup.add_argument(
+        "--reconcile", action="store_true",
+        help="classify drift and plan backup plus reinstall (dry run unless --apply)",
+    )
+    setup.add_argument("--apply", action="store_true", help="apply the --reconcile plan")
+    setup.add_argument(
+        "--approve-replace-edited", action="store_true",
+        help="with --reconcile --apply, back up and replace unmanaged edits",
+    )
     guidance = commands.add_parser("install-guidance", help="copy packaged agent guidance into a repository")
     guidance.add_argument("target", help="existing repository root; existing guidance is never overwritten")
     verify = commands.add_parser("verify-delivery", help="verify local delivery evidence under declared policy")
@@ -363,17 +383,50 @@ def main(argv: list[str] | None = None) -> int:
             return _emit({"ok": False, "error": {"type": type(exc).__name__,
                                                    "message": "delivery verification failed"}}, EXIT_ACTION)
     if ns.command == "doctor":
+        fresh_inputs = (ns.config, ns.host, ns.project)
+        if (ns.fresh_compute and None in fresh_inputs) or (
+            not ns.fresh_compute and any(value is not None for value in fresh_inputs)
+        ):
+            return _emit({"ok": False, "error": {
+                "type": "input",
+                "message": "--fresh-compute requires --config, --host and --project, "
+                           "and those options require --fresh-compute",
+            }}, EXIT_INPUT)
         try:
             from odibi_anchor.startup import doctor
 
+            if ns.fresh_compute:
+                return _emit({"ok": True, "result": doctor(
+                    fresh_compute=True, config_path=ns.config, host_id=ns.host,
+                    project_id=ns.project,
+                )})
             return _emit({"ok": True, "result": doctor()})
         except Exception as exc:
             return _emit({"ok": False, "error": error_information(exc)}, EXIT_BOOTSTRAP)
     if ns.command == "setup-host":
+        if (ns.apply or ns.approve_replace_edited) and not ns.reconcile:
+            return _emit({"ok": False, "error": {
+                "type": "input",
+                "message": "--apply and --approve-replace-edited require --reconcile",
+            }}, EXIT_INPUT)
+        if ns.host is not None and ns.portfolio is None:
+            return _emit({"ok": False, "error": {
+                "type": "input", "message": "--host requires --portfolio",
+            }}, EXIT_INPUT)
         try:
             from odibi_anchor.host_setup import setup_host
 
-            return _emit({"ok": True, "result": setup_host(ns.target, adapter=ns.adapter)})
+            options: dict[str, Any] = {}
+            if ns.portfolio is not None:
+                options.update(portfolio_config=ns.portfolio, host_id=ns.host)
+            if ns.reconcile:
+                options.update(
+                    reconcile=True, dry_run=not ns.apply,
+                    approve_replace_edited=ns.approve_replace_edited,
+                )
+            return _emit({"ok": True, "result": setup_host(
+                ns.target, adapter=ns.adapter, **options
+            )})
         except (OSError, RuntimeError, ValueError) as exc:
             return _emit({"ok": False, "error": error_information(exc)}, EXIT_ACTION)
     if ns.command == "portfolio":
