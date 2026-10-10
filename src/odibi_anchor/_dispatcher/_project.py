@@ -719,6 +719,7 @@ def _list_projects(anchor_home: str | Path) -> list[dict[str, Any]]:
             "path": str(project_root.resolve()),
             "integrity_status": integrity.status,
             "descriptor_sha256": integrity.sha256,
+            "defaulted_fields": list(integrity.defaulted_fields),
         })
     return projects
 

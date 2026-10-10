@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.25] - 2026-10-10
+
+Hotfix for a 0.3.24 compatibility regression found by live Databricks validation.
+
+### Fixed
+
+- **Descriptor compatibility.** 0.3.24 required `id` and `project_type` in managed `PROJECT.md`
+  frontmatter, so descriptors that 0.3.23 booted (for example hand-restored ones without an
+  `id:` line) failed with `managed_descriptor_damaged`. Because the Databricks launcher requires
+  the latest release, such projects could not start at all. `target_root` stays mandatory, so the
+  #29 artifact-root fallback stays closed. A missing `id` defaults to the managed directory name,
+  as in 0.3.23; a present but different `id` still fails closed. A missing `project_type` is
+  derived: `managed` when the target is the artifact root, otherwise `referenced`. Project
+  listings report `defaulted_fields`. `set_target` on a never-launched project inserts absent
+  route lines.
+
 ## [0.3.24] - 2026-10-10
 
 Hardening release: contain and diagnose the incidents reported in #24, #28, #29, #30 and #31.
@@ -14,8 +30,8 @@ The safe target-migration and descriptor-repair operations ship in 0.3.25.
   entries that invocation created, while its identity still holds. A directory created by a
   competing writer is never deleted; that case raises `restore_destination_conflict`.
 - **Restore qualification.** Startup initializes empty local state only when restore classifies
-  first use (`classification: no_lineage`: the durable root is reachable and has no authority
-  marker). An unreachable durable root raises
+  first use (`classification: no_lineage`: the durable root is reachable, with no snapshot
+  manifests and no authority marker). An unreachable durable root raises
   `durable_root_unavailable`. A lineage whose authority marker exists but whose snapshots are gone
   raises `durable_lineage_missing`. A plain `FileNotFoundError` during restore is no longer read
   as "no snapshot". The startup packet reports `restore.classification`

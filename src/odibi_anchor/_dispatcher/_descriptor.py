@@ -9,7 +9,10 @@ read-only and never repairs or rewrites a damaged descriptor. Rules:
   ``key: value``; duplicate keys are malformed.
 - Indented lines and unindented ``- item`` list lines are tolerated as nested content
   of a non-route field only.
-- ``id``, ``project_type`` and ``target_root`` must be present and non-empty.
+- ``target_root`` must be present and non-empty. ``id`` and ``project_type`` are optional
+  as in 0.3.23: a missing ``id`` defaults to the directory name and a missing
+  ``project_type`` is derived from target versus artifact root; both are reported in
+  ``defaulted_fields``. Present values must be valid.
   ``project_type`` must be ``managed`` or ``referenced``; ``id`` must equal the
   managed directory name. Route values may use one matching pair of quotes.
 - Lines split on ``\n`` only (a trailing ``\r`` is ignored); a UTF-8 BOM is preserved.
@@ -50,6 +53,7 @@ class DescriptorIntegrity:
     fields: dict[str, str] = field(default_factory=dict)
     missing_fields: tuple[str, ...] = ()
     detail: str | None = None
+    defaulted_fields: tuple[str, ...] = ()
     text: str = field(default="", repr=False)
 
     @property
@@ -103,12 +107,31 @@ def parse_descriptor_text(
         previous_key = key
     if not terminated:
         return result("malformed_frontmatter", "frontmatter is not terminated by a '---' line")
-    missing = tuple(name for name in ROUTE_FIELDS if not values.get(name))
+    # target_root is mandatory: its absence caused the #29 artifact-root fallback. id and
+    # project_type never change routing; 0.3.23 defaulted them, so descriptors without them
+    # keep booting with explicit, reported defaults.
+    missing = tuple(
+        name for name in ROUTE_FIELDS
+        if (name == "target_root" or name in values) and not values.get(name)
+    )
     if missing:
         return result(
             "missing_fields", "required route fields are missing or empty",
             fields=values, missing_fields=missing,
         )
+    defaulted: list[str] = []
+    artifact_root = Path(path).parent
+    if "id" not in values:
+        values["id"] = expected_id if expected_id is not None else artifact_root.name
+        defaulted.append("id")
+    if "project_type" not in values:
+        configured = Path(values["target_root"])
+        target = configured if configured.is_absolute() else artifact_root / configured
+        same = os.path.normcase(str(target.resolve(strict=False))) == os.path.normcase(
+            str(artifact_root.resolve(strict=False))
+        )
+        values["project_type"] = "managed" if same else "referenced"
+        defaulted.append("project_type")
     if values["project_type"] not in _PROJECT_TYPES:
         return result(
             "malformed_frontmatter",
@@ -121,7 +144,7 @@ def parse_descriptor_text(
             f"id {values['id']!r} does not match the managed project directory {expected_id!r}",
             fields=values,
         )
-    return result("intact", fields=values)
+    return result("intact", fields=values, defaulted_fields=tuple(defaulted))
 
 
 def read_descriptor(project_root: str | Path) -> DescriptorIntegrity:
@@ -160,8 +183,16 @@ def render_route_update(integrity: DescriptorIntegrity, updates: dict[str, str])
             ending = "\r" if line.endswith("\r") else ""
             lines[index] = f"{key}: {updates[key]}{ending}"
             replaced.add(key)
-    if replaced != set(updates):
+    absent = [key for key in updates if key not in replaced]
+    if any(key not in integrity.defaulted_fields for key in absent):
         raise ValueError("descriptor route fields changed while rendering the update")
+    if absent:
+        # A defaulted field has no line yet: insert it before the closing delimiter.
+        closing = next(
+            index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"
+        )
+        ending = "\r" if lines[closing].endswith("\r") else ""
+        lines[closing:closing] = [f"{key}: {updates[key]}{ending}" for key in absent]
     return "\n".join(lines)
 
 

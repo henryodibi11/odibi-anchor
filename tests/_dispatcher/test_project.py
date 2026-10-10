@@ -715,6 +715,58 @@ def test_descriptor_yaml_list_under_non_route_field_stays_bootable(tmp_path: Pat
     assert caught.value.context["integrity_status"] == "malformed_frontmatter"  # type: ignore[attr-defined]
 
 
+def test_descriptor_without_id_or_project_type_boots_like_0_3_23(tmp_path: Path) -> None:
+    """Hand-restored descriptors may omit id and project_type; only target_root is route-critical."""
+    target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    original = descriptor.read_text(encoding="utf-8")
+    descriptor.write_text(original.replace("id: alpha\n", ""), encoding="utf-8")
+
+    binding = resolve_route_binding(
+        tmp_path, project="alpha", target_hint=target, runtime_instance_id="runtime-no-id",
+    )
+    assert binding is not None and binding.target_root == str(target)
+    listed = project_action(tmp_path, "list", output_format="dict")["projects"][0]
+    assert (listed["id"], listed["integrity_status"], listed["defaulted_fields"]) == ("alpha", "intact", ["id"])
+
+    descriptor.write_text(_drop_line(original, "id:").replace("project_type: referenced\n", ""), encoding="utf-8")
+    listed = project_action(tmp_path, "list", output_format="dict")["projects"][0]
+    assert (listed["project_type"], listed["defaulted_fields"]) == ("referenced", ["id", "project_type"])
+    assert resolve_active_project(tmp_path, "alpha")["target_root"] == str(target)  # type: ignore[index]
+
+    # A missing project_type is derived as managed when the target is the artifact root.
+    descriptor.write_text(
+        _drop_line(original, "project_type:").replace(f"target_root: {target}", f"target_root: {artifact}"),
+        encoding="utf-8",
+    )
+    assert resolve_active_project(tmp_path, "alpha")["project_type"] == "managed"  # type: ignore[index]
+
+    # A present but different id is still evidence of a foreign descriptor.
+    descriptor.write_text(original.replace("id: alpha\n", "id: beta\n"), encoding="utf-8")
+    with pytest.raises(ValueError, match="managed_descriptor_damaged") as caught:
+        resolve_active_project(tmp_path, "alpha")
+    assert caught.value.context["integrity_status"] == "malformed_frontmatter"  # type: ignore[attr-defined]
+
+
+def test_set_target_inserts_defaulted_route_lines(tmp_path: Path) -> None:
+    _target, artifact = _referenced(tmp_path)
+    descriptor = artifact / "PROJECT.md"
+    descriptor.write_text(
+        _drop_line(descriptor.read_text(encoding="utf-8"), "project_type:"), encoding="utf-8",
+    )
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+
+    result = project_action(tmp_path, "set_target", "alpha", target=replacement, output_format="dict")
+
+    assert result["target_root"] == str(replacement.resolve())
+    text = descriptor.read_text(encoding="utf-8")
+    frontmatter = text.split("---\n", 2)[1]
+    assert "project_type: referenced\n" in frontmatter
+    assert f"target_root: {replacement.resolve()}\n" in frontmatter
+    assert resolve_active_project(tmp_path, "alpha")["target_root"] == str(replacement.resolve())  # type: ignore[index]
+
+
 def _drop_line(text: str, prefix: str) -> str:
     return "".join(line for line in text.splitlines(keepends=True) if not line.startswith(prefix))
 
