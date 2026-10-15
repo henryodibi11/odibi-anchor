@@ -41,12 +41,15 @@ jobs:
           python -m pip install ".[dev]"
           python -m pip install ".[mcp]"
           python -m pip install --group quality
+      # The full suite takes 850-1,190s on hosted runners, too close to the 1,200s
+      # default per-check timeout; a slow runner then reports the tests unavailable.
       - name: Run maintained full verification
         run: >-
           python scripts/full_verification.py
           --mode advisory
           --base-ref "$QUALITY_BASE_REF"
           --pytest-workers 2
+          --timeout 2400
           --json-out quality-report.json
       - name: Collect non-blocking ratchet telemetry
         if: always()

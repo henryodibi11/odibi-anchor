@@ -133,6 +133,7 @@ def test_quality_workflow_is_read_only_and_uses_maintained_entry_points() -> Non
     assert 'python-version: ["3.11", "3.12"]' in workflow
     assert "python scripts/full_verification.py" in workflow
     assert "--pytest-workers 2" in workflow
+    assert "--timeout 2400" in workflow
     assert "python scripts/quality_ratchet.py check" in workflow
     assert 'python -m pip install ".[dev]"' in workflow
     assert 'python -m pip install ".[mcp]"' in workflow
