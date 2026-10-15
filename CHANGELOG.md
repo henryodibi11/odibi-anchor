@@ -2,6 +2,20 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.32] - 2026-10-15
+
+Hotfix: MCP clients that send structured arguments can call `anchor_execute`.
+
+### Fixed
+
+- **`anchor_execute` accepts `args` as a JSON object.** The tool schema allowed only a JSON
+  string or null. OpenCode with Nemotron always sends argument-bearing calls as a structured
+  object, even when told to send a string, so every such call was rejected by the schema and
+  the model retried in a loop. `args` now also accepts an object. The object is re-encoded and
+  decoded by the same strict decoder as a string, so equivalent string and object calls dispatch
+  identically. Strings and null behave as before. Malformed strings, arrays, scalars and
+  non-JSON values still fail with a clear error before dispatch.
+
 ## [0.3.31] - 2026-10-15
 
 Hotfix: the installed MCP server starts on Windows.
