@@ -1100,6 +1100,106 @@ class TestToolInvocation:
         }
 
 
+_STRUCTURED_ARGS = {
+    "arg0": "subject",
+    "kwargs": {"action": "modify_function"},
+    "goal": "Ünïcode goal",
+    "flags": {"strict": True, "dry_run": False, "missing": None},
+    "items": [0, 2.5, ["nested", {"deep": [True, None, "x"]}]],
+}
+
+
+class TestStructuredArgs:
+    """Some MCP clients (OpenCode with Nemotron) send ``args`` as an object, never a string."""
+
+    @staticmethod
+    def _capture(monkeypatch):
+        calls = []
+
+        def dispatcher(dispatcher_action, *args, **kwargs):
+            calls.append({"action": dispatcher_action, "args": args, "kwargs": kwargs})
+            return {"dispatched": dispatcher_action}
+
+        monkeypatch.setattr(mcp_server, "_CW", dispatcher)
+        monkeypatch.setattr(mcp_server, "_boot", lambda: dispatcher)
+        monkeypatch.setattr(mcp_server, "_close_memory_connections", lambda: None)
+        return calls
+
+    def test_schema_accepts_object_string_or_null(self):
+        tool = asyncio.run(mcp_server.mcp.get_tool("anchor_execute"))
+        assert tool is not None
+        assert tool.parameters["properties"]["args"]["anyOf"] == [
+            {"type": "string"},
+            {"additionalProperties": True, "type": "object"},
+            {"type": "null"},
+        ]
+
+    @pytest.mark.parametrize("options", [
+        {},
+        {"response_version": 2},
+        {"response_version": 2, "telemetry_version": 1},
+    ])
+    def test_object_and_equivalent_string_dispatch_identically(self, monkeypatch, options):
+        calls = self._capture(monkeypatch)
+        responses = []
+        for args in (json.dumps(_STRUCTURED_ARGS), _STRUCTURED_ARGS):
+            result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+                "action": "convention", "args": args, **options,
+            }))
+            response = json.loads(result.content[0].text)
+            response.pop("telemetry", None)
+            responses.append(response)
+
+        assert calls == [{
+            "action": "convention",
+            "args": ("subject",),
+            "kwargs": {
+                "action": "modify_function",
+                "goal": "Ünïcode goal",
+                "flags": {"strict": True, "dry_run": False, "missing": None},
+                "items": [0, 2.5, ["nested", {"deep": [True, None, "x"]}]],
+            },
+        }] * 2
+        assert responses[0] == responses[1]
+
+    def test_null_args_dispatch_without_arguments(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {"action": "status", "args": None}))
+        assert calls == [{"action": "status", "args": (), "kwargs": {}}]
+
+    @pytest.mark.parametrize("args", [[], [{"arg0": "x"}], 1, 2.5, True, False])
+    def test_fastmcp_rejects_array_and_scalar_args_before_dispatch(self, monkeypatch, args):
+        monkeypatch.setattr(mcp_server, "_boot", pytest.fail)
+        monkeypatch.setattr(mcp_server, "_close_memory_connections", pytest.fail)
+        with pytest.raises(Exception, match="args"):
+            asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+                "action": "status", "args": args,
+            }))
+
+    @pytest.mark.parametrize(("args", "message"), [
+        ('{"arg0":', "not valid UTF-8 JSON"),
+        ("not json", "not valid UTF-8 JSON"),
+        ("[1]", "must be a JSON object"),
+        ('"text"', "must be a JSON object"),
+    ])
+    def test_malformed_strings_fail_clearly_without_dispatch(self, monkeypatch, args, message):
+        calls = self._capture(monkeypatch)
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": "status", "args": args, "response_version": 2,
+        }))
+        response = json.loads(result.content[0].text)
+        assert response["ok"] is False
+        assert message in response["error"]["message"]
+        assert calls == []
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), object(), {1, 2}, b"bytes"])
+    def test_non_json_object_values_fail_clearly_without_dispatch(self, monkeypatch, value):
+        calls = self._capture(monkeypatch)
+        with pytest.raises(ValueError, match="args object must contain only JSON values"):
+            mcp_server.anchor_execute("status", {"arg0": "subject", "nested": {"value": value}})
+        assert calls == []
+
+
 class TestGatewayCompatibility:
     def test_test_runner_does_not_inherit_transport_stdin(self, monkeypatch, tmp_path):
         from odibi_anchor._dispatcher import _session_tools

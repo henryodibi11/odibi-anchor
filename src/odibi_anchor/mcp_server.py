@@ -37,6 +37,7 @@ from pydantic import BeforeValidator, StrictInt
 from odibi_anchor._dispatcher._dispatch_table import ACTION_GROUPS, DISPATCH_SIGS
 from odibi_anchor._dispatcher._envelope import compact_task_result, execute_with_envelope
 from odibi_anchor._dispatcher._request_adapter import (
+    RequestError,
     decode_json_document,
     error_information,
     normalize_request,
@@ -565,10 +566,24 @@ def _prepare_response(
 # Single universal gateway for every registered anchor() action — uses only 2 MCP tool slots
 
 
+def _decode_args(args: str | dict[str, Any]) -> dict[str, Any]:
+    """Decode ``args`` given as a JSON object string or as an already structured object.
+
+    Some MCP clients emit a structured object even when the schema asks for a string, so an
+    object is re-encoded and decoded through the same strict decoder as a string.
+    """
+    if isinstance(args, dict):
+        try:
+            args = json.dumps(args, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise RequestError("args object must contain only JSON values") from exc
+    return decode_json_document(args)
+
+
 @mcp.tool()
 def anchor_execute(
     action: str,
-    args: str | None = None,
+    args: str | dict[str, Any] | None = None,
     response_version: _ResponseVersion = 1,
     response_detail: _ResponseDetail = "compact",
     telemetry_version: _TelemetryVersion | None = None,
@@ -580,7 +595,7 @@ def anchor_execute(
 
     Args:
         action: Action name (e.g. 'profile_table', 'quality', 'task', 'gate', 'memory')
-        args: JSON string of keyword arguments.
+        args: Keyword arguments as a JSON object, or as a string containing one.
               Example: '{"arg0": "catalog.schema.table", "level": "quick"}'
               For actions with positional args, use special keys like "arg0", "arg1".
               Only the table parameters of data actions (e.g. quality ``df``) turn a
@@ -627,7 +642,7 @@ def anchor_execute(
                 anchor = _boot()
                 payload: dict[str, Any] = {"action": action}
                 if args is not None:
-                    parsed = decode_json_document(args)
+                    parsed = _decode_args(args)
                     explicit_kwargs = parsed.pop("kwargs", {})
                     if not isinstance(explicit_kwargs, dict):
                         raise ValueError("kwargs must be a JSON object")
@@ -665,7 +680,9 @@ def anchor_execute(
             _close_memory_connections()
 
 
-def _cw_execute_with_telemetry(action: str, args: str | None, response_detail: str) -> str:
+def _cw_execute_with_telemetry(
+    action: str, args: str | dict[str, Any] | None, response_detail: str,
+) -> str:
     """Execute the explicit v2 telemetry path without changing the legacy path."""
     started_ns = time.perf_counter_ns()
     telemetry = _McpTelemetry(started_ns)
@@ -683,7 +700,7 @@ def _cw_execute_with_telemetry(action: str, args: str | None, response_detail: s
                 with telemetry.stage("normalization_resolution"):
                     payload: dict[str, Any] = {"action": action}
                     if args is not None:
-                        parsed = decode_json_document(args)
+                        parsed = _decode_args(args)
                         explicit_kwargs = parsed.pop("kwargs", {})
                         if not isinstance(explicit_kwargs, dict):
                             raise ValueError("kwargs must be a JSON object")
