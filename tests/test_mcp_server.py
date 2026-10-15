@@ -1534,6 +1534,89 @@ class TestGatewayCompatibility:
         assert os.environ["ANCHOR_MEMORY_DB"] == str(tmp_path / "original-memory.db")
         assert os.environ["_CW_BOOT_CONFIG_ROOT"] == str(tmp_path / "original-config")
 
+    @pytest.mark.parametrize(
+        ("bootstrap_spelling", "accepted"),
+        [
+            pytest.param("redundant", True, id="equivalent-redundant-segments"),
+            pytest.param(
+                "forward-slash",
+                True,
+                id="equivalent-windows-forward-slash",
+                marks=pytest.mark.skipif(os.name != "nt", reason="Windows separators"),
+            ),
+            pytest.param("different", False, id="different-path-fails-closed"),
+        ],
+    )
+    def test_installed_initialize_compares_memory_db_by_path_identity(
+        self, tmp_path, monkeypatch, bootstrap_spelling, accepted
+    ):
+        target = (tmp_path / "target").resolve()
+        state = (tmp_path / "state").resolve()
+        target.mkdir()
+        memory = state / "agent.db"
+        runtime_paths = SimpleNamespace(
+            source_checkout=False,
+            resource_root=tmp_path / "resources",
+            instructions_file=tmp_path / "resources" / ".assistant_instructions.md",
+            anchor_home=state,
+            skills_dir=tmp_path / "resources" / ".assistant" / "skills",
+            tools_dir=tmp_path / "resources" / "tools",
+        )
+        effective_environment = {
+            "runtime_paths": runtime_paths,
+            "memory_db": str(memory),
+            "skills_dir": str(runtime_paths.skills_dir),
+            "tools_dir": str(runtime_paths.tools_dir),
+        }
+        bootstrap_memory = {
+            "redundant": os.sep.join([str(state), "sub", "..", "agent.db"]),
+            "forward-slash": str(memory).replace("\\", "/"),
+            "different": str(tmp_path / "other" / "agent.db"),
+        }[bootstrap_spelling]
+        from odibi_anchor._dispatcher._boot import _installed_boot_authority
+
+        resolved = SimpleNamespace(
+            runtime_paths=runtime_paths,
+            canonical_target=target,
+            memory_db=memory,
+            authority=_installed_boot_authority(
+                {**effective_environment, "memory_db": bootstrap_memory}
+            ),
+        )
+        artifact_root = state / "workspace" / "projects" / "portable"
+
+        def dispatcher(*_args, **_kwargs):
+            return {"runtime": {"artifact_root": str(artifact_root), "target_root": str(target)}}
+
+        monkeypatch.setenv("ANCHOR_PROJECT_ROOT", str(target))
+        monkeypatch.setattr(mcp_server, "_CW", None)
+        monkeypatch.setattr(mcp_server, "_ROOT", None)
+        monkeypatch.setattr(
+            "odibi_anchor._dispatcher._boot.resolve_boot_environment",
+            lambda *_args, **_kwargs: {"runtime_paths": runtime_paths},
+        )
+        monkeypatch.setattr(
+            "odibi_anchor._dispatcher._boot.resolve_installed_project_bootstrap",
+            lambda *_args, **_kwargs: resolved,
+        )
+        monkeypatch.setattr("odibi_anchor._dispatcher._boot._ENV", effective_environment)
+        monkeypatch.setattr(
+            "odibi_anchor.bootstrap.init", lambda **_kwargs: (dispatcher, str(target), {})
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_resolve_server_binding",
+            lambda *_args: SimpleNamespace(artifact_root=str(artifact_root)),
+        )
+        monkeypatch.setattr(mcp_server, "_close_memory_connections", lambda: None)
+
+        if accepted:
+            assert mcp_server._initialize_dispatcher(reset=False) is dispatcher
+        else:
+            with pytest.raises(RuntimeError, match="effective runtime does not match"):
+                mcp_server._initialize_dispatcher(reset=False)
+            assert mcp_server._CW is None
+
     def test_task_response_is_compact_by_default_and_full_on_request(self, monkeypatch):
         from odibi_anchor._dispatcher._envelope import COMPACT_TASK_TOKEN_BUDGET
         from odibi_anchor._utils._output_hints import estimate_tokens

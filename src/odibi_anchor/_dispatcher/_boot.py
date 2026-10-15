@@ -181,7 +181,11 @@ class InstalledProjectBootstrap:
 
 
 def _installed_boot_authority(environment: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
-    """Freeze every resolved field that can affect installed dispatcher authority."""
+    """Freeze every resolved field that can affect installed dispatcher authority.
+
+    ``memory_db`` is compared by canonical path identity, so equivalent spellings
+    (for example forward-slash and native Windows separators) are the same authority.
+    """
     keys = (
         "profile",
         "platform",
@@ -199,6 +203,10 @@ def _installed_boot_authority(environment: Mapping[str, Any]) -> tuple[tuple[str
         "is_databricks",
     )
     authority = [(key, environment.get(key)) for key in keys]
+    memory_db = environment.get("memory_db")
+    if memory_db is not None:
+        index = keys.index("memory_db")
+        authority[index] = ("memory_db", Path(memory_db).expanduser().resolve(strict=False))
     authority.append(("project_roots", tuple(environment.get("project_roots") or ())))
     return tuple(authority)
 

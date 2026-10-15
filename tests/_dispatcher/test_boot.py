@@ -1046,3 +1046,58 @@ class TestInstalledProjectBootstrap:
             for path in paths.anchor_home.rglob("*")
             if path.is_file()
         } == before
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            pytest.param("default", id="default-memory-db"),
+            pytest.param("redundant", id="redundant-segments"),
+            pytest.param(
+                "forward-slash",
+                id="windows-forward-slash",
+                marks=pytest.mark.skipif(os.name != "nt", reason="Windows separators"),
+            ),
+        ],
+    )
+    def test_validated_environment_keeps_equivalent_memory_db_authority(
+        self, tmp_path, monkeypatch, spelling
+    ):
+        """The MCP server re-resolves with the native memory path; authority must agree."""
+        target = tmp_path / "target"
+        target.mkdir()
+        state = (tmp_path / "state").resolve()
+        monkeypatch.setattr(
+            "odibi_anchor._dispatcher._boot.resolve_runtime_paths",
+            lambda _root=None, *, environment, **_kwargs: self._runtime_paths(
+                tmp_path, anchor_home=Path(environment["ANCHOR_HOME"])
+            ),
+        )
+        from odibi_anchor._dispatcher._boot import (
+            _installed_boot_authority,
+            resolve_boot_environment,
+        )
+
+        environment = {"ANCHOR_PROJECT_ROOT": str(target), "ANCHOR_HOME": str(state)}
+        if spelling == "redundant":
+            environment["ANCHOR_MEMORY_DB"] = os.sep.join([str(state), "sub", "..", "agent.db"])
+        elif spelling == "forward-slash":
+            environment["ANCHOR_MEMORY_DB"] = str(state / "agent.db").replace("\\", "/")
+
+        bootstrap = resolve_installed_project_bootstrap(str(target), environment)
+        validated = {
+            **environment,
+            "ANCHOR_PROJECT_ROOT": str(bootstrap.canonical_target),
+            "ANCHOR_HOME": str(bootstrap.runtime_paths.anchor_home),
+            "ANCHOR_MEMORY_DB": str(bootstrap.memory_db),
+            "_CW_BOOT_CONFIG_ROOT": str(bootstrap.canonical_target),
+        }
+        effective = resolve_boot_environment(str(bootstrap.canonical_target), environment=validated)
+
+        assert _installed_boot_authority(effective) == bootstrap.authority
+
+    def test_authority_differs_for_genuinely_different_memory_db(self, tmp_path):
+        from odibi_anchor._dispatcher._boot import _installed_boot_authority
+
+        assert _installed_boot_authority(
+            {"memory_db": str(tmp_path / "state" / "agent.db")}
+        ) != _installed_boot_authority({"memory_db": str(tmp_path / "other" / "agent.db")})
