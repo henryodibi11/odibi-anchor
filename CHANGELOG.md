@@ -2,6 +2,21 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.31] - 2026-10-15
+
+Hotfix: the installed MCP server starts on Windows.
+
+### Fixed
+
+- **Installed MCP boot compares `memory_db` by path identity.** The boot authority check compared
+  the memory database path as a raw string. The default path is spelled with forward slashes and
+  the MCP server re-resolves it to the native Windows path, so on Windows every installed MCP
+  start with a target failed with `installed orb bootstrap effective runtime does not match
+  validated paths`. That included the documented `ANCHOR_HOME`/`ANCHOR_PROJECT_ID`/
+  `ANCHOR_PROJECT_ROOT` configuration and the environment returned by `portfolio prepare`.
+  Equivalent spellings, such as mixed separators or redundant segments, now match. A genuinely
+  different memory path still fails closed.
+
 ## [0.3.30] - 2026-10-10
 
 Agents now close the loop on managed artifacts, and GitHub CI is green again.
