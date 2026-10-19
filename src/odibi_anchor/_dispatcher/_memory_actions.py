@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect as _inspect
 import json
 import os
 import re
@@ -1014,6 +1015,21 @@ def memory_action(
             'anchor("memory", "diagnostics"). ' + _MEMORY_HELP_HINT
         )
     if selector not in subcommands:
+        accepted = _inspect.signature(query_fn).parameters
+        open_ended = any(p.kind is p.VAR_KEYWORD for p in accepted.values())
+        unknown = [] if open_ended else sorted(key for key in kwargs if key not in accepted)
+        if unknown:
+            # memory_context raised an opaque TypeError for calls such as
+            # anchor("memory", command="evaluate"), where the subcommand belongs in arg0.
+            command = str(kwargs.get("command", "")).strip().lower()
+            hint = (
+                f'Send the subcommand positionally: anchor("memory", "{command}", ...) '
+                f'(MCP: arg0 "{command}"). ' if command in subcommands else ""
+            )
+            raise ValueError(
+                f"memory query does not accept {', '.join(unknown)}. {hint}"
+                'Search with anchor("memory", query="..."). ' + _MEMORY_HELP_HINT
+            )
         saved_format = kwargs.get("output_format", "dict")
         query_kwargs = dict(kwargs)
         query_kwargs["output_format"] = "dict"

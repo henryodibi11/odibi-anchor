@@ -87,6 +87,13 @@ def test_unknown_positional_subcommand_is_rejected_with_supported_operations(tmp
             tmp_path, ("status",), {"db_path": str(tmp_path / "memory.db")},
             session_state=_state(tmp_path), query_fn=memory_context, render_fn=None,
         )
+    # A subcommand sent by name (GLM sent {"command": "evaluate"}) reached memory_context
+    # as a keyword and failed with "unexpected keyword argument 'command'".
+    with pytest.raises(ValueError, match=r"does not accept command\. .*\"evaluate\""):
+        memory_action(
+            tmp_path, (), {"command": "evaluate", "db_path": str(tmp_path / "memory.db")},
+            session_state=_state(tmp_path), query_fn=memory_context, render_fn=None,
+        )
 
 
 def test_task_retrieval_apply_and_evaluate_are_separate(tmp_path):
