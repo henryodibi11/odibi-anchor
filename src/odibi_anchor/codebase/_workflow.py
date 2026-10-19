@@ -273,7 +273,14 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         raise WorkflowError("blocked", "resolve the workflow blocker before advancing")
     progress = state["progress"]
     if operation == "accept_plan" and progress == "draft":
-        plan = _plan(state["plan"], ready=True)
+        try:
+            plan = _plan(state["plan"], ready=True)
+        except ValueError as error:
+            # accept_plan takes no plan, so an agent cannot fix the stored draft by resending it.
+            raise ValueError(
+                f"{error}; accept_plan checks the workflow's stored draft plan: send workflow replan "
+                "with reason and the complete plan from the task bound to this workflow, then accept_plan"
+            ) from error
         _object(payload.get("baseline"), "baseline")
         _text(payload.get("authority_ref"), "plan authority_ref")
         result.update(phase="implement_and_qualify", progress="planned", plan=plan,

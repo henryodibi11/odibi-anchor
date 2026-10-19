@@ -17,6 +17,10 @@ Agent guidance: help and recovery messages no longer steer agents into failing c
   so an agent can see, for example, a `__pycache__` file a test run created.
 - **"workflow transition requires request_id" says each transition needs a new unique ID**,
   reusing one only to retry the identical request.
+- **An `accept_plan` refusal for an incomplete draft says how to complete it.** `accept_plan`
+  takes no plan; it checks the stored draft. "plan.scope must be an explicit array" now adds that
+  the draft is fixed with workflow `replan` (reason and complete plan) from the bound task.
+  Agents previously resent the plan to `accept_plan` or invented a `plan` subcommand.
 - **Next-step messages say `anchor("gate")`** instead of `anchor("gate", actions_taken=[...])`;
   the gate builds that list from the session and ignores a supplied one.
 
