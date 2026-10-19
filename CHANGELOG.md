@@ -2,6 +2,18 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.36] - 2026-10-19
+
+Durability: a latest-snapshot tie no longer blocks every later write.
+
+### Fixed
+
+- **Concurrent writers can no longer wedge the durable store.** Two writers on one authority
+  could publish snapshot manifests with the same `created_at`. Every later authority write then
+  failed with "active state could not be durably snapshotted: ambiguous latest durable snapshot"
+  until the store was edited by hand. The next checkpoint now comes from the live database,
+  dated after the tie, and supersedes it. Restore still refuses a tie until that next write.
+
 ## [0.3.35] - 2026-10-19
 
 Memory: guided error for a subcommand sent by name.
