@@ -21,7 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 # Force UTF-8 on Windows so Unicode symbols (✓, ✗, ▶, …) survive stdio transport
 if sys.platform == "win32":
@@ -33,6 +33,7 @@ if sys.platform == "win32":
 
 from fastmcp import FastMCP
 from pydantic import BeforeValidator, StrictInt
+from pydantic.json_schema import SkipJsonSchema
 
 from odibi_anchor._dispatcher._dispatch_table import ACTION_GROUPS, DISPATCH_SIGS
 from odibi_anchor._dispatcher._envelope import compact_task_result, execute_with_envelope
@@ -42,8 +43,15 @@ from odibi_anchor._dispatcher._request_adapter import (
     error_information,
     normalize_request,
 )
+from odibi_anchor._mcp_types import (
+    LearningEvidence,
+    LearningProvenance,
+    ReviewFinding,
+    WorkflowPlan,
+)
 from odibi_anchor._recovery import attach_recovery
 from odibi_anchor._utils._output_hints import estimate_tokens
+from odibi_anchor.planning.task_execution_context import TaskMode, TaskPriority
 
 # ─── Server instance ─────────────────────────────────────────────────────────
 mcp = FastMCP("odibi-anchor")
@@ -563,7 +571,8 @@ def _prepare_response(
 
 
 # ─── Consolidated Gateway Tools ──────────────────────────────────────────────
-# Single universal gateway for every registered anchor() action — uses only 2 MCP tool slots
+# Universal gateway for every registered anchor() action, plus typed tools (below) for
+# the frequent structured actions
 
 
 def _decode_args(args: str | dict[str, Any]) -> dict[str, Any]:
@@ -827,7 +836,7 @@ def anchor_help(category: str | None = None, action: str | None = None) -> str:
                 # Return full catalog
                 result = {
                     "summary": f"odibi_anchor has {sum(len(acts) for acts in ACTION_GROUPS.values())} anchor() actions across 10 categories",
-                    "usage": "Call anchor_execute(action, args) to run any action. Use anchor_help(category=...) to filter.",
+                    "usage": "Call anchor_execute(action, args) to run any action; anchor_task, anchor_workflow, anchor_learning and anchor_memory take typed arguments for those actions. Use anchor_help(category=...) to filter.",
                     "categories": {
                         cat: {
                             "count": len(actions),
@@ -841,6 +850,197 @@ def anchor_help(category: str | None = None, action: str | None = None) -> str:
             return _fmt(result)
         finally:
             _close_memory_connections()
+
+
+# Typed tools for the frequent structured actions. Hosts convert some models' tool calls
+# (XML-style arguments) to JSON using the published schema; under the untyped
+# anchor_execute ``args`` object, numbers, booleans, lists and nested objects arrived as
+# strings or ``{"item": ...}`` wrappers. These flat, union-free schemas give every field
+# its JSON type. Each tool forwards to anchor_execute, so dispatch, governance and
+# errors are identical; rarer subcommands and fields stay on anchor_execute.
+
+# Accept an omitted or null argument but publish only the real type: a nullable
+# anyOf hid list types from host converters, which then sent empty lists as "".
+_Unset: TypeAlias = SkipJsonSchema[None]
+
+
+def _forward(action: str, arg0: str, fields: dict[str, Any]) -> str:
+    """Forward typed fields to anchor_execute, omitting unset ones.
+
+    An empty string counts as unset: models fill unused optional text fields with "" (GLM
+    5.3 sent adoption_approval_id=""), and Anchor refuses empty text. Empty lists and objects
+    are real values (a plan's ``exclusions: []``) and are forwarded.
+    """
+    args = {"arg0": arg0, **{
+        key: value for key, value in fields.items() if value is not None and value != ""
+    }}
+    return anchor_execute(action, args)
+
+
+@mcp.tool()
+def anchor_workflow(
+    command: Literal[
+        "status", "create", "accept_plan", "implemented", "review", "qualify",
+        "check_artifact", "prepare_delivery", "request_delivery_approval",
+        "prepare_revocation", "revoke_delivery", "verify_delivery", "block", "resume",
+        "cancel", "replan",
+    ],
+    workflow_id: str | _Unset = None,
+    request_id: str | _Unset = None,
+    expected_generation: int | _Unset = None,
+    plan: WorkflowPlan | _Unset = None,
+    findings: list[ReviewFinding] | _Unset = None,
+    reason: str | _Unset = None,
+    blocker_kind: Literal[
+        "missing_evidence", "unavailable", "unsafe", "awaiting_authority",
+        "replan_required", "recovery_required", "conflict", "outcome_unknown",
+    ] | _Unset = None,
+    resolution: str | _Unset = None,
+    criterion_id: str | _Unset = None,
+    timeout_minutes: int | _Unset = None,
+) -> str:
+    """Run anchor("workflow", command, ...) with typed arguments.
+
+    Same behavior as anchor_execute("workflow", ...); see anchor_help(action="workflow").
+    Transitions need workflow_id, request_id and the observed expected_generation.
+    create and replan take plan (replan also reason); review takes findings; block takes
+    reason and blocker_kind; resume takes resolution; cancel takes reason.
+    """
+    return _forward("workflow", command, {k: v for k, v in locals().items() if k != "command"})
+
+
+@mcp.tool()
+def anchor_task(
+    task: str,
+    goal: str | _Unset = None,
+    mode: TaskMode | _Unset = None,
+    work_type: Literal[
+        "investigate", "decide", "design", "change", "verify", "operate", "communicate",
+    ] | _Unset = None,
+    execution_mode: Literal["read_only", "artifact_only", "source_change", "data_change"] | _Unset = None,
+    risk: Literal["low", "medium", "high"] | _Unset = None,
+    rigor: Literal["direct", "compact", "full"] | _Unset = None,
+    priority: TaskPriority | _Unset = None,
+    workflow_id: str | _Unset = None,
+    continuation: bool | _Unset = None,
+    scope: str | _Unset = None,
+    repository_scope: list[str] | _Unset = None,
+    in_scope: list[str] | _Unset = None,
+    out_of_scope: list[str] | _Unset = None,
+    constraints: list[str] | _Unset = None,
+    acceptance_criteria: list[str] | _Unset = None,
+    stop_conditions: list[str] | _Unset = None,
+    risks: list[str] | _Unset = None,
+    deliverables: list[str] | _Unset = None,
+    known_facts: list[str] | _Unset = None,
+    assumptions: list[str] | _Unset = None,
+    open_questions: list[str] | _Unset = None,
+    desired_outcome: str | _Unset = None,
+    background: str | _Unset = None,
+    current_state: str | _Unset = None,
+    problem: str | _Unset = None,
+    create_problem: bool | _Unset = None,
+    spec: str | _Unset = None,
+    work_item: str | _Unset = None,
+    accept_unknown_git_state: bool | _Unset = None,
+    memory_limit: int | _Unset = None,
+    adoption_approval_id: str | _Unset = None,
+) -> str:
+    """Run anchor("task", task, ...) with typed arguments.
+
+    Same behavior as anchor_execute("task", ...); see anchor_help(action="task").
+    scope is one prose string; in_scope and repository_scope are lists (repository_scope
+    holds relative paths). Bind a draft workflow with workflow_id. For task fields not
+    listed here, use anchor_execute("task", ...).
+    """
+    return _forward("task", task, {k: v for k, v in locals().items() if k != "task"})
+
+
+@mcp.tool()
+def anchor_learning(
+    command: Literal["capture", "assess"],
+    observation_type: Literal[
+        "blocker", "evidence_gap", "friction", "near_miss", "reusable_practice",
+    ] | _Unset = None,
+    summary: str | _Unset = None,
+    signal_key: str | _Unset = None,
+    impact: Literal["low", "medium", "high", "critical"] | _Unset = None,
+    applicability_scope: Literal["project_local", "workbench", "cross_project"] | _Unset = None,
+    project_refs: list[str] | _Unset = None,
+    work_package_refs: list[str] | _Unset = None,
+    environment_refs: list[str] | _Unset = None,
+    provenance: LearningProvenance | _Unset = None,
+    evidence: list[LearningEvidence] | _Unset = None,
+    retry_latest: bool | _Unset = None,
+    outcome: Literal["observations_recorded", "nothing_reusable_learned"] | _Unset = None,
+    observation_ids: list[str] | _Unset = None,
+    notes: str | _Unset = None,
+    actor_kind: Literal["agent", "human"] | _Unset = None,
+    actor_ref: str | _Unset = None,
+) -> str:
+    """Run anchor("learning", "capture"|"assess", ...) with typed arguments.
+
+    Same behavior as anchor_execute("learning", ...); see anchor_help(action="learning").
+    Other learning subcommands use anchor_execute("learning", ...).
+
+    Args:
+        command: capture (record one observation) or assess (close the task's learning).
+        observation_type: capture only (required).
+        summary: capture only (required): plain prose, at most 1000 characters.
+        signal_key: capture only (required): stable lowercase key [a-z0-9._:-].
+        impact: capture only (default medium).
+        applicability_scope: capture only (default workbench); project_refs count must match:
+            workbench 0, project_local 1, cross_project 2 or more.
+        project_refs: capture only.
+        work_package_refs: capture only.
+        environment_refs: capture only.
+        provenance: capture only.
+        evidence: capture only (required): nonempty list of {reference_type, reference}.
+        retry_latest: capture or assess: retry against the latest closed obligation.
+        outcome: assess only (required).
+        observation_ids: assess only: the lrn_ IDs from capture, only with observations_recorded.
+        notes: assess only: at most 500 characters.
+        actor_kind: assess only (default agent).
+        actor_ref: assess only.
+    """
+    return _forward("learning", command, {k: v for k, v in locals().items() if k != "command"})
+
+
+@mcp.tool()
+def anchor_memory(
+    command: Literal["disposition", "evaluate"],
+    selection_id: str | _Unset = None,
+    memory_id: str | _Unset = None,
+    disposition: Literal["applied", "irrelevant", "suspect", "superseded"] | _Unset = None,
+    reason: dict[str, Any] | _Unset = None,
+    replacement_memory_id: str | _Unset = None,
+    action: str | _Unset = None,
+    context: dict[str, Any] | _Unset = None,
+    all_pending: bool | _Unset = None,
+    application_id: str | _Unset = None,
+    outcome: Literal["helpful", "not_helpful", "harmful", "superseded"] | _Unset = None,
+    evidence: dict[str, Any] | _Unset = None,
+) -> str:
+    """Run anchor("memory", "disposition"|"evaluate", ...) with typed arguments.
+
+    Same behavior as anchor_execute("memory", ...); see anchor_help(action="memory").
+    Memory queries and other subcommands use anchor_execute("memory", ...).
+
+    Args:
+        command: disposition (judge a selected memory) or evaluate (judge an applied one).
+        selection_id: disposition: the selection to judge (or use memory_id).
+        memory_id: disposition or evaluate: the memory to judge.
+        disposition: disposition only (required): how the memory bore on this task.
+        reason: disposition only (required): why, as a nonempty object, e.g. {"summary": "..."}.
+        replacement_memory_id: disposition superseded only: the memory that replaces it.
+        action: disposition applied only: what you used the memory for.
+        context: disposition applied only: optional object with details.
+        all_pending: disposition irrelevant only: true to judge every pending selection.
+        application_id: evaluate: the application to judge (or use memory_id).
+        outcome: evaluate only (required): whether applying the memory helped.
+        evidence: evaluate only (required): what shows it, as a nonempty object.
+    """
+    return _forward("memory", command, {k: v for k, v in locals().items() if k != "command"})
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

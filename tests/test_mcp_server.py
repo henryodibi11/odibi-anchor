@@ -68,7 +68,7 @@ print(json.dumps(sorted(tool.name for tool in tools)))
         check=True,
     )
 
-    assert json.loads(completed.stdout) == ["anchor_execute", "anchor_help"]
+    assert json.loads(completed.stdout) == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
 
 
 def test_server_binding_is_explicit_target_checked_and_legacy_opt_in(
@@ -1922,3 +1922,110 @@ class TestGatewayCompatibility:
         parsed = json.loads(mcp_server.anchor_help())
         assert parsed["total_actions"] == sum(len(actions) for actions in mcp_server.ACTION_GROUPS.values())
         assert set(parsed["categories"]) == set(mcp_server.ACTION_GROUPS)
+
+
+_TYPED_CALLS = [
+    ("anchor_workflow", "command", {
+        "command": "create", "request_id": "r1", "expected_generation": 0,
+        "plan": {
+            "schema_version": 1, "goal": "Fix median", "risk": "low",
+            "execution_mode": "source_change", "scope": ["edit stats.py"], "exclusions": [],
+            "criteria": [{"id": "c1", "expected": "passes", "method": "pytest",
+                          "test_targets": ["tests/test_stats.py"], "expected_xfailed": 0}],
+            "destination": {"kind": "managed_artifacts"},
+        },
+    }, "workflow"),
+    ("anchor_task", "task", {
+        "task": "Fix median.", "mode": "implementation", "continuation": False,
+        "memory_limit": 3, "repository_scope": ["src"], "out_of_scope": [],
+        "adoption_approval_id": "",
+    }, "task"),
+    ("anchor_learning", "command", {
+        "command": "capture", "observation_type": "friction", "summary": "Slow tests.",
+        "signal_key": "tests.slow", "project_refs": [], "retry_latest": False,
+        "evidence": [{"reference_type": "test", "reference": "tests/test_stats.py"}],
+    }, "learning"),
+    ("anchor_memory", "command", {
+        "command": "disposition", "memory_id": "m1", "disposition": "irrelevant",
+        "reason": {"why": "unrelated", "checked": 0}, "all_pending": False,
+    }, "memory"),
+]
+
+
+def _published_schemas() -> dict:
+    from fastmcp import Client
+
+    async def collect():
+        async with Client(mcp_server.mcp) as client:
+            return {tool.name: tool.input_schema for tool in await client.list_tools()}
+
+    return asyncio.run(collect())
+
+
+class TestTypedTools:
+    """Typed tools give hosts real JSON types and dispatch exactly like anchor_execute."""
+
+    @pytest.mark.parametrize(("tool", "first", "arguments", "action"), _TYPED_CALLS)
+    def test_typed_call_dispatches_like_anchor_execute(
+        self, monkeypatch, tool, first, arguments, action,
+    ):
+        calls = TestStructuredArgs._capture(monkeypatch)
+        asyncio.run(mcp_server.mcp.call_tool(tool, arguments))
+        # An empty string is an unused optional field; False, 0 and [] are real arguments.
+        fields = {key: value for key, value in arguments.items() if key != first and value != ""}
+        mcp_server.anchor_execute(action, {"arg0": arguments[first], **fields})
+        assert calls[0] == calls[1]
+        assert calls[0]["kwargs"] == fields
+
+    def test_published_schemas_are_flat_and_typed(self):
+        schemas = _published_schemas()
+        for name in ("anchor_workflow", "anchor_task", "anchor_learning", "anchor_memory"):
+            text = json.dumps(schemas[name])
+            # Hosts that convert XML-style tool calls neither follow $ref nor see through
+            # a nullable anyOf; either one turned typed values back into strings.
+            assert "$ref" not in text and "anyOf" not in text, name
+        workflow = schemas["anchor_workflow"]["properties"]
+        plan = workflow["plan"]["properties"]
+        assert workflow["expected_generation"]["type"] == "integer"
+        assert plan["exclusions"]["type"] == "array"
+        criterion = plan["criteria"]["items"]["properties"]
+        assert criterion["expected_xfailed"]["type"] == "integer"
+        assert criterion["test_targets"]["type"] == "array"
+        assert schemas["anchor_task"]["properties"]["continuation"]["type"] == "boolean"
+        assert schemas["anchor_learning"]["properties"]["evidence"]["items"]["type"] == "object"
+        assert schemas["anchor_memory"]["properties"]["reason"]["type"] == "object"
+
+    def test_published_enums_match_validators(self):
+        from odibi_anchor._dispatcher._workflow_runtime import READ_COMMANDS, WRITE_COMMANDS
+        from odibi_anchor.codebase._memory_lifecycle import DISPOSITIONS, EVALUATIONS
+        from odibi_anchor.codebase._workflow import _BLOCK_REASONS
+        from odibi_anchor.codebase.structured_learning_context import REFS
+        from odibi_anchor.planning._task_profile import (
+            _EXECUTION_MODES,
+            _RIGORS,
+            _RISKS,
+            _WORK_TYPES,
+        )
+
+        schemas = _published_schemas()
+
+        def enum(tool, *path):
+            node = schemas[tool]["properties"]
+            for key in path:
+                node = node[key]
+            return set(node["enum"])
+
+        plan = ("plan", "properties")
+        assert enum("anchor_workflow", "command") == READ_COMMANDS | WRITE_COMMANDS
+        assert enum("anchor_workflow", "blocker_kind") == _BLOCK_REASONS
+        assert enum("anchor_workflow", *plan, "execution_mode") == _EXECUTION_MODES
+        assert enum("anchor_workflow", *plan, "risk") == _RISKS
+        assert enum("anchor_task", "work_type") == _WORK_TYPES
+        assert enum("anchor_task", "execution_mode") == _EXECUTION_MODES
+        assert enum("anchor_task", "risk") == _RISKS
+        assert enum("anchor_task", "rigor") == _RIGORS
+        assert enum(
+            "anchor_learning", "evidence", "items", "properties", "reference_type",
+        ) == set(REFS)
+        assert enum("anchor_memory", "disposition") == DISPOSITIONS
+        assert enum("anchor_memory", "outcome") == EVALUATIONS

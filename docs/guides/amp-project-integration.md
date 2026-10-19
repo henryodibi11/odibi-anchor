@@ -51,8 +51,10 @@ Add `.amp/settings.json`:
 its registered target matches `ANCHOR_PROJECT_ROOT`. If the ID is omitted, startup succeeds only
 when the target matches exactly one registry entry. It never creates or retargets a project.
 `ANCHOR_HOME` must be an absolute, writable location outside that checkout (and outside the
-installed package); do not commit its state. The public MCP server exposes only
-`anchor_execute` and `anchor_help`, so writes cannot bypass the governed gateway.
+installed package); do not commit its state. The public MCP server exposes `anchor_execute`,
+`anchor_help` and the typed `anchor_task`, `anchor_workflow`, `anchor_learning` and
+`anchor_memory` tools, which forward to `anchor_execute`, so writes cannot bypass the governed
+gateway.
 
 The server freezes this route for its process lifetime. Changing cwd, environment variables,
 or `workspace/.active_project` does not redirect it; deleting or retargeting its registry entry

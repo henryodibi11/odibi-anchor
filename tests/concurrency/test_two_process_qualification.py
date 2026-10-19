@@ -128,7 +128,7 @@ class StdioWorker:
         ready = self._read()
         if ready.get("kind") != "READY":
             self._fail(f"worker did not become ready: {ready}")
-        assert ready["tools"] == ["anchor_execute", "anchor_help"]
+        assert ready["tools"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
 
     def _read(self) -> dict:
         assert self.process.stdout is not None

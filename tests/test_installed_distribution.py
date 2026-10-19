@@ -1979,7 +1979,7 @@ def test_revision_8_structured_learning_across_installed_transports(tmp_path: Pa
                 transport=StdioTransport(command=os.environ["PYTHON"], args=["-m","odibi_anchor.mcp_server"],
                     env=os.environ.copy(), cwd=os.environ["TARGET"])
                 async with Client(transport, timeout=60) as client:
-                    assert sorted(x.name for x in await client.list_tools()) == ["anchor_execute","anchor_help"]
+                    assert sorted(x.name for x in await client.list_tools()) == ["anchor_execute","anchor_help","anchor_learning","anchor_memory","anchor_task","anchor_workflow"]
                     version=int(os.environ["VERSION"])
                     async def acall(action,args):
                         request={"action":action,"response_version":version,"response_detail":"full"}
@@ -3876,7 +3876,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                 timeout=180,
             ).stdout
         )
-        assert mcp_switch["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_switch["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert mcp_switch["registered"] == 11
         assert mcp_switch["switched"]["runtime_binding_unchanged"] is True
         assert mcp_switch["switched"]["reinitialize_required"] is False
@@ -3897,7 +3897,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                 timeout=180,
             ).stdout
         )
-        assert mcp_restart["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_restart["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert mcp_restart["status"]["active_project"] == "beta"
         assert Path(mcp_restart["status"]["target_root"]) == fresh.resolve()
         assert _git_snapshot(committed) == committed_before
@@ -3912,7 +3912,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                 timeout=180,
             ).stdout
         )
-        assert mcp_access["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_access["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert all(result["ok"] is True for result in mcp_access["safe_results"])
         assert all("Planning not detected" not in str(result) for result in mcp_access["safe_results"])
         assert mcp_access["concurrency"]["kind"] == "concurrent_project_operations"
@@ -3980,7 +3980,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
             ).stdout
         )
         dirty_message = "BLOCKED: source-change task requires a clean initial Git worktree"
-        assert mcp_dirty["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_dirty["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert mcp_dirty["v1_is_error"] is True
         assert any(dirty_message in content for content in mcp_dirty["v1_content"])
         assert mcp_dirty["v2_envelope"]["ok"] is False
@@ -4030,7 +4030,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                 timeout=180,
             ).stdout
         )
-        assert mcp_unborn_result["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_unborn_result["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert mcp_unborn_result["v1_readiness"] == 100
         assert mcp_unborn_result["v2_envelope"]["ok"] is True
         assert mcp_unborn_result["v2_envelope"]["result"]["readiness"]["score"] == 100
@@ -4083,7 +4083,7 @@ def test_clean_wheel_runtime_contract(tmp_path: Path) -> None:
                 timeout=180,
             ).stdout
         )
-        assert mcp_unborn_restart["tool_names"] == ["anchor_execute", "anchor_help"]
+        assert mcp_unborn_restart["tool_names"] == ["anchor_execute", "anchor_help", "anchor_learning", "anchor_memory", "anchor_task", "anchor_workflow"]
         assert mcp_unborn_restart["missing_task"]["ok"] is True
         assert mcp_unborn_restart["missing_task"]["result"]["kind"] == "review_context"
         assert mcp_unborn_restart["fresh_readiness"] == 100
