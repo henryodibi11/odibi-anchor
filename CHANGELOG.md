@@ -2,6 +2,25 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.34] - 2026-10-19
+
+MCP: typed tools for the structured actions agents call most.
+
+### Added
+
+- **`anchor_task`, `anchor_workflow`, `anchor_learning` and `anchor_memory` MCP tools.** Each
+  publishes a flat, typed input schema (task fields; every workflow transition with the full plan
+  and review findings; learning `capture` and `assess`; memory `disposition` and `evaluate`) and
+  forwards to `anchor_execute`, so dispatch, governance and results are unchanged. Hosts convert
+  some models' XML-style tool calls to JSON using the published schema; under the untyped
+  `anchor_execute` `args` object, MiniMax M3 calls arrived with numbers and nested values as
+  strings, lists as `{"item": ...}` and empty lists as `""`. With the typed workflow schema, its
+  plans arrived with exact types in 5 of 6 probes across three hosts. The schemas carry no `$ref`
+  and no nullable `anyOf`, which those converters do not follow. Wrongly shaped arguments are
+  refused before dispatch with the offending field named. Learning and memory field descriptions
+  say which subcommand each field belongs to, and an empty string counts as an unset optional
+  field. Rarer actions, subcommands and fields stay on `anchor_execute`.
+
 ## [0.3.33] - 2026-10-19
 
 Agent guidance: help and recovery messages no longer steer agents into failing calls.
