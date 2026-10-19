@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.33] - 2026-10-19
+
+Agent guidance: help and recovery messages no longer steer agents into failing calls.
+
+### Fixed
+
+- **Action help hides parameters the dispatcher supplies.** `anchor("help", "workflow")` listed
+  `path` and `session_state` in its signature. Agents copied them and Anchor refused the call
+  with "got multiple values for argument 'path'" (13% of workflow calls in an OpenCode
+  qualification run). `gate` help likewise listed the evidence fields that the gate builds from
+  the session and discards when sent. Both are now omitted from the signature and parameter list.
+- **"observed source changes exceed the accepted plan" names the paths** outside `source_paths`,
+  so an agent can see, for example, a `__pycache__` file a test run created.
+- **"workflow transition requires request_id" says each transition needs a new unique ID**,
+  reusing one only to retry the identical request.
+- **Next-step messages say `anchor("gate")`** instead of `anchor("gate", actions_taken=[...])`;
+  the gate builds that list from the session and ignores a supplied one.
+
 ## [0.3.32] - 2026-10-15
 
 Hotfix: MCP clients that send structured arguments can call `anchor_execute`.

@@ -7,11 +7,11 @@ the gateway tools, and tell Amp when to use them.
 ## 1. Install during setup
 
 In `.agents/setup`, create/reuse `.venv` and install an exact released version (replace
-`0.3.32` only as an intentional upgrade):
+`0.3.33` only as an intentional upgrade):
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install 'odibi-anchor[mcp]==0.3.32'
+.venv/bin/python -m pip install 'odibi-anchor[mcp]==0.3.33'
 ```
 
 When the release is not available from the configured package index, pin an immutable
