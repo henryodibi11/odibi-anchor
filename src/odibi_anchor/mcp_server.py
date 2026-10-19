@@ -902,9 +902,22 @@ def anchor_workflow(
     """Run anchor("workflow", command, ...) with typed arguments.
 
     Same behavior as anchor_execute("workflow", ...); see anchor_help(action="workflow").
-    Transitions need workflow_id, request_id and the observed expected_generation.
-    create and replan take plan (replan also reason); review takes findings; block takes
-    reason and blocker_kind; resume takes resolution; cancel takes reason.
+    Send only the fields the command uses.
+
+    Args:
+        command: the workflow subcommand.
+        workflow_id: every command except create.
+        request_id: create and every transition: a new unique ID (reuse one only to retry the
+            identical call).
+        expected_generation: every transition except create: the generation from the latest
+            workflow status.
+        plan: create and replan only.
+        findings: review only: [] or finding objects.
+        reason: replan, block and cancel only.
+        blocker_kind: block only.
+        resolution: resume only.
+        criterion_id: check_artifact only.
+        timeout_minutes: request_delivery_approval and revoke_delivery only.
     """
     return _forward("workflow", command, {k: v for k, v in locals().items() if k != "command"})
 
@@ -950,8 +963,19 @@ def anchor_task(
 
     Same behavior as anchor_execute("task", ...); see anchor_help(action="task").
     scope is one prose string; in_scope and repository_scope are lists (repository_scope
-    holds relative paths). Bind a draft workflow with workflow_id. For task fields not
-    listed here, use anchor_execute("task", ...).
+    holds relative paths). For task fields not listed here, use anchor_execute("task", ...).
+
+    Args:
+        task: the task text.
+        workflow_id: producer task only: the draft workflow to bind.
+        continuation: true only to continue in this startup without a new session.
+        problem: only to link an existing Problem Record.
+        create_problem: only when asked to open a Problem Record.
+        spec: only to link an existing Specification.
+        work_item: only to link an existing work item (WI-YYYY-NNNN).
+        accept_unknown_git_state: only when Anchor's refusal asks for it.
+        memory_limit: memories to select, 1 to 20 (default 5).
+        adoption_approval_id: only when Anchor's refusal asks for one.
     """
     return _forward("task", task, {k: v for k, v in locals().items() if k != "task"})
 

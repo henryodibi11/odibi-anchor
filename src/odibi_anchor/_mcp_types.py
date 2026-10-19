@@ -6,9 +6,9 @@ string annotations resolve through ``sys.modules``, but bootstrap purges every
 ``odibi_anchor`` module from it, so string annotations failed to resolve after boot.
 Evaluated annotations need no lookup.
 """
-from typing import Literal, NotRequired
+from typing import Annotated, Literal, NotRequired
 
-from pydantic import ConfigDict, with_config
+from pydantic import ConfigDict, Field, with_config
 from typing_extensions import TypedDict  # pydantic requires it before Python 3.12
 
 _Forbid = ConfigDict(extra="forbid")
@@ -78,7 +78,8 @@ class WorkflowPlan(TypedDict):
     criteria: NotRequired[list[PlanCriterion]]
     destination: NotRequired[PlanDestination]
     reconciliation: NotRequired[PlanReconciliation]
-    required_children: NotRequired[list[PlanRequiredChild]]
+    required_children: NotRequired[Annotated[list[PlanRequiredChild], Field(
+        description="Only when this plan depends on other qualified workflows; omit otherwise.")]]
 
 
 @with_config(_Forbid)
