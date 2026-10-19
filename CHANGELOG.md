@@ -2,6 +2,18 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.35] - 2026-10-19
+
+Memory: guided error for a subcommand sent by name.
+
+### Fixed
+
+- **`anchor("memory", command="evaluate")` no longer fails with a raw `TypeError`.** A memory
+  query with fields it does not accept now raises a guided `ValueError` that names the fields,
+  says to send a lifecycle subcommand positionally (MCP: `arg0`), and points to memory help.
+  Agents sent `{"command": "evaluate"}` through `anchor_execute` and got
+  "memory_context() got an unexpected keyword argument 'command'".
+
 ## [0.3.34] - 2026-10-19
 
 MCP: typed tools for the structured actions agents call most.
