@@ -167,7 +167,7 @@ def dogfood_regression_context(
 
     suggested.append("If regressions found: Run anchor(\"trace\", \"error details\") to diagnose.")
 
-    suggested.append("If clean: Run anchor(\"gate\", actions_taken=[...]) to close workflow.")
+    suggested.append("If clean: Run anchor(\"gate\") to close workflow.")
 
     suggested.append(
         "At learning closure, capture only evidence-backed reusable regression findings; "
@@ -188,7 +188,7 @@ def dogfood_regression_context(
             "before investigating regressions."
         )
     suggested.append(
-        "MUST: Run anchor('gate', actions_taken=[...]) after resolving any regressions."
+        "MUST: Run anchor('gate') after resolving any regressions."
     )
 
     ctx: dict[str, Any] = {

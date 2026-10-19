@@ -211,7 +211,7 @@ def consistency_check_context(
 
     suggested.append("MUST: Run anchor(\"preflight\", changed_files=[...]) after fixes.")
 
-    suggested.append("MUST: Run anchor(\"gate\", actions_taken=[...]) to close workflow.")
+    suggested.append("MUST: Run anchor(\"gate\") to close workflow.")
     for v in violations[:10]:
         suggested.append(f"MUST: Fix [{v['rule']}] in {v['file']}: {v['detail']}")
 

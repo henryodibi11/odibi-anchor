@@ -368,7 +368,7 @@ _MODE_DEFAULTS: dict[str, dict[str, list[Any]]] = {
             "Implement the smallest useful version first.",
             "MUST: Run anchor('touched', 'file.py') after each file edit.",
             "MUST: Run anchor('preflight', changed_files=[...]) then anchor('test', changed_files=[...]).",
-            "MUST: Run anchor('gate', actions_taken=[...]) before delivering.",
+            "MUST: Run anchor('gate') before delivering.",
         ],
     },
     "testing": {
@@ -430,7 +430,7 @@ _MODE_DEFAULTS: dict[str, dict[str, list[Any]]] = {
             "Run the smallest smoke test first.",
             "MUST: Run anchor('validate', df, rules=[...]) for semantic checks.",
             "Record failures before making changes.",
-            "MUST: Run anchor('gate', actions_taken=[...]) after test changes.",
+            "MUST: Run anchor('gate') after test changes.",
         ],
     },
     "debugging": {
@@ -838,7 +838,7 @@ _MODE_DEFAULTS: dict[str, dict[str, list[Any]]] = {
             "Create files in dependency order.",
             "Run tests after each file.",
             "MUST: Run anchor('touched', 'file.py') after each file edit.",
-            "MUST: Run anchor('gate', actions_taken=[...]) before delivering.",
+            "MUST: Run anchor('gate') before delivering.",
         ],
     },
 }

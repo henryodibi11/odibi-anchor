@@ -98,7 +98,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                 if type(expected_generation) is not int or expected_generation < 0:
                     raise ValueError("expected_generation must be a nonnegative integer")
                 if not isinstance(request_id, str) or not request_id.strip():
-                    raise ValueError("workflow transition requires request_id")
+                    raise ValueError(
+                        "workflow transition requires request_id: a new unique string for each "
+                        "transition; reuse one only to retry the identical request"
+                    )
                 if binding and binding == session_state.workflow_binding and (
                     workflow_id is None or workflow_id == binding["workflow_id"]
                 ):

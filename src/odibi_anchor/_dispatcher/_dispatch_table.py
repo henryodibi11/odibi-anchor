@@ -1013,6 +1013,19 @@ def build_help_text(
     return _build_action_detail(target, action_funcs)
 
 
+# Parameters the dispatcher supplies itself. Help must not list them: agents copy
+# help's signature, and a caller-supplied value is refused ("got multiple values
+# for argument 'path'") or silently discarded (gate builds its evidence from the
+# session).
+_SERVER_SUPPLIED: Mapping[str, frozenset[str]] = MappingProxyType({
+    "workflow": frozenset({"path", "session_state"}),
+    "gate": frozenset({
+        "actions_taken", "files_changed", "files_created", "obligations_paid",
+        "verification_record", "skip_timing_verification", "_timings_override",
+    }),
+})
+
+
 def _build_action_detail(
     target: str,
     action_funcs: Mapping[str, Callable[..., Any]] | None,
@@ -1029,14 +1042,16 @@ def _build_action_detail(
     # Try to get the underlying function's full signature
     if action_funcs and target in action_funcs:
         try:
+            hidden = {"self", "root"} | _SERVER_SUPPLIED.get(target, frozenset())
             sig = inspect.signature(action_funcs[target])
+            sig = sig.replace(parameters=[p for p in sig.parameters.values() if p.name not in hidden])
             lines.append(
                 f"**Full signature:** `{action_funcs[target].__name__}{sig}`\n"
             )
             # Extract parameter docs
             params = []
             for name, param in sig.parameters.items():
-                if name in ("self", "root", "output_format"):
+                if name == "output_format":
                     continue
                 default = (
                     f" = {param.default!r}"

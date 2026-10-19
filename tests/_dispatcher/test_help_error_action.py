@@ -91,3 +91,18 @@ def test_legacy_counters_are_documented_as_deprecated_non_authoritative_compatib
     assert "Legacy counters are deprecated non-authoritative compatibility fields" in reference
     for name in ("use_count", "surface_count", "applied_count", "sessions_seen"):
         assert f"`{name}`" in reference
+
+
+def test_help_hides_parameters_the_dispatcher_supplies():
+    """Agents copied path/session_state from workflow help and got 'multiple values'."""
+    from odibi_anchor._dispatcher._workflow_runtime import workflow_action
+    from odibi_anchor.codebase.workflow_gate_context import workflow_gate_context
+
+    workflow = build_help_text("workflow", {"workflow": workflow_action})
+    signature = next(line for line in workflow.splitlines() if line.startswith("**Full signature:**"))
+    assert "session_state" not in workflow and "path" not in signature
+    assert "command" in signature and "request_id" in signature
+
+    gate = build_help_text("gate", {"gate": workflow_gate_context})
+    assert "actions_taken" not in gate and "obligations_paid" not in gate
+    assert "`workflow`" in gate

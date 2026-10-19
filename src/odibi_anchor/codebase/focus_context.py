@@ -211,7 +211,7 @@ def test_focus_context(
 
     # anchor() workflow hints
     suggested_actions.append(
-        "MUST: Run anchor('gate', actions_taken=[...]) after tests pass to close obligations."
+        "MUST: Run anchor('gate') after tests pass to close obligations."
     )
     if coverage_gaps:
         suggested_actions.append(

@@ -296,8 +296,13 @@ def collect_candidate(path: str | Path, *, session_state: Any,
             }
         scope = capture_task_change_scope(baseline, acknowledgements)
         allowed = _paths(plan, "source_paths")
-        if set(scope.changed_paths) - set(allowed):
-            raise WorkflowError("out_of_scope", "observed source changes exceed the accepted plan")
+        extra = sorted(set(scope.changed_paths) - set(allowed))
+        if extra:
+            shown = ", ".join(extra[:10]) + (f" and {len(extra) - 10} more" if len(extra) > 10 else "")
+            raise WorkflowError(
+                "out_of_scope",
+                f"observed source changes exceed the accepted plan: {shown} not in source_paths",
+            )
         root = Path(session_state.target_root).resolve()
         for name in scope.changed_paths:
             if (root / name).is_symlink() or not (root / name).resolve().is_relative_to(root):

@@ -287,7 +287,7 @@ def preflight_context(
         else:
             suggested_actions.append("SHOULD: Review the scoped artifacts before delivery.")
         suggested_actions.append(
-            "MUST: Run anchor('gate', actions_taken=[...]) to close workflow obligations."
+            "MUST: Run anchor('gate') to close workflow obligations."
         )
 
     summary = (
