@@ -1851,14 +1851,12 @@ def snapshot_state(
                     remote_entries=remote_entries,
                 )
                 index_migrated = False
-            if manifests:
-                latest_created = max(str(item["created_at"]) for item in manifests)
-                latest = [item for item in manifests if item["created_at"] == latest_created]
-                if len(latest) != 1:
-                    raise RuntimeError("ambiguous latest durable snapshot")
-                existing = latest[0]
-            else:
-                existing = None
+            latest_created = max((str(item["created_at"]) for item in manifests), default=None)
+            latest = [item for item in manifests if item["created_at"] == latest_created]
+            # Concurrent writers can publish two manifests with the same created_at. Restore
+            # refuses that tie, but a new checkpoint is taken from the live database after both
+            # and supersedes them; refusing here would block every later write.
+            existing = latest[0] if len(latest) == 1 else None
             same_checkpoint = (
                 existing is not None
                 and existing["sha256"] == snapshot_sha256
@@ -1929,10 +1927,10 @@ def snapshot_state(
                     )
                 return result
             created = datetime.now(UTC)
-            if existing is not None:
-                latest = datetime.fromisoformat(existing["created_at"].replace("Z", "+00:00"))
-                if created <= latest:
-                    created = latest + timedelta(microseconds=1)
+            if latest_created is not None:
+                floor = datetime.fromisoformat(latest_created.replace("Z", "+00:00"))
+                if created <= floor:
+                    created = floor + timedelta(microseconds=1)
             created_at = created.isoformat(timespec="microseconds").replace("+00:00", "Z")
             checkpoint = re.sub(r"[^0-9TZ]", "", created_at)
             snapshot_id = f"{checkpoint}-{snapshot_sha256[:16]}"

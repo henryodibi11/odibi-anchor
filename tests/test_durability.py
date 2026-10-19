@@ -1063,6 +1063,48 @@ def test_changed_checkpoint_advances_past_equal_or_rolled_back_clock(
     )
 
 
+def test_next_checkpoint_supersedes_a_latest_tie_from_concurrent_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, durable, other = tmp_path / "live.db", tmp_path / "durable", tmp_path / "other"
+    durable.mkdir()
+    other.mkdir()
+    _database(source)
+    frozen = datetime(2026, 10, 19, 18, 15, 36, 444974, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(durability, "datetime", FrozenDateTime)
+    durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+    with sqlite3.connect(source) as connection:
+        connection.execute("INSERT INTO example(value) VALUES ('concurrent')")
+    # A second writer that listed the store before the first published uses the same instant.
+    durability.snapshot_state(source_db=source, durable_root=other, authority_id="work")
+    for path in (other / "work" / "snapshots").iterdir():
+        target = durable / "work" / "snapshots" / path.name
+        if not target.exists():
+            target.write_bytes(path.read_bytes())
+    tied = durability.list_snapshots(durable_root=durable, authority_id="work")["snapshots"]
+    assert len({item["created_at"] for item in tied}) == 1 < len(tied)
+    with pytest.raises(RuntimeError, match="ambiguous latest durable snapshot"):
+        durability.restore_latest(durable_root=durable, authority_id="work", destination_db=tmp_path / "tie.db")
+
+    with sqlite3.connect(source) as connection:
+        connection.execute("INSERT INTO example(value) VALUES ('after')")
+    third = durability.snapshot_state(source_db=source, durable_root=durable, authority_id="work")
+
+    assert third["action"] == "created"
+    assert third["manifest"]["created_at"] > tied[0]["created_at"]
+    restored = tmp_path / "restored.db"
+    durability.restore_latest(durable_root=durable, authority_id="work", destination_db=restored)
+    with sqlite3.connect(restored) as connection:
+        values = [row[0] for row in connection.execute("SELECT value FROM example ORDER BY id")]
+    assert values == ["alpha", "beta", "concurrent", "after"]
+
+
 def test_symlink_path_is_rejected(tmp_path: Path) -> None:
     durable = tmp_path / "durable"
     durable.mkdir()
