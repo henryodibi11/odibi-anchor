@@ -640,6 +640,7 @@ def bootstrap_managed_project(
     def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
         optional_managed_names = {
             "ANCHOR_DURABLE_ROOT",
+            "ANCHOR_TEST_PYTHON",
             "ANCHOR_RETENTION_DAYS",
             "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS",
         }

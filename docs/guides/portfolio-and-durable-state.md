@@ -281,6 +281,35 @@ summary as `exc.bootstrap_timings`. To measure cold and warm bootstraps on a tar
 credentials are not inherited by child processes. The helper performs no writes beyond the
 launcher's normal bootstrap effects.
 
+## Project test interpreter
+
+By default, `anchor("test")` and workflow pytest criteria run the project's tests with the
+Python interpreter that runs Anchor. A project whose tests need packages that Anchor's
+environment lacks (for example polars, deltalake or pyarrow) can name its own interpreter, per
+host, in the portfolio:
+
+```toml
+[projects."odibi".test_python]
+"desktop" = "C:\\Users\\henry\\odibi\\.venv\\Scripts\\python.exe"
+"amp-host" = "/home/user/odibi/.venv/bin/python"
+```
+
+Each key is a host ID and each value an absolute interpreter path. Only the owner sets it: no
+`anchor()` or MCP argument selects an interpreter. Bootstrap delivers it to the bound runtime as
+`ANCHOR_TEST_PYTHON` (also in `anchor portfolio prepare` and `resolve` output, for hosts that
+start the MCP server themselves). A process already bootstrapped with a different value must
+restart before it binds again.
+
+When it is set, Anchor starts its pytest runner with that interpreter and records that
+interpreter and its installed distributions, obtained by running it, as the measurement
+environment, so a change to that environment during a measurement or before `qualify` is still
+caught. The interpreter needs only the standard library (Python 3.9 or newer was checked) and
+pytest; Anchor itself does not have to be installed in it. `--timeout` is passed only when
+pytest-timeout is installed there. A missing, non-executable or pytest-less interpreter is refused
+with the reason, and no tests run. Without the field, behaviour is unchanged. Anchor versions
+before 0.3.40 reject `test_python` as an unknown portfolio field, so upgrade every host that reads
+the portfolio before adding it.
+
 ## Durable state lifecycle
 
 The live database and managed project artifact tree stay on local compute. Substantive authority

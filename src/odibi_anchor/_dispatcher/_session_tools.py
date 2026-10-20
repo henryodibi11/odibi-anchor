@@ -130,12 +130,20 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
     # isolation, stdin isolation, hermetic Git settings, and structured counts.
     pytest_args = ["--no-header", "-q", "--tb=short", "--color=no"]
 
-    # Add timeout only if pytest-timeout is installed
-    try:
-        import pytest_timeout  # noqa: F401
-        pytest_args.append(f"--timeout={timeout}")
-    except ImportError:
-        pass  # pytest-timeout not available — skip timeout flag
+    # An owner-configured project interpreter runs the suite; otherwise Anchor's own.
+    from odibi_anchor.pytest_runner import probe_test_python
+    test_python = probe_test_python()
+
+    # Add timeout only if pytest-timeout is installed in the interpreter that runs the tests
+    if test_python is not None:
+        if test_python["pytest_timeout"]:
+            pytest_args.append(f"--timeout={timeout}")
+    else:
+        try:
+            import pytest_timeout  # noqa: F401
+            pytest_args.append(f"--timeout={timeout}")
+        except ImportError:
+            pass  # pytest-timeout not available — skip timeout flag
 
     if target:
         if isinstance(target, (list, tuple)):
@@ -152,7 +160,10 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
     if mark:
         pytest_args.extend(["-m", mark])
 
-    summary_data, proc = yield pytest_args, {"cwd": root, "timeout": 600, "capture_output": True}
+    runner_options = {"cwd": root, "timeout": 600, "capture_output": True}
+    if test_python is not None:
+        runner_options["python"] = test_python["executable"]
+    summary_data, proc = yield pytest_args, runner_options
     cmd = proc.args
     if summary_data["timed_out"]:
         samples = {
