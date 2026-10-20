@@ -479,7 +479,15 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
 
 
 def runtime_environment() -> dict[str, Any]:
-    """Observe interpreter/distribution metadata, not unobservable host history."""
+    """Observe the test interpreter's distribution metadata, not unobservable host history.
+
+    With an owner-configured test interpreter, that interpreter is run to describe itself.
+    """
+    from odibi_anchor.pytest_runner import configured_environment, probe_test_python
+
+    test_python = probe_test_python()
+    if test_python is not None:
+        return configured_environment(test_python["executable"])
     return {"python": sys.version, "executable": str(Path(sys.executable).resolve()),
             "distributions": sorted(
                 [[d.metadata["Name"], d.version] for d in importlib.metadata.distributions()],

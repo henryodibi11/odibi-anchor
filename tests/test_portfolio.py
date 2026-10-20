@@ -71,6 +71,25 @@ def test_retention_configuration_round_trips_and_resolves_to_environment(tmp_pat
     assert "[durability.retention]" in path.read_text()
 
 
+def test_test_python_round_trips_and_resolves_only_for_its_host(tmp_path):
+    path = tmp_path / "anchor.toml"
+    portfolio = _portfolio(tmp_path)
+    python = str(tmp_path / "alpha" / ".venv" / "bin" / "python")
+    portfolio["projects"]["alpha"]["test_python"] = {"amp-host": python}
+
+    write_portfolio(path, portfolio)
+    loaded = load_portfolio(path)
+
+    assert loaded["projects"]["alpha"]["test_python"] == {"amp-host": python}
+    assert '[projects."alpha".test_python]' in path.read_text()
+    assert resolve_project(loaded, host_id="amp-host", project_id="alpha")["environment"][
+        "ANCHOR_TEST_PYTHON"] == python
+    assert "ANCHOR_TEST_PYTHON" not in resolve_project(loaded, host_id="remote", project_id="alpha")["environment"]
+    portfolio["projects"]["alpha"]["test_python"] = {"amp-host": "relative/python"}
+    with pytest.raises(ValueError, match=r"test_python\.amp-host must be a non-empty absolute path"):
+        write_portfolio(tmp_path / "bad.toml", portfolio)
+
+
 @pytest.mark.parametrize(
     "retention, message",
     [

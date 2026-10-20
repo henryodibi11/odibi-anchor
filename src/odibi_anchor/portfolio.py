@@ -90,8 +90,14 @@ def portfolio_schema() -> dict[str, Any]:
         "projects": {
             "key": "safe_id",
             "required": ["targets"],
-            "optional": ["repository", "artifact_namespace"],
+            "optional": ["repository", "artifact_namespace", "test_python"],
             "targets": {"key": "host_id", "value": "absolute_path"},
+            "test_python": {
+                "key": "host_id",
+                "value": "absolute path of the Python interpreter that runs this project's tests",
+                "default": "the interpreter running Anchor",
+                "effect": "anchor('test') and workflow pytest criteria run and describe this interpreter",
+            },
         },
         "personas": {"key": "safe_id", "fields": ["task_mode", "memory_scope"], "advisory": True},
     }
@@ -231,7 +237,12 @@ def _structural(portfolio: Any) -> dict[str, Any]:
     for project_id, project_value in projects.items():
         _safe_project_id(project_id)
         project = _table(project_value, f"projects.{project_id}")
-        _check_keys(project, {"repository", "artifact_namespace", "targets"}, f"projects.{project_id}")
+        _check_keys(project, {"repository", "artifact_namespace", "targets", "test_python"},
+                    f"projects.{project_id}")
+        test_python = _table(project.get("test_python", {}), f"projects.{project_id}.test_python")
+        for python_host, python in test_python.items():
+            _safe_id(python_host, "test_python host ID")
+            _absolute(python, f"projects.{project_id}.test_python.{python_host}")
         for key in ("repository", "artifact_namespace"):
             if key in project and not isinstance(project[key], str):
                 raise ValueError(f"projects.{project_id}.{key} must be a string")
@@ -348,6 +359,11 @@ def validate_portfolio(portfolio: Any, *, host_id: str | None = None) -> dict[st
                 na.append({"field": f"projects.{key}.{field}", "reason": "Optional metadata is not required for routing."})
         if not project.get("targets"):
             missing(f"projects.{key}.targets", "At least one host target is required for launch.")
+        for python_host in sorted(project.get("test_python", {})):
+            configured.append({
+                "field": f"projects.{key}.test_python.{python_host}",
+                "reason": "Tests on this host run with this interpreter; it is checked when tests run.",
+            })
 
     selected: dict[str, Any] | None = None
     if host_id is None:
@@ -473,6 +489,10 @@ def _render(portfolio: dict[str, Any], *, comments: bool = False) -> bytes:
         lines += ["", f"[projects.{_quote(project_id)}.targets]"]
         for target_host in sorted(project.get("targets", {})):
             lines.append(f"{_quote(target_host)} = {_quote(project['targets'][target_host])}")
+        if project.get("test_python"):
+            lines += ["", f"[projects.{_quote(project_id)}.test_python]"]
+            for python_host in sorted(project["test_python"]):
+                lines.append(f"{_quote(python_host)} = {_quote(project['test_python'][python_host])}")
     for persona_id in sorted(root.get("personas", {})):
         persona = root["personas"][persona_id]
         lines += ["", f"[personas.{_quote(persona_id)}]"]
@@ -726,6 +746,11 @@ def resolve_project(
             **(
                 {"ANCHOR_DURABLE_ROOT": portfolio["hosts"][host]["durable_root"]}
                 if portfolio["hosts"][host].get("durable_root")
+                else {}
+            ),
+            **(
+                {"ANCHOR_TEST_PYTHON": projects[selected[0]]["test_python"][host]}
+                if host in projects[selected[0]].get("test_python", {})
                 else {}
             ),
             **(

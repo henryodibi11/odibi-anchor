@@ -39,6 +39,18 @@ PRESERVED_ENV_NAMES = frozenset({
     "ANCHOR_REQUIRE_INSTALLED_QUALIFICATION",
     "ANCHOR_OFFLINE_WHEELHOUSE",
 })
+#: Owner-configured interpreter for project tests, set only through the portfolio
+#: (``projects.<id>.test_python.<host>``) and delivered in the bound runtime environment.
+TEST_PYTHON_ENV = "ANCHOR_TEST_PYTHON"
+_PROBE = (
+    "import importlib.util, json, sys; import pytest; "
+    "print(json.dumps({'pytest_timeout': importlib.util.find_spec('pytest_timeout') is not None}))"
+)
+_ENVIRONMENT = (
+    "import importlib.metadata, json, sys; print(json.dumps({'python': sys.version, "
+    "'distributions': sorted([[d.metadata['Name'], d.version] for d in importlib.metadata.distributions()], "
+    "key=lambda item: (item[0] or '', item[1]))}))"
+)
 COUNT_FIELDS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
 MAX_SKIP_REASONS = 20
 MAX_SKIP_REASON_CHARS = 300
@@ -87,19 +99,69 @@ def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _run_configured(python: str, code: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [python, "-B", "-c", code], env=child_environment(), stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=120,
+    )
+
+
+def probe_test_python() -> dict[str, Any] | None:
+    """Check the owner-configured test interpreter, or return None when none is configured.
+
+    The runner needs only the standard library and pytest in that interpreter; Anchor
+    itself need not be installed there.
+    """
+    raw = os.environ.get(TEST_PYTHON_ENV)
+    if not raw:
+        return None
+    fix = (f"Set projects.<id>.test_python.<host> in the portfolio to an executable "
+           f"interpreter, then restart and rebootstrap ({TEST_PYTHON_ENV}={raw}).")
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ValueError(f"the configured test interpreter must be an absolute path. {fix}")
+    if not path.is_file():
+        raise ValueError(f"the configured test interpreter does not exist or is not a file. {fix}")
+    if not os.access(path, os.X_OK):
+        raise ValueError(f"the configured test interpreter is not executable. {fix}")
+    try:
+        probe = _run_configured(raw, _PROBE)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"the configured test interpreter could not run: {exc}. {fix}") from exc
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip().splitlines()[-1:] or ["no output"]
+        raise ValueError(
+            f"pytest is not importable in the configured test interpreter ({detail[0]}). "
+            f"Install pytest into that environment, or {fix[0].lower()}{fix[1:]}"
+        )
+    return {"executable": raw, **json.loads(probe.stdout.strip().splitlines()[-1])}
+
+
+def configured_environment(python: str) -> dict[str, Any]:
+    """Describe the configured test interpreter by running it, never Anchor's own."""
+    result = _run_configured(python, _ENVIRONMENT)
+    if result.returncode != 0:
+        raise ValueError(f"the configured test interpreter could not report its distributions: "
+                         f"{(result.stderr or '').strip()[-300:]}")
+    observed = json.loads(result.stdout.strip().splitlines()[-1])
+    return {"python": observed["python"], "executable": python,
+            "distributions": observed["distributions"], "source": TEST_PYTHON_ENV}
+
+
 def run_pytest(
     pytest_args: Sequence[str],
     *,
     cwd: str | os.PathLike[str],
     timeout: float | None = None,
     capture_output: bool = False,
+    python: str | None = None,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str] | None]:
-    """Run pytest through this interpreter and return its bounded hook summary."""
+    """Run pytest through this interpreter, or ``python``, and return its bounded hook summary."""
     started = time.monotonic()
     summary_path: Path | None = None
     try:
         summary_path = _new_summary_path()
-        env, cmd = _launch_spec(pytest_args, summary_path)
+        env, cmd = _launch_spec(pytest_args, summary_path, python)
         try:
             proc = subprocess.run(
                 cmd,
@@ -130,6 +192,7 @@ def start_pytest(
     cwd: str | os.PathLike[str],
     timeout: float | None = None,
     capture_output: bool = False,
+    python: str | None = None,
 ) -> PytestProcess:
     """Launch the same hermetic pytest child as `run_pytest` without waiting for it.
 
@@ -142,7 +205,8 @@ def start_pytest(
     """
     if timeout is not None and timeout < 0:
         raise ValueError("timeout must be non-negative")
-    return PytestProcess(pytest_args, cwd=cwd, timeout=timeout, capture_output=capture_output)
+    return PytestProcess(pytest_args, cwd=cwd, timeout=timeout, capture_output=capture_output,
+                         python=python)
 
 
 class PytestProcess:
@@ -164,6 +228,7 @@ class PytestProcess:
         cwd: str | os.PathLike[str],
         timeout: float | None,
         capture_output: bool,
+        python: str | None = None,
     ) -> None:
         self.timeout = timeout
         self.capture_output = capture_output
@@ -174,7 +239,7 @@ class PytestProcess:
         self._stderr: Any = None
         self._summary_path: Path | None = _new_summary_path()
         try:
-            env, self.args = _launch_spec(pytest_args, self._summary_path)
+            env, self.args = _launch_spec(pytest_args, self._summary_path, python)
             if timeout is not None:
                 env[DEADLINE_ENV] = repr(float(timeout) + CHILD_DEADLINE_GRACE_S)
             if capture_output:
@@ -345,11 +410,13 @@ def _new_summary_path() -> Path:
     return summary_path
 
 
-def _launch_spec(pytest_args: Sequence[str], summary_path: Path) -> tuple[dict[str, str], list[str]]:
+def _launch_spec(
+    pytest_args: Sequence[str], summary_path: Path, python: str | None = None,
+) -> tuple[dict[str, str], list[str]]:
     env = child_environment()
     env[SUMMARY_ENV] = str(summary_path)
     cmd = [
-        sys.executable,
+        python or sys.executable,
         "-B",
         str(Path(__file__).resolve()),
         "-p",

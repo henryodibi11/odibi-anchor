@@ -93,6 +93,52 @@ def finish_producer(anchor):
                   output_format="dict")["terminal_task_record"]
 
 
+def _wrapped_python(path, *, marker, flags=""):
+    """A configured interpreter: records each launch, then runs the real Python."""
+    import os
+    import sys
+
+    path.write_text(f'#!/bin/sh\necho "$@" >> {marker}\nexec {sys.executable} {flags} "$@"\n')
+    os.chmod(path, 0o755)
+    return str(path)
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX shell wrapper")
+def test_configured_test_python_runs_measurements_and_names_itself_in_evidence(runtime, monkeypatch, tmp_path):
+    anchor, _, _, _ = runtime
+    implement(runtime)
+    marker = tmp_path / "launches.log"
+    python = _wrapped_python(tmp_path / "project-python", marker=marker)
+    monkeypatch.setenv("ANCHOR_TEST_PYTHON", python)
+    # v0.3.39 always ran pytest_runner.py with Anchor's own sys.executable.
+    result = anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    assert result["metrics"]["passed"] == 1
+    assert "pytest_runner.py" in marker.read_text()
+    measured = anchor("workflow", output_format="dict")["state"]["measurements"]["report"]
+    assert measured["status"] == "satisfied"
+    assert measured["environment"]["executable"] == python
+    assert measured["environment"]["source"] == "ANCHOR_TEST_PYTHON"
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX shell wrapper")
+@pytest.mark.parametrize("problem", ["missing", "not_executable", "no_pytest"])
+def test_unusable_configured_test_python_is_refused(runtime, monkeypatch, tmp_path, problem):
+    import os
+
+    anchor = runtime[0]
+    python = str(tmp_path / "absent-python")
+    if problem == "not_executable":
+        python = _wrapped_python(tmp_path / "project-python", marker=tmp_path / "log")
+        os.chmod(python, 0o644)
+    elif problem == "no_pytest":  # -S drops site-packages, so pytest cannot import
+        python = _wrapped_python(tmp_path / "project-python", marker=tmp_path / "log", flags="-S")
+    monkeypatch.setenv("ANCHOR_TEST_PYTHON", python)
+    expected = {"missing": "does not exist", "not_executable": "not executable",
+                "no_pytest": "pytest is not importable"}[problem]
+    with pytest.raises(ValueError, match=f"{expected}.*projects.<id>.test_python.<host>"):
+        anchor("test", target=["test_report.py"], output_format="dict")
+
+
 def test_public_lifecycle_requires_measurements_review_and_human_authority(runtime, monkeypatch):
     anchor, _, _, draft = runtime
     implemented = implement(runtime)
