@@ -2,6 +2,31 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.37] - 2026-10-20
+
+Workflow plans: every acceptance problem up front, and a destination for local-only projects.
+
+### Added
+
+- **`workflow check_plan`** (read-only, takes `plan` only, stores nothing) returns
+  `{ready, problems}` with every problem `accept_plan` would refuse, including an unsupported
+  destination kind or keys. An agent can correct a plan before `create`, so the producer's
+  `accept_plan` succeeds the first time. Before this, a missing field surfaced only at
+  `accept_plan`, after the owner approved, and fixing it needed a replan, which made the bound
+  producer stale: close it, open a fresh one and approve again. A DeepSeek V4.1 Flash run spent
+  three owner approvals that way without starting work.
+- **Draft workflow results carry `acceptance_check`.** `create`, `replan` and `status` on a draft
+  return `{ready, problems}`.
+- **`local_git_ref` destination** (`{"kind": "local_git_ref", "ref": "refs/heads/main"}`) for
+  projects with no remote: a fully qualified branch or tag of the target repository.
+  `verify_delivery` reads that local ref and requires the qualified commit and a clean worktree.
+
+### Changed
+
+- **`accept_plan` lists every unready field in one refusal**, not only the first, then says to
+  replan. It now also refuses an unsupported destination kind or keys, which delivery could
+  never accept.
+
 ## [0.3.36] - 2026-10-19
 
 Durability: a latest-snapshot tie no longer blocks every later write.
