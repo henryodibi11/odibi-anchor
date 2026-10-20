@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.39] - 2026-10-20
+
+Learning on a workflow producer no longer strands its candidate.
+
+### Fixed
+
+- **`learning capture` and `learning assess` on a workflow producer before `workflow implemented`
+  are refused and store nothing.** Either call opens the task's learning obligation, and
+  `accept_plan` and `implemented` refuse a task that has one, so an early capture froze the
+  producer: `implemented` was refused, `qualify` then failed, and finished, reviewed work ended
+  unqualified. The refusal gives the order (implemented, measure, review, gate, learning assess,
+  then qualify) and points to `learning safe_stop` for stopping without delivering. Read-only,
+  unbound and review tasks, a producer whose workflow already has a candidate or is not active,
+  and `safe_stop` are unchanged.
+- **The frozen-task refusal names its cause** (the task is closed, has a terminal record, or has a
+  learning obligation from a gate, capture or assess) and gives the recovery path, instead of
+  "gated or closed tasks cannot produce candidates; replan at a safe boundary".
+
 ## [0.3.38] - 2026-10-20
 
 Workflow plans are complete before they are stored; producers inherit the plan's risk.
