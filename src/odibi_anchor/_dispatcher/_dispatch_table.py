@@ -39,7 +39,7 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "task":         'anchor("task", "description", goal="...", mode="...", problem="PRB-...", spec="...", work_item="WI-YYYY-NNNN")',
     "task_rebind":  'anchor("task_rebind", task_window_id="ltw_...")  # exact ID resolves interrupted-task ambiguity',
     "task_adoption": 'anchor("task_adoption", "inspect|request|withdraw", ...)  # authenticated takeover of dirty work only',
-    "workflow":     'anchor("workflow", "status|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
+    "workflow":     'anchor("workflow", "status|check_plan|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
     "gate":         'anchor("gate")  # no args — gate derives ALL evidence from session state',
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',
@@ -758,7 +758,11 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`accept_plan`, supply nonempty scope, explicit exclusions/constraints/risks/stop_conditions '
         'arrays, unresolved_decisions=[], destination and criteria. Declare exact source_paths '
         'or artifact_paths for candidate collection. Optional required_children pin workflow_id '
-        'and plan_sha256; required children must finish before parent qualification.',
+        'and plan_sha256; required children must finish before parent qualification. '
+        '`check_plan` (read-only, plan only, stores nothing) returns {ready, problems} with every '
+        'problem accept_plan would refuse: fix them all and check again before `create`, so the '
+        'producer\'s accept_plan succeeds the first time. Draft create, replan and status results '
+        'also carry acceptance_check {ready, problems}.',
         'Artifact drafts retain a pre-plan byte/metadata baseline. Changed planned outputs '
         'cannot be admitted or laundered by registering them later. Ancillary planning notes '
         'remain writable; historical missing baselines require recovery, not backfilling.',
@@ -796,7 +800,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'Missing/unsupported contracts stay unavailable; missing evidence stays unsatisfied. '
         'Destination bytes alone never discharge these obligations; delivered is not completed.',
         '`destination`: managed_artifacts; github_ref with repository/ref; github_release with '
-        'repository/tag; pypi_release with name/version; databricks_workspace_files with host. '
+        'repository/tag; pypi_release with name/version; databricks_workspace_files with host; '
+        'local_git_ref with ref (fully qualified branch or tag of the target repository, for a '
+        'project with no remote; verify_delivery reads that local ref). '
         'Only supported exact candidate/readback combinations qualify; workspace FILE bytes only, '
         'not arbitrary notebooks, jobs or tables. GitHub origin must match.',
         'Recovery: block(reason=..., blocker_kind=...) preserves evidence. outcome_unknown requires '

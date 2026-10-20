@@ -880,7 +880,7 @@ def _forward(action: str, arg0: str, fields: dict[str, Any]) -> str:
 @mcp.tool()
 def anchor_workflow(
     command: Literal[
-        "status", "create", "accept_plan", "implemented", "review", "qualify",
+        "status", "check_plan", "create", "accept_plan", "implemented", "review", "qualify",
         "check_artifact", "prepare_delivery", "request_delivery_approval",
         "prepare_revocation", "revoke_delivery", "verify_delivery", "block", "resume",
         "cancel", "replan",
@@ -906,12 +906,13 @@ def anchor_workflow(
 
     Args:
         command: the workflow subcommand.
-        workflow_id: every command except create.
+        workflow_id: every command except create and check_plan.
         request_id: create and every transition: a new unique ID (reuse one only to retry the
             identical call).
         expected_generation: every transition except create: the generation from the latest
             workflow status.
-        plan: create and replan only.
+        plan: check_plan, create and replan only. Send check_plan first: it lists every
+            problem accept_plan would refuse and stores nothing.
         findings: review only: [] or finding objects.
         reason: replan, block and cancel only.
         blocker_kind: block only.

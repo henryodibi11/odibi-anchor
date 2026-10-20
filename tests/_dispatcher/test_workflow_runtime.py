@@ -435,6 +435,25 @@ def test_blocked_unknown_delivery_can_be_reconciled(approved_runtime):
     assert verified["recovery"]["outcome"] == "delivered"
 
 
+def test_check_plan_lists_every_acceptance_problem_and_stores_nothing(runtime):
+    anchor, _, _, draft = runtime
+    plan = {key: value for key, value in draft["plan"].items() if key not in {"criteria", "risks"}}
+    plan["destination"] = {"kind": "github", "repository": "acme/app"}
+    checked = anchor("workflow", "check_plan", plan=plan, output_format="dict")
+    assert checked["ready"] is False and checked["state_changed"] is False
+    problems = " | ".join(checked["problems"])
+    assert len(checked["problems"]) == 3
+    for expected in ("plan.risks must be an explicit array", "plan.destination.kind must be one of",
+                     "plan requires acceptance criteria"):
+        assert expected in problems
+    malformed = anchor("workflow", "check_plan", plan={**plan, "risk": "none"}, output_format="dict")
+    assert malformed["ready"] is False and "plan.risk" in malformed["problems"][0]
+    assert anchor("workflow", "check_plan", plan=draft["plan"], output_format="dict")["problems"] == []
+    status = anchor("workflow", "status", workflow_id=draft["workflow_id"], output_format="dict")
+    assert status["state"] == draft
+    assert status["acceptance_check"] == {"ready": True, "problems": []}
+
+
 def test_replan_retry_acknowledges_receipt_without_reauthorizing_old_task(runtime):
     anchor, _, _, _ = runtime
     state = implement(runtime)

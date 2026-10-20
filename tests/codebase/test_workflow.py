@@ -461,8 +461,10 @@ def test_draft_rejects_list_fields_with_wrong_shape_at_create(tmp_path, owner, p
     partial = {key: value for key, value in plan.items() if key not in {"scope", "criteria"}}
     draft = workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial", plan=partial)
     assert draft["progress"] == "draft"
-    # accept_plan takes no plan; its refusal must say how to complete the stored draft.
-    with pytest.raises(ValueError, match=r"plan\.scope must be an explicit array; .*workflow replan"):
+    # accept_plan takes no plan; its refusal must list every gap (not only the first) and
+    # say how to complete the stored draft.
+    with pytest.raises(ValueError, match=r"plan\.scope must be an explicit array.*; "
+                                         r"plan requires acceptance criteria.*workflow replan"):
         workflow.transition_workflow(
             tmp_path / "authority.db", owner=owner, workflow_id=draft["workflow_id"],
             expected_generation=draft["generation"], request_id="accept", operation="accept_plan",
