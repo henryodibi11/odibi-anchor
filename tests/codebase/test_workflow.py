@@ -250,9 +250,10 @@ def test_replan_invalidates_candidate_and_preserves_historical_packet(run, owner
 
 
 def test_unresolved_plan_is_not_implementation_authority(run, plan):
-    run("replan", {"reason": "new question", "plan": {**plan, "unresolved_decisions": ["owner decision"]}})
-    with pytest.raises(workflow.WorkflowError, match="resolve consequential"):
-        run("accept_plan", {"baseline": {"head": "a" * 40}, "authority_ref": "request:owner"})
+    with pytest.raises(workflow.WorkflowError, match=r"resolve consequential.*Nothing was stored"):
+        run("replan", {"reason": "new question", "plan": {**plan, "unresolved_decisions": ["owner decision"]}})
+    assert workflow.read_workflow(run.path, owner=run.initial["owner"],
+                                  workflow_id=run.initial["workflow_id"]) == run.initial
     with pytest.raises(workflow.WorkflowError, match="cannot implemented"):
         run("implemented", {"candidate": {"identity": "b" * 40}})
 
@@ -458,14 +459,12 @@ def test_draft_rejects_list_fields_with_wrong_shape_at_create(tmp_path, owner, p
     malformed = {**plan, field: "parser"}
     with pytest.raises(ValueError, match=rf"plan\.{field} must be an explicit array"):
         workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="create", plan=malformed)
+    # An incomplete draft is never stored: a producer bound to it would go stale on the
+    # replan needed to complete it. The refusal lists every gap, not only the first.
     partial = {key: value for key, value in plan.items() if key not in {"scope", "criteria"}}
-    draft = workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial", plan=partial)
-    assert draft["progress"] == "draft"
-    # accept_plan takes no plan; its refusal must list every gap (not only the first) and
-    # say how to complete the stored draft.
     with pytest.raises(ValueError, match=r"plan\.scope must be an explicit array.*; "
-                                         r"plan requires acceptance criteria.*workflow replan"):
-        workflow.transition_workflow(
-            tmp_path / "authority.db", owner=owner, workflow_id=draft["workflow_id"],
-            expected_generation=draft["generation"], request_id="accept", operation="accept_plan",
-            payload={"baseline": {"head": "a" * 40}, "authority_ref": "request:owner"})
+                                         r"plan requires acceptance criteria.*Nothing was stored"):
+        workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial", plan=partial)
+    # A stored draft would make this retry a conflicting request_id reuse.
+    completed = workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial", plan=plan)
+    assert completed["generation"] == 0 and completed["progress"] == "draft"

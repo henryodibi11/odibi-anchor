@@ -99,6 +99,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             state = create_workflow(
                 path, owner=workflow_owner(session_state), request_id=request_id, plan=plan,
                 artifact_baseline=collect_artifact_baseline(plan, session_state=session_state),
+                destination_keys=DESTINATION_KEYS,
             )
         else:
             prior = None
@@ -189,6 +190,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         )
                         expected_generation = state["generation"]
                 elif command == "replan":
+                    require_acceptable(plan, DESTINATION_KEYS, stored=False)
                     if state["progress"] == "draft" and state["plan"]["execution_mode"] == "artifact_only":
                         check_artifact_baseline(state, session_state=session_state, path=path)
                     payload = {"plan": plan, "reason": reason,
@@ -214,6 +216,21 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     packet.pop("packet_sha256", None)
     packet = {**packet, "packet_sha256": digest(packet)}
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
+
+
+def workflow_plan_risk(path, *, session_state, workflow_id, trust_domain):
+    """Read the plan risk for a producer task that states none; None if unreadable.
+
+    An unreadable workflow is left to binding, which reports the exact refusal.
+    """
+    import copy
+
+    candidate = copy.copy(session_state)
+    candidate.trust_domain = trust_domain
+    try:
+        return read_workflow(path, owner=workflow_owner(candidate), workflow_id=workflow_id)["plan"]["risk"]
+    except (WorkflowError, ValueError):
+        return None
 
 
 def bind_task_workflow(path, *, session_state, workflow_id, task_call=None):

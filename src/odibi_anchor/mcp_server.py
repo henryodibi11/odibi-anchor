@@ -912,7 +912,8 @@ def anchor_workflow(
         expected_generation: every transition except create: the generation from the latest
             workflow status.
         plan: check_plan, create and replan only. Send check_plan first: it lists every
-            problem accept_plan would refuse and stores nothing.
+            problem accept_plan would refuse and stores nothing. create and replan refuse
+            a plan with any of those problems.
         findings: review only: [] or finding objects.
         reason: replan, block and cancel only.
         blocker_kind: block only.

@@ -93,8 +93,11 @@ REFS = {
     "test": re.compile(r"tests/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.py(?:::[A-Za-z0-9_\[\].,=-]{1,128}){0,8}\Z"),
     "session": re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z"),
 }
+# Only a // that starts a token and is followed by a host, so code such as len//2 passes.
+_PROTOCOL_RELATIVE = (r"(?<![^\s(\[{<\"'`=,])//(?:\[[0-9a-f:.]+\]|\d{1,3}(?:\.\d{1,3}){3}"
+                      r"|(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*|[a-z0-9-]+(?=[:/]))")
 SENSITIVE = re.compile(
-    r"\b[a-z][a-z0-9+.-]{1,31}://|//\S+|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cloud|app|local)\b|\b(?:token|password|secret|authorization|api[_-]?key)\s*[:=]|\bbearer\s+[A-Za-z0-9._~+/-]+=*|\b(?:x-amz-signature|x-goog-signature|signature|sig|se|sp|sv)=|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?<![A-Za-z0-9._-])/(?:home|workspace|Users|dbfs|Volumes)(?:/|(?=$|\s|[^A-Za-z0-9._-]))",
+    r"\b[a-z][a-z0-9+.-]{1,31}://|" + _PROTOCOL_RELATIVE + r"|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cloud|app|local)\b|\b(?:token|password|secret|authorization|api[_-]?key)\s*[:=]|\bbearer\s+[A-Za-z0-9._~+/-]+=*|\b(?:x-amz-signature|x-goog-signature|signature|sig|se|sp|sv)=|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?<![A-Za-z0-9._-])/(?:home|workspace|Users|dbfs|Volumes)(?:/|(?=$|\s|[^A-Za-z0-9._-]))",
     re.I,
 )
 
@@ -133,7 +136,7 @@ _SENSITIVE_CATEGORIES = (
     ("an absolute host path (/home, /workspace, /Users, /dbfs or /Volumes); use a "
      "repository-relative path and cite locations as file evidence",
      re.compile(r"(?<![A-Za-z0-9._-])/(?:home|workspace|Users|dbfs|Volumes)(?:/|(?=$|\s|[^A-Za-z0-9._-]))", re.I)),
-    ("a URL or protocol-relative link", re.compile(r"\b[a-z][a-z0-9+.-]{1,31}://|//\S+", re.I)),
+    ("a URL or protocol-relative link", re.compile(r"\b[a-z][a-z0-9+.-]{1,31}://|" + _PROTOCOL_RELATIVE, re.I)),
     ("an email address", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b", re.I)),
     ("a hostname such as name.com, .io, .dev or .local",
      re.compile(r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cloud|app|local)\b", re.I)),

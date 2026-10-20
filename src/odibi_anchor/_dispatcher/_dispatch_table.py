@@ -754,15 +754,17 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`create`: requires an accepted task in an explicit managed project/trust domain, `plan` '
         'and `request_id`. Start in read-only analysis. The draft grants no edit permission. '
         'Close the inquiry, then bind its `workflow_id` on a fresh producer task.',
-        '`plan`: schema_version=1, goal, risk (low/medium/high), execution_mode. Before '
-        '`accept_plan`, supply nonempty scope, explicit exclusions/constraints/risks/stop_conditions '
+        '`plan`: schema_version=1, goal, risk (low/medium/high), execution_mode. `create` and '
+        '`replan` also require nonempty scope, explicit exclusions/constraints/risks/stop_conditions '
         'arrays, unresolved_decisions=[], destination and criteria. Declare exact source_paths '
         'or artifact_paths for candidate collection. Optional required_children pin workflow_id '
         'and plan_sha256; required children must finish before parent qualification. '
         '`check_plan` (read-only, plan only, stores nothing) returns {ready, problems} with every '
-        'problem accept_plan would refuse: fix them all and check again before `create`, so the '
-        'producer\'s accept_plan succeeds the first time. Draft create, replan and status results '
-        'also carry acceptance_check {ready, problems}.',
+        'problem accept_plan would refuse. `create` and `replan` refuse an unready plan with the '
+        'same problems and store nothing, so a bound producer never goes stale on a fixing replan: '
+        'fix them all with check_plan first. Draft create, replan and status results '
+        'also carry acceptance_check {ready, problems}. A producer task that states no risk '
+        'inherits the plan risk; an explicit lower risk is refused.',
         'Artifact drafts retain a pre-plan byte/metadata baseline. Changed planned outputs '
         'cannot be admitted or laundered by registering them later. Ancillary planning notes '
         'remain writable; historical missing baselines require recovery, not backfilling.',

@@ -19,6 +19,12 @@ from tests.fixtures.fake_databricks.crash import CrashInjector, InjectedCrash
 HOST = "local"
 
 
+# create_workflow refuses a plan that is not ready for acceptance.
+READY_PLAN = {"scope": ["fixture"], "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
+              "unresolved_decisions": [], "destination": {"kind": "managed_artifacts"},
+              "criteria": [{"id": "AC1", "expected": "fixture holds", "method": "pytest"}]}
+
+
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -407,7 +413,7 @@ def test_workflow_bound_to_prior_target_names_the_receipt(deployment, targets):
     database = deployment.state / ".agent_memory.db"
     owner = {"project_id": "alpha", "target_root": str(old), "artifact_root": str(deployment.artifact()),
              "anchor_home": str(deployment.state.resolve()), "trust_domain": "work"}
-    plan = {"schema_version": 1, "goal": "Historical work.", "risk": "low", "execution_mode": "read_only"}
+    plan = {"schema_version": 1, "goal": "Historical work.", "risk": "low", "execution_mode": "read_only", **READY_PLAN}
     created = workflow.create_workflow(database, owner=owner, request_id="history", plan=plan)
     workflow.transition_workflow(database, owner=owner, workflow_id=created["workflow_id"], expected_generation=0,
                                  request_id="history-cancel", operation="cancel", payload={"reason": "done"})
@@ -430,7 +436,7 @@ def test_non_terminal_workflow_blocks_with_its_exact_id(deployment, targets):
     workflow = _module("odibi_anchor.codebase._workflow")
     owner = {"project_id": "alpha", "target_root": str(old), "artifact_root": str(deployment.artifact()),
              "anchor_home": str(deployment.state.resolve()), "trust_domain": "work"}
-    plan = {"schema_version": 1, "goal": "Live work.", "risk": "low", "execution_mode": "read_only"}
+    plan = {"schema_version": 1, "goal": "Live work.", "risk": "low", "execution_mode": "read_only", **READY_PLAN}
     live = workflow.create_workflow(deployment.state / ".agent_memory.db", owner=owner, request_id="live", plan=plan)
 
     with pytest.raises(Exception) as refused:
@@ -503,7 +509,7 @@ def test_rollback_after_a_new_epoch_started_refuses_without_writing_then_resume_
     workflow.create_workflow(deployment.state / ".agent_memory.db", owner={
         "project_id": "alpha", "target_root": str(new), "artifact_root": str(artifact),
         "anchor_home": str(deployment.state.resolve()), "trust_domain": "work",
-    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only"})
+    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only", **READY_PLAN})
     before = _snapshot_bytes(deployment)
 
     with pytest.raises(Exception) as refused:
@@ -606,7 +612,7 @@ def test_byte_identical_new_epoch_after_archive_still_counts_as_new(deployment, 
     _module("odibi_anchor.codebase._workflow").create_workflow(deployment.state / ".agent_memory.db", owner={
         "project_id": "alpha", "target_root": str(new), "artifact_root": str(artifact),
         "anchor_home": str(deployment.state.resolve()), "trust_domain": "work",
-    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only"})
+    }, request_id="live-on-new", plan={"schema_version": 1, "goal": "Live.", "risk": "low", "execution_mode": "read_only", **READY_PLAN})
 
     with pytest.raises(Exception) as refused:
         deployment.move(source=old, destination=new, rollback=True)

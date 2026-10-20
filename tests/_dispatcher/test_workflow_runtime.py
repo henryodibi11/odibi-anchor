@@ -449,6 +449,15 @@ def test_check_plan_lists_every_acceptance_problem_and_stores_nothing(runtime):
     malformed = anchor("workflow", "check_plan", plan={**plan, "risk": "none"}, output_format="dict")
     assert malformed["ready"] is False and "plan.risk" in malformed["problems"][0]
     assert anchor("workflow", "check_plan", plan=draft["plan"], output_format="dict")["problems"] == []
+    # create and replan refuse the same plan with the same problems and store nothing, so a
+    # bound producer never goes stale on the replan an incomplete draft would need.
+    with pytest.raises(ValueError) as created:
+        anchor("workflow", "create", plan=plan, request_id="unready", output_format="dict")
+    with pytest.raises(ValueError) as replanned:
+        advance(anchor, "replan", plan=plan, reason="complete the plan")
+    for refusal in (created, replanned):
+        assert "plan is not ready for acceptance: " + "; ".join(checked["problems"]) in str(refusal.value)
+        assert "Nothing was stored" in str(refusal.value)
     status = anchor("workflow", "status", workflow_id=draft["workflow_id"], output_format="dict")
     assert status["state"] == draft
     assert status["acceptance_check"] == {"ready": True, "problems": []}

@@ -38,7 +38,7 @@ Substantial problem: `anchor("problem", "create", title="...")`; capture stable 
 4. anchor("task", "describe intended work", goal="state intended outcome", mode="analysis",
            acceptance_criteria=["state how completion will be verified"])
                      → read-only inquiry plus bounded task-aware memory_context selections
-   Before implementation: anchor("help", "workflow") → create a bounded draft, close the inquiry,
+   Before implementation: anchor("help", "workflow") → check_plan until ready, create the draft, close the inquiry,
    accept a fresh producer task with workflow_id + explicit project/trust, then accept_plan.
    A draft or a successful task-window gate grants no source or delivery authority.
 5. review task memory → before source edits, acknowledge bounded selections or none

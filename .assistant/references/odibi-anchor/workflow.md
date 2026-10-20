@@ -1050,7 +1050,9 @@ domain on the task (or through the configured `ANCHOR_TRUST_DOMAIN`), and create
 bounded workflow plan in a read-only investigation task using `anchor("workflow", "create", ...)`.
 The governance event does not grant artifact or source edit permission. Close the
 inquiry's applicable task obligations before accepting the producer task.
-Use `anchor("help", "workflow")` for the plan schema. Bind the returned workflow ID
+Use `anchor("help", "workflow")` for the plan schema. Before `create`, run
+`anchor("workflow", "check_plan", plan=...)` and fix every listed problem; `create` and
+`replan` refuse a plan that is not ready for acceptance and store nothing. Bind the returned workflow ID
 on a fresh source or substantive artifact task, then accept the plan before editing. Creating a missing
 project still requires separate owner approval. This migration does not authorize
 plain non-Git source edits or any external delivery action.
