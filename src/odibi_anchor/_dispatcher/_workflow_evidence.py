@@ -40,17 +40,30 @@ def _accepted_task(path, session_state, task_window_id, *, require_open=False):
             raise WorkflowError("wrong_authority", "workflow task belongs to another exact authority")
         if require_open:
             tables = {item[0] for item in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            frozen = connection.execute(
+            causes = []
+            if connection.execute(
                 "SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'",
                 (task_window_id,),
-            ).fetchone()
-            for table in ("terminal_task_records", "learning_obligations"):
-                if table in tables:
-                    frozen = frozen or connection.execute(
-                        f"SELECT 1 FROM {table} WHERE task_window_id=?", (task_window_id,),
-                    ).fetchone()
-            if frozen:
-                raise WorkflowError("wrong_authority", "gated or closed tasks cannot produce candidates; replan at a safe boundary")
+            ).fetchone():
+                causes.append("the task is closed")
+            for table, cause in (
+                ("terminal_task_records", "the task has a terminal record (learning assess or safe_stop finished it)"),
+                ("learning_obligations", "a successful gate, learning capture or learning assess on this task "
+                                         "created a learning obligation"),
+            ):
+                if table in tables and connection.execute(
+                    f"SELECT 1 FROM {table} WHERE task_window_id=?", (task_window_id,),
+                ).fetchone():
+                    causes.append(cause)
+            if causes:
+                raise WorkflowError(
+                    "wrong_authority",
+                    "this task can no longer accept a plan or produce a candidate: " + "; ".join(causes)
+                    + ". Recovery: if accept_plan already succeeded, send workflow replan with the same plan "
+                    "and a reason; close this task (learning assess, or learning safe_stop); then with a "
+                    "clean worktree open a fresh producer with the same workflow_id and risk, accept_plan, "
+                    "and run workflow implemented before any gate or learning capture; see help('workflow').",
+                )
         return record
     finally:
         connection.close()

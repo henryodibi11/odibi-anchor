@@ -333,6 +333,16 @@ def test_python_implementation_lifecycle_gates_and_closes_learning(
         if required["path"] != "n/a":
             anchor("skill_loaded", required["skill"], output_format="dict")
 
+    anchor("known_bad", changed_files=["source.py", "test_source.py"], output_format="dict")
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    test_source.write_text("from source import VALUE\n\ndef test_value():\n    assert VALUE == 2\n", encoding="utf-8")
+    anchor("touched", "source.py", output_format="dict")
+    anchor("touched", "test_source.py", output_format="dict")
+    anchor("preflight", output_format="dict")
+    verification = anchor("test", target="test_source.py", output_format="dict")
+    anchor("review", output_format="dict")
+    gate = anchor("gate", output_format="dict")
+    # Before workflow implemented a producer capture is refused; after the gate it is allowed.
     observation = anchor(
         "learning", "capture",
         observation_type="reusable_practice",
@@ -346,16 +356,6 @@ def test_python_implementation_lifecycle_gates_and_closes_learning(
         )}],
         output_format="dict",
     )
-
-    anchor("known_bad", changed_files=["source.py", "test_source.py"], output_format="dict")
-    source.write_text("VALUE = 2\n", encoding="utf-8")
-    test_source.write_text("from source import VALUE\n\ndef test_value():\n    assert VALUE == 2\n", encoding="utf-8")
-    anchor("touched", "source.py", output_format="dict")
-    anchor("touched", "test_source.py", output_format="dict")
-    anchor("preflight", output_format="dict")
-    verification = anchor("test", target="test_source.py", output_format="dict")
-    anchor("review", output_format="dict")
-    gate = anchor("gate", output_format="dict")
     learning = anchor(
         "learning", "assess", outcome="observations_recorded",
         observation_ids=[observation["item"]["item_id"]], output_format="dict",

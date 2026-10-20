@@ -835,6 +835,9 @@ def init(
                 project_id=owner_project, task_window_id=owner_task,
             )
         if not retry_latest and active is None:
+            from odibi_anchor._dispatcher._workflow_runtime import refuse_learning_before_candidate
+
+            refuse_learning_before_candidate(_DEFAULT_DB_PATH, session_state=_SESSION_STATE, command=command)
             obligation = ensure_learning_obligation(
                 task_window_id=owner_task,
                 session_ref="session:" + _SESSION_STATE.session_id.replace("-", ""),

@@ -218,6 +218,31 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
 
 
+def refuse_learning_before_candidate(path, *, session_state, command):
+    """Refuse learning that would open an obligation on a producer before workflow implemented.
+
+    A learning obligation freezes the task: accept_plan and implemented require an open
+    task, so creating one first strands the workflow without a candidate.
+    """
+    binding = getattr(session_state, "workflow_binding", None)
+    if not binding or "review_candidate_sha256" in binding:
+        return
+    try:
+        state = bound_workflow(path, session_state=session_state)
+    except WorkflowError:
+        return  # a stale or mismatched binding is recovered by closing this task
+    if state is None or state["status"] != "active" or state["candidate"] is not None:
+        return
+    raise WorkflowError(
+        "learning_before_candidate",
+        f"learning {command} now would freeze this producer task before workflow implemented: it "
+        "creates a learning obligation, and accept_plan and implemented refuse a task that has one. "
+        "Nothing was stored. Run workflow implemented first (after accept_plan if the plan is still a "
+        "draft), measure each criterion, review, gate, then learning assess; qualify follows the closed "
+        "producer. To stop without delivering, use learning safe_stop.",
+    )
+
+
 def workflow_plan_risk(path, *, session_state, workflow_id, trust_domain):
     """Read the plan risk for a producer task that states none; None if unreadable.
 
