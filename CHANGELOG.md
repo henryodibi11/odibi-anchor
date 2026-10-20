@@ -2,6 +2,34 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.38] - 2026-10-20
+
+Workflow plans are complete before they are stored; producers inherit the plan's risk.
+
+### Changed
+
+- **Workflow `create` and `replan` refuse a plan that is not ready for acceptance**, listing
+  every problem with the same text `workflow check_plan` returns, and store nothing. An
+  incomplete draft used to be stored; once a producer bound to it, the replan needed to finish
+  it made that producer stale, and the unbound planning inquiry could not replan it. A DeepSeek
+  run spent three owner approvals that way. `accept_plan` can no longer fail on plan content for
+  a new draft. `check_plan` stays the dry run and draft results keep `acceptance_check`.
+- **A producer task that states no `risk` inherits its workflow plan's risk.** Anchor inferred
+  a risk, often lower than the plan's, and binding refused it as a downgrade; one session looped
+  on that refusal for 2.5 hours. An explicitly stated lower risk is still refused. Review tasks
+  are unchanged.
+- **Bundled guidance** (`.assistant_instructions.md`, `workflow.md`, `quick-reference.md`) says
+  to run `workflow check_plan` and fix every listed problem before `create`.
+
+### Fixed
+
+- **Learning capture text no longer rejects code such as `len//2`** as a protocol-relative link.
+  Only a `//` that starts a token and is followed by a host (`//cdn.internal/lib.js`,
+  `//intranet/wiki`, `//10.0.0.5:8080`) is rejected; URLs are rejected as before.
+- **`touched` with a list of paths, or with `path=`, raises a guided error** naming the accepted
+  shape (one path per call, as the first positional argument; MCP `{"arg0": "path"}`) instead of
+  `'list' object has no attribute 'endswith'`.
+
 ## [0.3.37] - 2026-10-20
 
 Workflow plans: every acceptance problem up front, and a destination for local-only projects.
