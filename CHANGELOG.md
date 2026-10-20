@@ -2,6 +2,24 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.40] - 2026-10-20
+
+A project can run its tests with its own interpreter.
+
+### Added
+
+- **Per-project, per-host test interpreter** in the portfolio:
+  `[projects."<id>".test_python]` with `"<host-id>" = "<absolute interpreter path>"`. Bootstrap
+  delivers it to the bound runtime as `ANCHOR_TEST_PYTHON`; no `anchor()` or MCP argument can set
+  it. When set, `anchor("test")` and workflow pytest criteria start the runner with that
+  interpreter, and the measurement environment records that interpreter and its installed
+  distributions, obtained by running it, so the environment-change check still applies. The
+  interpreter needs only the standard library and pytest. A missing, non-executable or pytest-less
+  interpreter is refused and no tests run. Without the field, behaviour is unchanged. Before this,
+  tests always ran in Anchor's own environment, so a project such as Odibi, whose tests need
+  polars, deltalake or pyarrow, could not qualify a pytest criterion honestly. Anchor versions
+  before 0.3.40 reject the field as unknown; upgrade every host that reads the portfolio first.
+
 ## [0.3.39] - 2026-10-20
 
 Learning on a workflow producer no longer strands its candidate.
