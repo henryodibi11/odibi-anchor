@@ -667,8 +667,27 @@ def test_producer_gate_before_implemented_warns_with_exact_next_operation(runtim
         f'MUST (before gate): anchor("workflow", "implemented", '
         f'expected_generation={planned["generation"]}'
     )
-    with pytest.raises(RuntimeError, match="gated or closed"):
+    with pytest.raises(RuntimeError, match=r"a successful gate, learning capture or learning assess on "
+                                           r"this task created a learning obligation.*Recovery: "):
         advance(anchor, "implemented")
+
+
+@pytest.mark.parametrize("command", ["capture", "assess"])
+def test_producer_learning_before_implemented_is_refused_and_stores_nothing(runtime, command):
+    anchor, home, _, _ = runtime
+    advance(anchor, "accept_plan")
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_text("Result: 5\n")
+    anchor("touched", str(artifact), output_format="dict")
+    # v0.3.37 opened a learning obligation here, which froze the producer: implemented
+    # was then refused and the finished work could never qualify.
+    kwargs = ({"observation_type": "friction", "summary": "Early capture", "signal_key": "fixture.early",
+               "evidence": [{"reference_type": "file", "reference": "test_report.py"}]}
+              if command == "capture" else {"outcome": "nothing_reusable_learned"})
+    with pytest.raises(RuntimeError, match=f"learning {command} now would freeze this producer task.*safe_stop"):
+        anchor("learning", command, output_format="dict", **kwargs)
+    assert advance(anchor, "implemented")["progress"] == "implemented"
 
 
 def test_workflow_help_documents_producer_order_and_review_findings_schema(runtime):
@@ -688,7 +707,7 @@ def test_candidate_cannot_be_created_after_gate_or_closure_but_receipt_replays(r
     anchor("gate", output_format="dict")
     if assess:
         anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
-    with pytest.raises(RuntimeError, match="gated or closed"):
+    with pytest.raises(RuntimeError, match="terminal record" if assess else "created a learning obligation"):
         advance(anchor, "implemented")
     generation = implemented["generation"] - 1
     replay = anchor("workflow", "implemented", expected_generation=generation,
@@ -861,7 +880,7 @@ def test_closed_producer_cannot_accept_new_plan(runtime):
     anchor, _, _, _ = runtime
     before = anchor("workflow", output_format="dict")["state"]
     finish_producer(anchor)
-    with pytest.raises(RuntimeError, match="gated or closed"):
+    with pytest.raises(RuntimeError, match="the task has a terminal record"):
         advance(anchor, "accept_plan")
     assert anchor("workflow", output_format="dict")["state"] == before
 
