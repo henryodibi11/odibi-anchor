@@ -85,9 +85,11 @@ def lifecycle(tmp_path, monkeypatch):
         draft = anchor("workflow", "create", plan=plan, request_id="draft", output_format="dict")["state"]
         anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
         anchor("new_session", name="produce", inline=True, output_format="dict")
+        # task_risk="unset" states no risk, so the producer inherits the plan's.
+        stated = {} if task_risk == "unset" else {"risk": task_risk or risk}
         task = anchor("task", "Implement module change", goal="Change module values",
                       mode="implementation", work_type="change", execution_mode="source_change",
-                      risk=task_risk or risk, trust_domain="personal", workflow_id=draft["workflow_id"],
+                      **stated, trust_domain="personal", workflow_id=draft["workflow_id"],
                       acceptance_criteria=["Fixture tests pass"], output_format="dict")
         return draft, task
 
@@ -121,6 +123,20 @@ def test_workflow_producer_registers_more_than_cap_planned_paths(lifecycle):
         (lifecycle.target / path).write_text("VALUE = 2\n")
         assert anchor("touched", path, output_format="dict")["registered"] == path
     assert advance(anchor, "implemented")["progress"] == "implemented"
+
+
+def test_touched_refuses_a_list_of_paths_with_the_accepted_shape(lifecycle):
+    """v0.3.37 failed with "'list' object has no attribute 'endswith'"."""
+    anchor = lifecycle.anchor
+    planned = lifecycle.paths[:2]
+    lifecycle.producer(planned)
+    advance(anchor, "accept_plan")
+    anchor("known_bad", changed_files=planned, output_format="dict")
+    for call in ({"args": (list(planned),)}, {"args": (), "path": planned[0]}):
+        with pytest.raises(TypeError, match=r"exactly one path per call.*got (path=)?(list of 2 paths|str)"):
+            anchor("touched", *call.pop("args"), **call, output_format="dict")
+    (lifecycle.target / planned[0]).write_text("VALUE = 2\n")
+    assert anchor("touched", planned[0], output_format="dict")["registered"] == planned[0]
 
 
 def test_unplanned_paths_keep_the_checkpoint_cap_counted_conservatively():
@@ -163,6 +179,13 @@ def test_risk_downgrade_names_required_risk_and_corrected_call(lifecycle):
     operation = caught.value.next_operation
     assert operation["action"] == "task" and operation["kwargs"]["risk"] == "high"
     assert "risk='high'" in operation["copy_ready"]
+
+
+def test_producer_without_stated_risk_inherits_the_plan_risk(lifecycle):
+    """v0.3.37 inferred a lower risk and refused it as a downgrade; one session looped 2.5 hours."""
+    draft, task = lifecycle.producer(lifecycle.paths[:2], risk="high", task_risk="unset")
+    assert task["task_profile"]["risk"] == "high"
+    assert task["workflow"]["binding"]["workflow_id"] == draft["workflow_id"]
 
 
 # ── Item 8: Spec requirement at acceptance; either link order works ──

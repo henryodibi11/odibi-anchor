@@ -1172,6 +1172,9 @@ def test_triage_attestation_failures_do_not_write(ledger: Path, missing: str) ->
     "value",
     [
         "https://host.example/path",
+        "Load //cdn.internal/lib.js first",
+        "see //intranet/wiki",
+        "(//10.0.0.5:8080)",
         "user@example.com",
         "token=abc",
         "X-Amz-Signature=abc",
@@ -1188,6 +1191,11 @@ def test_privacy_negative_vectors_are_rejected_without_partial_write(ledger: Pat
     with pytest.raises(ValueError, match="invalid summary"):
         capture(obligation, summary=value)
     assert sqlite3.connect(ledger).execute("SELECT count(*) FROM learning_items").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("value", ["Midpoint is len//2 in bisect.", "Floor division a//b keeps ints."])
+def test_floor_division_in_summary_is_not_a_link(ledger: Path, value: str) -> None:
+    assert capture(activate(), summary=value)["item"]["summary"] == value
 
 
 @pytest.mark.parametrize(

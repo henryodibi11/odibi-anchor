@@ -130,15 +130,24 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
     return plan
 
 
-def require_acceptable(plan: dict[str, Any], destination_keys: Mapping[str, set[str]] | None = None) -> None:
-    """Refuse acceptance with every problem at once, not only the first."""
-    problems = acceptance_problems(plan, destination_keys)
+def require_acceptable(plan: Any, destination_keys: Mapping[str, set[str]] | None = None,
+                       *, stored: bool = True) -> None:
+    """Refuse with every problem at once, not only the first.
+
+    ``stored=False`` is create and replan: an unready draft is never stored, because a
+    producer bound to it would go stale on the replan needed to fix it.
+    """
+    problems = acceptance_problems(_plan(plan), destination_keys)
     if not problems:
         return
-    # accept_plan takes no plan, so an agent cannot fix the stored draft by resending it.
-    message = ("plan is not ready for acceptance: " + "; ".join(problems)
-               + ". accept_plan checks the workflow's stored draft plan: send workflow replan "
-               "with reason and the complete plan from the task bound to this workflow, then accept_plan")
+    message = "plan is not ready for acceptance: " + "; ".join(problems)
+    if stored:
+        # accept_plan takes no plan, so an agent cannot fix the stored draft by resending it.
+        message += (". accept_plan checks the workflow's stored draft plan: send workflow replan "
+                    "with reason and the complete plan from the task bound to this workflow, then accept_plan")
+    else:
+        message += (". Nothing was stored: fix every problem and resend the complete plan; "
+                    "workflow check_plan lists the same problems without storing anything")
     if plan.get("unresolved_decisions") != []:
         raise WorkflowError("plan_unready", message)
     raise ValueError(message)
@@ -313,6 +322,7 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
     if operation == "replan":
         _text(payload.get("reason"), "reason")
         plan = _plan(payload.get("plan"))
+        require_acceptable(plan, stored=False)
         ranks = {"low": 0, "medium": 1, "high": 2}
         if ranks[plan["risk"]] < ranks[state["plan"]["risk"]]:
             raise WorkflowError("risk_downgrade", "replan cannot authorize a risk downgrade")
@@ -562,8 +572,13 @@ def _append(connection, state, request_id, request, previous):
 
 
 def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: str,
-                    plan: dict[str, Any], artifact_baseline: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Create draft authority; request replay never invents historical evidence."""
+                    plan: dict[str, Any], artifact_baseline: dict[str, Any] | None = None,
+                    destination_keys: Mapping[str, set[str]] | None = None) -> dict[str, Any]:
+    """Create draft authority; request replay never invents historical evidence.
+
+    A new draft must already be ready for acceptance; runtime callers pass their
+    supported destination kinds and exact keys to check them too.
+    """
     identity = _owner(owner)
     request_id = _text(request_id, "request_id")
     plan = _plan(plan)
@@ -577,6 +592,7 @@ def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: s
             if event["request"] != request:
                 raise WorkflowError("conflict", "request_id reused for different workflow creation")
             return event["state"]
+        require_acceptable(plan, destination_keys, stored=False)
         state = {"schema_version": VERSION, "workflow_id": identifier, "generation": 0,
                  "owner": identity, "phase": "plan", "status": "active", "progress": "draft",
                  "plan": plan, "plan_sha256": digest(plan), "admission": None,

@@ -233,6 +233,15 @@ def run_pre_dispatch_enforcement(
     # ── Known-bad guardrail ──
     # Planning comes first so a caller without an accepted task receives the
     # first executable prerequisite rather than circular recovery guidance.
+    if action == "touched" and ("path" in kwargs or (args and not isinstance(args[0], str))):
+        # A list here used to fail as "'list' object has no attribute 'endswith'".
+        supplied = kwargs["path"] if "path" in kwargs else args[0]
+        count = f" of {len(supplied)} paths" if isinstance(supplied, (list, tuple)) else ""
+        raise TypeError(
+            f"touched registers exactly one path per call, as its first positional argument "
+            f"(MCP args {{\"arg0\": \"path\"}}); got {'path=' if 'path' in kwargs else ''}"
+            f"{type(supplied).__name__}{count}. Call anchor(\"touched\", \"path\") once per changed path."
+        )
     _check_known_bad(action, args, kwargs, session_timings)
 
     # Gate mode mismatch before gate wrappers advance checkpoint/file state or

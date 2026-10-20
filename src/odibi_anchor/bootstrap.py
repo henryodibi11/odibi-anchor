@@ -570,7 +570,7 @@ def init(
             task_text=task_args[0] if task_args else "",
             specs_dir=_task_pathlib.Path(_SESSION_STATE.artifact_root) / "specs",
             problems_dir=_task_pathlib.Path(_SESSION_STATE.artifact_root) / "problems",
-            session_state=_SESSION_STATE,
+            session_state=_SESSION_STATE, workflow_db=_DEFAULT_DB_PATH,
         )
         _TASK_STAGE_holder[0] = injected.pop("_task_policy_stage")
         # Availability here means only that this dispatcher recognizes the action.
@@ -1197,11 +1197,11 @@ def init(
             )
         return result
 
-    def _inject_session_context(kwargs, frame, files_changed, learn_debt, *, task_text="", specs_dir=None, problems_dir=None, session_state=None):
+    def _inject_session_context(kwargs, frame, files_changed, learn_debt, *, task_text="", specs_dir=None, problems_dir=None, session_state=None, workflow_db=None):
         from odibi_anchor._dispatcher._task_injection import inject_session_context
         return inject_session_context(kwargs, frame, files_changed, learn_debt,
                                        task_text=task_text, specs_dir=specs_dir, problems_dir=problems_dir,
-                                       session_state=session_state)
+                                       session_state=session_state, workflow_db=workflow_db)
 
     def _skill_loaded_action(name: str, **kwargs) -> dict:
         """Load complete skill guidance, then register it in the current process.

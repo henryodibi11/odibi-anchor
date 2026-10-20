@@ -25,6 +25,12 @@ from tests.integration.conftest import ReplayHarness
 HOST = "databricks"
 
 
+# create_workflow refuses a plan that is not ready for acceptance.
+READY_PLAN = {"scope": ["fixture"], "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
+              "unresolved_decisions": [], "destination": {"kind": "managed_artifacts"},
+              "criteria": [{"id": "AC1", "expected": "fixture holds", "method": "pytest"}]}
+
+
 def _sha(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
@@ -116,6 +122,7 @@ def test_move_target_replay_across_computes(replay, databricks):
              "anchor_home": str(Path(environment["ANCHOR_HOME"]).resolve()), "trust_domain": "work"}
     history = workflow.create_workflow(database, owner=owner, request_id="history", plan={
         "schema_version": 1, "goal": "Historical work.", "risk": "low", "execution_mode": "read_only",
+        **READY_PLAN,
     })
     workflow.transition_workflow(database, owner=owner, workflow_id=history["workflow_id"], expected_generation=0,
                                  request_id="history-cancel", operation="cancel", payload={"reason": "done"})

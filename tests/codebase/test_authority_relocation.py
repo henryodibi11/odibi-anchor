@@ -10,6 +10,11 @@ import pytest
 
 from tests.codebase.test_task_authority import fresh_state, result, state
 
+# create_workflow refuses a plan that is not ready for acceptance.
+READY_PLAN = {"scope": ["fixture"], "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
+              "unresolved_decisions": [], "destination": {"kind": "managed_artifacts"},
+              "criteria": [{"id": "AC1", "expected": "fixture holds", "method": "pytest"}]}
+
 
 def test_complete_chain_maps_only_home_paths(tmp_path):
     from odibi_anchor.codebase._authority_relocation import rebase_identity
@@ -61,7 +66,7 @@ def restored_work(tmp_path):
     db = home / "memory.db"
     workflow = create_workflow(db, owner=workflow_owner(original), request_id="create",
                                plan={"schema_version": 1, "goal": "restore authority",
-                                     "risk": "high", "execution_mode": "source_change"})
+                                     "risk": "high", "execution_mode": "source_change", **READY_PLAN})
     original.workflow_binding = bind_workflow(db, session_state=original, workflow_id=workflow["workflow_id"])
     persist_accepted_task(db, session_state=original, task_stage={"trust_domain": "work"}, task_result=result())
     _save_continuity_state(RouteBinding(

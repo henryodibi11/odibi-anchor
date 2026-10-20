@@ -35,6 +35,11 @@ from odibi_anchor.human_input import HumanInputReply
 from odibi_anchor.planning._task_policy import BpsKernel, EvidenceEntry
 from odibi_anchor.planning._task_profile import normalize_task_profile
 
+# create_workflow refuses a plan that is not ready for acceptance.
+READY_PLAN = {"scope": ["fixture"], "exclusions": [], "constraints": [], "risks": [], "stop_conditions": [],
+              "unresolved_decisions": [], "destination": {"kind": "managed_artifacts"},
+              "criteria": [{"id": "AC1", "expected": "fixture holds", "method": "pytest"}]}
+
 
 def state(tmp_path, *, project="project-a", target=None):
     from odibi_anchor._repository_snapshot import capture_task_repository_baseline
@@ -899,7 +904,7 @@ def test_workflow_binding_survives_rebind_without_changing_baseline(tmp_path):
     workflow = create_workflow(
         db, owner=workflow_owner(original), request_id="start",
         plan={"schema_version": 1, "goal": "Retain ownership", "risk": "high",
-              "execution_mode": "source_change"},
+              "execution_mode": "source_change", **READY_PLAN},
     )
     original.workflow_binding = bind_workflow(
         db, session_state=original, workflow_id=workflow["workflow_id"],

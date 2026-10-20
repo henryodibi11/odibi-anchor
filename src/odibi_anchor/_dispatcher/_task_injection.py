@@ -22,6 +22,7 @@ def inject_session_context(
     specs_dir: str | Path | None = None,
     problems_dir: str | Path | None = None,
     session_state: Any = None,
+    workflow_db: str | Path | None = None,
 ) -> dict[str, Any]:
     """Inject session state into task kwargs (append, never replace user input).
 
@@ -37,6 +38,7 @@ def inject_session_context(
         specs_dir: Path to the specs/ directory (for spec= resolution).
         problems_dir: Path to the managed problems/ directory.
         session_state: SessionState instance used only as task-staging input.
+        workflow_db: Workflow authority read for the plan risk a producer task inherits.
 
     Returns:
         New dict with session context injected (original kwargs unchanged).
@@ -113,6 +115,18 @@ def inject_session_context(
         not isinstance(trust_domain, str) or not trust_domain.strip()
     ):
         raise TypeError("trust_domain must be a non-empty string or None")
+    # A producer that states no risk inherits its workflow plan's: an inferred lower risk
+    # would only be refused at binding as a downgrade. An explicit risk is kept as given.
+    if (workflow_id is not None and injected.get("risk") is None and workflow_db is not None
+            and not (profile.execution_mode == "read_only" and profile.work_type == "verify")):
+        from dataclasses import replace
+
+        from odibi_anchor._dispatcher._workflow_runtime import workflow_plan_risk
+        inherited = workflow_plan_risk(workflow_db, session_state=session_state,
+                                       workflow_id=workflow_id, trust_domain=trust_domain)
+        if inherited is not None and inherited != profile.risk:
+            profile = replace(profile, risk=inherited, normalization_notes=(
+                *profile.normalization_notes, f"inherited risk {inherited!r} from workflow {workflow_id}"))
 
     from odibi_anchor._dispatcher._enforcement import classify_problem_rigor
     problem_rigor = classify_problem_rigor(
