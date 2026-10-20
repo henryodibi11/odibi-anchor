@@ -126,28 +126,89 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
     if len(child_ids) != len(set(child_ids)):
         raise ValueError("required child workflow IDs must be unique")
     if ready:
-        for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions"):
-            if not isinstance(plan.get(key), list):
-                raise ValueError(f"plan.{key} must be an explicit array")
-            for item in plan[key]:
-                _text(item, key)
-        if not plan["scope"]:
-            raise ValueError("plan.scope must be bounded")
-        if plan.get("unresolved_decisions") != []:
-            raise WorkflowError("plan_unready", "resolve consequential decisions before implementation")
-        _object(plan.get("destination"), "plan.destination")
-        criteria = plan.get("criteria")
-        if not isinstance(criteria, list) or not criteria:
-            raise ValueError("plan requires acceptance criteria")
-        ids = []
-        for criterion in criteria:
-            item = _object(criterion, "criterion")
-            for key in ("id", "expected", "method"):
-                _text(item.get(key), f"criterion.{key}")
-            ids.append(item["id"])
-        if len(ids) != len(set(ids)):
-            raise ValueError("criterion IDs must be unique")
+        require_acceptable(plan)
     return plan
+
+
+def require_acceptable(plan: dict[str, Any], destination_keys: Mapping[str, set[str]] | None = None) -> None:
+    """Refuse acceptance with every problem at once, not only the first."""
+    problems = acceptance_problems(plan, destination_keys)
+    if not problems:
+        return
+    # accept_plan takes no plan, so an agent cannot fix the stored draft by resending it.
+    message = ("plan is not ready for acceptance: " + "; ".join(problems)
+               + ". accept_plan checks the workflow's stored draft plan: send workflow replan "
+               "with reason and the complete plan from the task bound to this workflow, then accept_plan")
+    if plan.get("unresolved_decisions") != []:
+        raise WorkflowError("plan_unready", message)
+    raise ValueError(message)
+
+
+def _is_text(value: Any) -> bool:
+    try:
+        _text(value, "value")
+    except ValueError:
+        return False
+    return True
+
+
+def acceptance_problems(plan: dict[str, Any],
+                        destination_keys: Mapping[str, set[str]] | None = None) -> list[str]:
+    """List every gap accept_plan would refuse, so one replan can fix them all.
+
+    This domain is destination-agnostic; runtime callers pass their supported
+    destination kinds and exact keys to check them as well.
+    """
+    problems = []
+    for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions"):
+        items = plan.get(key)
+        if not isinstance(items, list):
+            problems.append(f"plan.{key} must be an explicit array of text (may be [] except scope)")
+        elif not all(_is_text(item) for item in items):
+            problems.append(f"plan.{key} items must be explicit nonempty text")
+    if isinstance(plan.get("scope"), list) and not plan["scope"]:
+        problems.append("plan.scope must be bounded: list at least one item")
+    if plan.get("unresolved_decisions") != []:
+        problems.append("plan.unresolved_decisions must be []: resolve consequential decisions "
+                        "before implementation")
+    destination = plan.get("destination")
+    if not isinstance(destination, dict) or not destination:
+        problems.append("plan.destination must be a nonempty object")
+    elif destination_keys is not None:
+        keys = destination_keys.get(destination.get("kind"))
+        if keys is None:
+            problems.append("plan.destination.kind must be one of " + ", ".join(destination_keys))
+        elif set(destination) != keys:
+            problems.append(f"plan.destination of kind {destination['kind']} requires exactly "
+                            + ", ".join(sorted(keys)))
+    criteria = plan.get("criteria")
+    if not isinstance(criteria, list) or not criteria:
+        problems.append("plan requires acceptance criteria: a nonempty criteria array; a pytest "
+                        "criterion may name a test file that the producer writes during the work")
+    else:
+        ids = []
+        for index, criterion in enumerate(criteria):
+            if not isinstance(criterion, dict) or not criterion:
+                problems.append(f"criteria[{index}] must be a nonempty object")
+                continue
+            for key in ("id", "expected", "method"):
+                if not _is_text(criterion.get(key)):
+                    problems.append(f"criteria[{index}].{key} must be explicit nonempty text")
+            ids.append(criterion.get("id"))
+        if len(ids) != len(set(map(str, ids))):
+            problems.append("criterion IDs must be unique")
+    return problems
+
+
+def acceptance_check(plan: Any,
+                     destination_keys: Mapping[str, set[str]] | None = None) -> dict[str, Any]:
+    """Report whether accept_plan would accept this plan, without storing or granting anything."""
+    try:
+        plan = _plan(plan)
+    except (ValueError, WorkflowError) as error:
+        return {"ready": False, "problems": [str(error)]}
+    problems = acceptance_problems(plan, destination_keys)
+    return {"ready": not problems, "problems": problems}
 
 
 def _matching(value: dict[str, Any], state: dict[str, Any]) -> None:
@@ -273,14 +334,7 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         raise WorkflowError("blocked", "resolve the workflow blocker before advancing")
     progress = state["progress"]
     if operation == "accept_plan" and progress == "draft":
-        try:
-            plan = _plan(state["plan"], ready=True)
-        except ValueError as error:
-            # accept_plan takes no plan, so an agent cannot fix the stored draft by resending it.
-            raise ValueError(
-                f"{error}; accept_plan checks the workflow's stored draft plan: send workflow replan "
-                "with reason and the complete plan from the task bound to this workflow, then accept_plan"
-            ) from error
+        plan = _plan(state["plan"], ready=True)
         _object(payload.get("baseline"), "baseline")
         _text(payload.get("authority_ref"), "plan authority_ref")
         result.update(phase="implement_and_qualify", progress="planned", plan=plan,

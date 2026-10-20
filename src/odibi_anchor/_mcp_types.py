@@ -28,11 +28,12 @@ class PlanCriterion(TypedDict):
 class PlanDestination(TypedDict):
     """Required keys by kind: managed_artifacts none; github_ref repository+ref;
     github_release repository+tag; pypi_release name+version;
-    databricks_workspace_files host."""
+    databricks_workspace_files host; local_git_ref ref (a fully qualified
+    branch or tag of the target repository, for projects with no remote)."""
 
     kind: Literal[
         "managed_artifacts", "github_ref", "github_release", "pypi_release",
-        "databricks_workspace_files",
+        "databricks_workspace_files", "local_git_ref",
     ]
     repository: NotRequired[str]
     ref: NotRequired[str]

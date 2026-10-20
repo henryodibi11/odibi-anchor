@@ -220,6 +220,42 @@ def test_github_release_requires_exact_repo_clean_head_and_published_tag(deliver
                          ("github", "/repos/acme/app/commits/refs%2Ftags%2Fv1.2")]
 
 
+@pytest.mark.parametrize("change", [None, "behind", "missing", "dirty", "short_ref"])
+def test_local_git_ref_reads_the_target_repository_ref(delivery, monkeypatch, tmp_path, change):
+    import subprocess
+
+    repo = tmp_path / "local-repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("one\n")
+    git("add", "a.txt")
+    git("commit", "-q", "-m", "one")
+    git("switch", "-q", "-c", "task/x")
+    (repo / "a.txt").write_text("two\n")
+    git("commit", "-q", "-am", "two")
+    head = git("rev-parse", "HEAD")
+    if change != "behind":
+        git("branch", "-f", "main", head)  # the owner integrated the qualified commit
+    if change == "dirty":
+        (repo / "a.txt").write_text("three\n")
+    ref = {"missing": "refs/heads/absent", "short_ref": "main"}.get(change, "refs/heads/main")
+    destination = {"kind": "local_git_ref", "ref": ref}
+    candidate = {"kind": "git", "identity": "qualified-content", "snapshot": {"head_sha": head}}
+    remote_state(delivery, monkeypatch, destination, candidate)
+    monkeypatch.setattr(delivery.producer, "target_root", str(repo))
+    if change:
+        with pytest.raises(delivery.d.WorkflowError):
+            delivery.d.observe_destination(delivery.db, **delivery.args)
+    else:
+        observed = delivery.d.observe_destination(delivery.db, **delivery.args)
+        assert observed["observed"] == {"ref": "refs/heads/main", "sha": head}
+
+
 @pytest.mark.parametrize("change", [None, "hash", "size", "yanked", "missing", "duplicate", "version", "name"])
 def test_package_readback_requires_exact_release_and_each_file(delivery, monkeypatch, change):
     destination = {"kind": "pypi_release", "name": "acme-app", "version": "1.2"}

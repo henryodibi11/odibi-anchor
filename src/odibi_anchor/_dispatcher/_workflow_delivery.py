@@ -30,7 +30,16 @@ from odibi_anchor.codebase._workflow import (
 
 _OPERATIONS = {"managed_artifacts": "deliver_artifacts", "github_ref": "push",
                "github_release": "publish_release", "pypi_release": "publish_package",
-               "databricks_workspace_files": "upload_workspace_files"}
+               "databricks_workspace_files": "upload_workspace_files",
+               "local_git_ref": "update_local_ref"}
+# Exact keys per destination kind. local_git_ref is a branch or tag of the target
+# repository itself, for projects that have no remote.
+DESTINATION_KEYS = {"managed_artifacts": {"kind"},
+                    "github_ref": {"kind", "repository", "ref"},
+                    "github_release": {"kind", "repository", "tag"},
+                    "pypi_release": {"kind", "name", "version"},
+                    "databricks_workspace_files": {"kind", "host"},
+                    "local_git_ref": {"kind", "ref"}}
 _LIMIT = 16 * 1024 * 1024
 
 
@@ -88,12 +97,7 @@ def _git(root: str, *args: str) -> str:
 def _destination(state, session_state):
     destination = state["plan"]["destination"]
     kind = destination.get("kind")
-    keys = {"managed_artifacts": {"kind"},
-            "github_ref": {"kind", "repository", "ref"},
-            "github_release": {"kind", "repository", "tag"},
-            "pypi_release": {"kind", "name", "version"},
-            "databricks_workspace_files": {"kind", "host"}}
-    if kind not in keys or set(destination) != keys[kind]:
+    if kind not in DESTINATION_KEYS or set(destination) != DESTINATION_KEYS[kind]:
         raise WorkflowError("unavailable", "unsupported or incomplete destination contract")
     if kind.startswith("github_"):
         origin = _git(session_state.target_root, "remote", "get-url", "origin")
@@ -106,6 +110,11 @@ def _destination(state, session_state):
             raise WorkflowError("wrong_destination", "invalid GitHub destination ref")
         if kind == "github_ref" and not ref.startswith(("refs/heads/", "refs/tags/")):
             raise WorkflowError("wrong_destination", "GitHub ref must be fully qualified")
+    elif kind == "local_git_ref":
+        ref = destination["ref"]
+        if (not isinstance(ref, str) or len(ref) > 200 or not ref.startswith(("refs/heads/", "refs/tags/"))
+                or _git(session_state.target_root, "check-ref-format", ref)):
+            raise WorkflowError("wrong_destination", "local Git ref must be a fully qualified branch or tag")
     elif kind == "pypi_release":
         for key in ("name", "version"):
             if not isinstance(destination[key], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}", destination[key]):
@@ -305,6 +314,17 @@ def observe_destination(path, *, session_state, workflow_id, workspace_client=No
             observed["release_id"] = release["id"]
             if _get_json("github", f"/repos/{repository}/commits/{quote(ref, safe='')}").get("sha") != commit["sha"]:
                 raise WorkflowError("destination_unverified", "release tag moved during readback")
+    elif kind == "local_git_ref" and candidate["kind"] == "git":
+        if _git(session_state.target_root, "status", "--porcelain=v1", "--untracked-files=all"):
+            raise WorkflowError("unavailable", "Git destination requires committed clean candidate")
+        ref = destination["ref"]
+        try:
+            sha = _git(session_state.target_root, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
+        except WorkflowError:
+            sha = None
+        if sha != snapshot["head_sha"]:
+            raise WorkflowError("destination_unverified", "local Git ref differs from qualified head")
+        observed = {"ref": ref, "sha": sha}
     elif kind == "pypi_release" and candidate["kind"] == "managed_artifacts":
         release = _get_json("pypi", f"/pypi/{quote(destination['name'], safe='')}/{quote(destination['version'], safe='')}/json")
         info = release.get("info", {})

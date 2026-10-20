@@ -7,16 +7,18 @@ import json
 from odibi_anchor._dispatcher._workflow_admission import bound_workflow, workflow_owner, workflow_packet
 from odibi_anchor.codebase._workflow import (
     WorkflowError,
+    acceptance_check,
     create_workflow,
     digest,
     read_workflow,
     replay_public_request,
+    require_acceptable,
     transition_workflow,
 )
 
 DEFAULT_APPROVAL_TIMEOUT_MINUTES = 5
 MAX_APPROVAL_TIMEOUT_MINUTES = 240
-READ_COMMANDS = frozenset({"status", "prepare_delivery", "prepare_revocation"})
+READ_COMMANDS = frozenset({"status", "check_plan", "prepare_delivery", "prepare_revocation"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
                             "request_delivery_approval", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan"})
 
@@ -27,6 +29,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     timeout_minutes=None, output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
+    check_plan reports every problem accept_plan would refuse, storing nothing.
     Create returns a draft ID to bind at a fresh task acceptance via workflow_id.
     All transitions require a caller-observed generation and idempotency key.
     No actor, approval, measurement, candidate, or receipt payload is accepted.
@@ -34,6 +37,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     for request_delivery_approval and revoke_delivery only; it grants no authority.
     """
     from odibi_anchor._dispatcher._workflow_delivery import (
+        DESTINATION_KEYS,
         observe_destination,
         prepare_delivery,
         prepare_revocation,
@@ -82,6 +86,11 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         else:
             state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
             packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection", "state": state}
+    elif command == "check_plan":
+        if plan is None or workflow_id is not None or expected_generation is not None:
+            raise ValueError("check_plan takes plan only; it stores nothing and needs no workflow_id")
+        packet = {"kind": "workflow_plan_check", "schema_version": 1, "authority": "projection",
+                  **acceptance_check(plan, DESTINATION_KEYS), "state_changed": False}
     else:
         accepted = _accepted_task(path, session_state, session_state.task_window_id)
         if command == "create":
@@ -149,6 +158,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             else:
                 operation = command
                 if command == "accept_plan":
+                    if state["progress"] == "draft":
+                        require_acceptable(state["plan"], DESTINATION_KEYS)
                     record = _accepted_task(path, session_state, session_state.task_window_id, require_open=True)
                     validate_producer_policy(state["plan"], session_state.active_task_profile)
                     payload = {"baseline": collect_plan_baseline(path, session_state=session_state, record=record),
@@ -197,6 +208,9 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                   "state": state, "destination_mutation_performed": False,
                   "replayed": replayed,
                   "observation_semantics": "historical acknowledgement" if replayed else "current transition"}
+    state = packet.get("state")
+    if isinstance(state, dict) and state.get("progress") == "draft":
+        packet["acceptance_check"] = acceptance_check(state["plan"], DESTINATION_KEYS)
     packet.pop("packet_sha256", None)
     packet = {**packet, "packet_sha256": digest(packet)}
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
