@@ -102,7 +102,9 @@ runs as before. Evidence records the environment name and kind.
 
 ## Planning records
 
-The planner writes Anchor records directly instead of a separate plans folder:
+The planner writes Anchor records directly instead of a separate plans folder. A `planning`
+task needs no workflow: without one it may write only planning records (problems, specs,
+work items, decisions), and the owner's plan approval governs them.
 
 - Problem Record: the investigation (`problem create/update`).
 - Spec: the shared design (`spec create` with `content`, `spec update`).

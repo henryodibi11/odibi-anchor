@@ -57,11 +57,11 @@ def test_workflow_requirement_matches_task_admission():
     """Lightweight artifacts and data-only or read-only work are not workflow-enrolled."""
     required = {mode: contract_for(mode)["workflow_required"] for mode in _LEGACY_DEFAULTS}
     assert required["documentation"] is False  # artifact_only, low risk, direct rigor
-    assert required["planning"] is True  # substantive artifact
+    assert required["planning"] is False  # planning records: governed by owner plan approval
     assert required["implementation"] is True and required["pipeline"] is True
     assert required["data"] is False and required["analysis"] is False
-    planning = contract_for("planning")
-    assert {"workflow_id", "trust_domain"} <= set(planning["required_task_fields"])
+    assert "workflow_id" not in contract_for("planning")["required_task_fields"]
+    assert {"workflow_id", "trust_domain"} <= set(contract_for("implementation")["required_task_fields"])
     assert "workflow_id" not in contract_for("analysis")["required_task_fields"]
 
 
@@ -71,7 +71,7 @@ def test_planning_contract_names_records_and_owner_touchpoints():
     assert records[:5] == ["problem", "spec", "work_items", "work_item_reviews", "plan_approval"]
     assert "depends_on" in contract["records"][2]["how"]
     assert contract["owner_touchpoints"] == {
-        "plan_approval": True, "delivery_approval": True, "lessons": True, "blockers": True,
+        "plan_approval": True, "delivery_approval": False, "lessons": True, "blockers": True,
     }
     implementation = contract_for("implementation")
     plan = next(entry for entry in implementation["records"] if entry["record"] == "workflow_plan")

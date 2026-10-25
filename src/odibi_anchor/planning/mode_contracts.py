@@ -95,7 +95,7 @@ def _resolve_profile(mode: str | None, profile: TaskProfile | Mapping[str, Any] 
 def contract_for(mode: str | None, *, profile: TaskProfile | Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return the contract for ``mode`` (or the accepted ``profile``)."""
     from odibi_anchor._dispatcher._effects import task_profile_effect_compatible
-    from odibi_anchor._dispatcher._workflow_admission import lightweight_artifact_task
+    from odibi_anchor._dispatcher._workflow_admission import lightweight_artifact_task, planning_record_task
 
     resolved = _resolve_profile(mode, profile)
     mode = mode or resolved.legacy_mode
@@ -103,6 +103,7 @@ def contract_for(mode: str | None, *, profile: TaskProfile | Mapping[str, Any] |
     # Same rule as require_task_workflow: source-capable or substantive artifact tasks.
     workflow_required = task_profile_effect_compatible("source_write", resolved) or (
         execution == "artifact_only" and not lightweight_artifact_task(resolved)
+        and not planning_record_task(resolved)
     )
     table = _MODE_TABLE.get(mode or "", {})
     records = list(table.get("records", []))

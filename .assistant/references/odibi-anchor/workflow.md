@@ -1052,7 +1052,8 @@ approve a plan, approve a delivery, decide pending lessons, or resolve a real bl
   records which one ran.
 - Rigor: `direct` 1 plan review, `compact` 2 with distinct angles, `full` 4 with distinct angles
   including `adversarial` and an independent delivery review.
-- Planning records: write the Problem Record, `spec create`/`update` with `content`, and one
+- Planning records: a `planning` task needs no workflow; it writes only planning records and the
+  owner approves the plan. Write the Problem Record, `spec create`/`update` with `content`, and one
   work item per pull request with `depends_on`. Reviewers' verdicts go on the item with
   `work_item review` (bound to its fingerprint); `work_item next` gives the ready items;
   `work_item request_plan_approval` asks the owner once the reviews satisfy the rigor.
