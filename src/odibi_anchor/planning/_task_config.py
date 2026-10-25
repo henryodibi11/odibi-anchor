@@ -904,3 +904,49 @@ _MODE_EVIDENCE_GAPS: dict[str, list[str]] = {
         "Goal, directory structure, reference tool for conventions, files to create, and acceptance criteria.",
     ],
 }
+
+_MODE_HINTS["pipeline"] = {
+    "thinking_prompts": ["Name the pipeline configuration and the run that proves it."],
+    "prompting_hints": ["Keep the scope to the named pipeline or configuration files."],
+    "execution_hints": ["Validate, then run, the changed pipeline configuration before delivery."],
+    "anti_patterns": ["Changing pipeline configuration without a command criterion that runs it."],
+}
+
+_MODE_DEFAULTS["pipeline"] = {
+    "plan": [
+        {
+            "phase": "orient",
+            "action": "Identify the pipeline configuration files and the command that validates or runs them.",
+            "why": "Configuration work is proven by running it, not by reading it.",
+            "done_when": "Target files and the validate/run command are named.",
+        },
+        {
+            "phase": "change",
+            "action": "Edit the named configuration within the workflow plan's source paths.",
+            "why": "A bounded change keeps the run evidence attributable.",
+            "done_when": "Only the planned configuration files changed.",
+        },
+        {
+            "phase": "verify",
+            "action": "Run the command criteria that validate and run the pipeline configuration.",
+            "why": "Command evidence records the exit code and output of the real run.",
+            "done_when": "Every command criterion is satisfied.",
+        },
+    ],
+    "critique_checks": ["Does a command criterion validate or run the changed configuration?"],
+    "verification_steps": ["Run the pipeline validate/run command through anchor('test', workflow_criterion=...)."],
+    "suggested_next_actions": ["Read anchor('help', 'mode', 'pipeline') for the contract."],
+}
+
+# Modes accepted by ``_LEGACY_DEFAULTS`` without their own planning template reuse
+# the closest existing one; their profile still comes from ``_LEGACY_DEFAULTS``.
+for _alias, _base in {
+    "spec_creation": "planning",
+    "data": "implementation",
+    "etl": "implementation",
+    "refresh": "implementation",
+    "reconciliation": "analysis",
+}.items():
+    _MODE_HINTS.setdefault(_alias, _MODE_HINTS[_base])
+    _MODE_DEFAULTS.setdefault(_alias, _MODE_DEFAULTS[_base])
+del _alias, _base
