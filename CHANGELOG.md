@@ -2,6 +2,53 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-25
+
+Agents can use Anchor end to end: planning, implementation and delivery, with the owner needed
+only to approve a plan, approve a delivery, decide pending lessons, or resolve a blocker. See
+`docs/guides/agent-first-workflows.md`.
+
+### Added
+
+- **Mode contracts.** An accepted task carries `mode_contract`, and
+  `anchor("help", "mode", "<mode>")` returns it: required fields, records to write, accepted
+  criteria, the review its rigor requires and the owner touchpoints. New `pipeline` mode for
+  pipeline and configuration work.
+- **Command and review criteria.** A workflow criterion can be `method: "command"` (the plan's
+  `argv`, run once without a shell in the target root and measured by
+  `anchor("test", workflow_criterion=id)` with exit code, output digests and a bounded tail) or
+  `method: "review"` (satisfied by the recorded workflow review). Work without tests no longer
+  needs an invented test file. `check_plan` validates every criterion's method-specific keys.
+- **Named test environments** in the portfolio:
+  `projects.<id>.test_environments.<host>.<name>` with `kind = "local" | "wsl" | "runtime"`,
+  delivered as `ANCHOR_TEST_ENVIRONMENTS`. A pytest or command criterion's `environment` selects
+  one; WSL runs translate Windows paths. Evidence records the environment.
+- **Plan rigor.** An optional plan `rigor`; `full` requires an independent review and replan
+  cannot lower it.
+- **Planning records.** Work items gain `depends_on`, `review` (angle, verdict, findings and
+  reviewer bound to the item's fingerprint), `next` (ready items in dependency order) and
+  `request_plan_approval` (owner approval of a spec and its items once reviews satisfy the
+  rigor). `spec create` accepts `content`, and `spec update` replaces it atomically.
+- **Owner approval for every host.** Delivery, revocation, plan approval and memory activation
+  share one rule: the challenge is `APPROVE <64 hex>` or `REVOKE <64 hex>`; Slack is posted once
+  and polled briefly, returning `pending` instead of blocking; an in-session reply with
+  `provider="chat_in_session"` (lower assurance) completes it on any host; the first valid reply
+  wins and closes the other channel. Workflow delivery accepts `provider`,
+  `in_session_approval` and `wait_seconds`, so Databricks can approve deliveries without Slack.
+- **Pending owner decisions.** `gate` and `learning assess` results carry
+  `pending_owner_decisions`: open observations and candidate memories with copy-ready options.
+
+### Fixed
+
+- Delivery and revocation challenges carried a `sha256:` prefix that the Windows dialog could
+  never match, so neither could be approved without Slack.
+- An agent's approval call no longer opens a blocking Windows dialog; without Slack the owner
+  answers in the session.
+- `task` accepted only 12 of the 17 documented modes.
+- `anchor_execute` treats `args` given as `"None"`, `"null"` or an empty string as no arguments.
+- Spec review accepts the headings Anchor's own spec scaffold writes.
+- Work item `update` refuses completed or cancelled items.
+
 ## [0.3.40] - 2026-10-20
 
 A project can run its tests with its own interpreter.

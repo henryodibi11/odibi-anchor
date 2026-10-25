@@ -352,3 +352,31 @@ def test_unbound_data_exception_rejects_resolved_source_effect_before_handler(tm
             session_boot_manifest={}, planning_required_actions=frozenset(), root=str(tmp_path),
             action_contract=contract,
         )
+
+
+def test_planning_task_writes_only_planning_records_without_a_workflow(tmp_path):
+    from types import SimpleNamespace
+
+    from odibi_anchor._dispatcher._workflow_admission import (
+        enforce_workflow_admission,
+        require_task_workflow,
+        workflow_packet,
+    )
+    from odibi_anchor.codebase._workflow import WorkflowError
+    from odibi_anchor.planning._task_profile import normalize_task_profile
+
+    planning = normalize_task_profile(legacy_mode="planning")
+    session = SimpleNamespace(active_project="alpha", active_task_profile=planning, workflow_binding=None,
+                              artifact_root=str(tmp_path), target_root=str(tmp_path))
+    require_task_workflow(session_state=session, profile=planning, trust_domain=None, workflow_id=None)
+    for target in ("work_items/WI-2026-0001.md", "specs/PLAN_SPEC.md", "problems\\PRB-2026-0001.md"):
+        enforce_workflow_admission(tmp_path / "db", session_state=session, effects={"artifact_write"},
+                                   artifact_targets=[target])
+    with pytest.raises(WorkflowError, match="only planning records") as refused:
+        enforce_workflow_admission(tmp_path / "db", session_state=session, effects={"artifact_write"},
+                                   artifact_targets=["notebooks/report.md"])
+    assert refused.value.code == "workflow_required"
+    assert workflow_packet(tmp_path / "db", session_state=session)["next_step"] == "request_plan_approval"
+    greenfield = normalize_task_profile(legacy_mode="implementation")
+    with pytest.raises(WorkflowError, match="workflow_id"):
+        require_task_workflow(session_state=session, profile=greenfield, trust_domain="work", workflow_id=None)

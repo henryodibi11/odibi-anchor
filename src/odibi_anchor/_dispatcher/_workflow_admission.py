@@ -31,6 +31,19 @@ def lightweight_artifact_task(profile: Any) -> bool:
             and build_assurance_plan(profile).tier not in {"T2", "T3"})
 
 
+PLANNING_RECORD_DIRECTORIES = ("problems", "specs", "work_items", "decisions")
+
+
+def planning_record_task(profile: Any) -> bool:
+    """A design task that writes plans: governed by plan reviews and owner plan approval.
+
+    Without a bound workflow it may write only the managed planning records; any other
+    artifact output still needs a workflow.
+    """
+    return (profile is not None and profile.execution_mode == "artifact_only"
+            and profile.work_type == "design")
+
+
 def require_task_workflow(*, session_state: Any, profile: Any,
                           trust_domain: str | None, workflow_id: str | None) -> None:
     """Check fresh acceptance only; never reinterpret an immutable legacy task."""
@@ -38,7 +51,8 @@ def require_task_workflow(*, session_state: Any, profile: Any,
 
     source = task_profile_effect_compatible("source_write", profile)
     substantive_artifact = (profile is not None and profile.execution_mode == "artifact_only"
-                            and not lightweight_artifact_task(profile))
+                            and not lightweight_artifact_task(profile)
+                            and not planning_record_task(profile))
     if not source and not substantive_artifact:
         return
     missing = [name for name, value in (
@@ -152,6 +166,17 @@ def enforce_workflow_admission(path: str | Path, *, session_state: Any,
         raise WorkflowError("wrong_mode", "data-only compatibility never permits source-write effects")
     state = bound_workflow(path, session_state=session_state)
     if state is None:
+        if artifact_targets and planning_record_task(session_state.active_task_profile):
+            outside = sorted(str(target) for target in artifact_targets
+                             if PurePosixPath(str(target).replace("\\", "/")).parts[:1]
+                             not in {(name,) for name in PLANNING_RECORD_DIRECTORIES})
+            if outside:
+                raise WorkflowError(
+                    "workflow_required",
+                    "a planning task without a workflow writes only planning records ("
+                    + ", ".join(PLANNING_RECORD_DIRECTORIES) + "); bind a workflow for "
+                    + ", ".join(outside),
+                )
         return
     if not implementation_effects:
         root = Path(session_state.artifact_root).resolve()
@@ -206,6 +231,12 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "read_only_unphased", "completed": False,
                     "delivery_verified": False, "next_step": "report_observed_result"}
+        if planning_record_task(profile) and not lightweight_artifact_task(profile):
+            return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
+                    "status": "planning_records_unphased", "completed": False,
+                    "delivery_verified": False, "next_step": "request_plan_approval",
+                    "limitation": "Writes only planning records; the owner approves the plan with "
+                                  "work_item request_plan_approval."}
         if lightweight_artifact_task(profile):
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "lightweight_unphased", "completed": False,
