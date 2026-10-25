@@ -266,3 +266,22 @@ def test_planning_keys_are_optional_metadata_outside_material():
     assert planning <= work_item_module.OPTIONAL_META
     assert not planning & set(work_item_module._MATERIAL)
     assert not planning & work_item_module.REQUIRED_META
+
+def test_real_owner_approval_completes_plan_in_session_without_a_remote_channel(tmp_path, monkeypatch):
+    for name in ("ANCHOR_SLACK_BOT_TOKEN", "ANCHOR_SLACK_CHANNEL_ID", "ANCHOR_SLACK_USER_ID",
+                 "CW_SLACK_BOT_TOKEN", "CW_SLACK_CHANNEL_ID", "CW_SLACK_USER_ID", "DATABRICKS_RUNTIME_VERSION"):
+        monkeypatch.delenv(name, raising=False)
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    review(tmp_path, item_id, "problem")
+
+    asked = call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct")
+
+    assert asked["status"] == "approval_required" and asked["write_performed"] is False
+    reply = asked["owner_approval"]["approval_response"]
+    assert reply.startswith("APPROVE ") and len(reply) == len("APPROVE ") + 64
+    approved = call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct",
+                    provider="chat_in_session", in_session_approval=reply)
+    assert approved["status"] == "approved"
+    stored = call(tmp_path, "show", item_id)["record"]["plan_approvals"][0]
+    assert stored["assurance"] == "lower_assurance_single_user_chat_session_assertion"
+    assert call(tmp_path, "next")["ready"][0]["plan_approval"]["approved"] is True

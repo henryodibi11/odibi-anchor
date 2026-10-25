@@ -136,20 +136,6 @@ def test_exact_artifact_readback_is_measurement_not_automatic_completion(deliver
         delivery.d.observe_destination(delivery.db, **delivery.args)
 
 
-def windows_owner(monkeypatch, answer=6):
-    """Run the real local Windows transport with only the native dialog replaced."""
-    owner = importlib.import_module("odibi_anchor.human_input_owner")
-    windows = importlib.import_module("odibi_anchor.human_input_windows")
-    shown = []
-    provider = owner.OwnerApprovalProvider(
-        transport=windows.LocalWindowsOwnerTransport("windows-account:Alex"),
-        expected_owner_id="windows-account:Alex", assurance="interactive_local_windows_account_presence",
-    )
-    monkeypatch.setattr(owner, "select_owner_approval_provider", lambda **_: provider)
-    monkeypatch.setattr(windows, "_message_box", lambda message, _timeout: shown.append(message) or answer)
-    return shown
-
-
 def chat_approve(delivery):
     prepared = delivery.d.prepare_delivery(delivery.db, **delivery.args)
     return delivery.d.request_delivery_approval(
@@ -158,44 +144,36 @@ def chat_approve(delivery):
     )
 
 
-def test_local_windows_dialog_approves_the_real_delivery_challenge(delivery, monkeypatch):
+def test_real_delivery_and_revoke_challenges_match_the_windows_transport(delivery):
     """Regression: the challenge carried a sha256: prefix the Windows transport could never match."""
-    shown = windows_owner(monkeypatch)
+    windows = importlib.import_module("odibi_anchor.human_input_windows")
     prepared = delivery.d.prepare_delivery(delivery.db, **delivery.args)
-
-    approved = delivery.d.request_delivery_approval(delivery.db, **delivery.args, request_id="approve")
-
-    assert approved["progress"] == "approved_for_delivery"
-    assert prepared["approval_response"] in shown[0]
-    assert "personally approve this exact request (request_delivery_approval)" in shown[0]
-    assert approved["approval"]["owner"] == "windows-account:Alex"
-    assert approved["approval"]["owner_assurance"] == "interactive_local_windows_account_presence"
-
-
-def test_local_windows_dialog_revokes_with_the_revoke_challenge(delivery, monkeypatch):
+    assert windows._APPROVAL_PATTERN.search("Authorize.\nReply exactly: " + prepared["approval_response"])
     approved = chat_approve(delivery)
-    shown = windows_owner(monkeypatch)
+    assert approved["progress"] == "approved_for_delivery"
     revocation = delivery.d.prepare_revocation(delivery.db, **delivery.args)
-    assert revocation["approval_response"].startswith("REVOKE ")
-
-    revoked = delivery.d.request_delivery_revocation(delivery.db, **delivery.args, request_id="revoke")
-
-    assert revocation["approval_response"] in shown[0]
-    assert "personally revoke this exact request (revoke_delivery)" in shown[0]
-    assert revoked["progress"] == "qualified" and revoked["approval"] is None
-    assert revoked["generation"] == approved["generation"] + 1
+    assert windows._APPROVAL_PATTERN.search("Withdraw.\nReply exactly: " + revocation["approval_response"])
 
 
-def test_local_windows_no_declines_without_changing_the_workflow(delivery, monkeypatch):
-    windows_owner(monkeypatch, answer=7)
+def test_windows_without_slack_asks_in_session_and_never_opens_a_dialog(delivery, monkeypatch):
+    owner = importlib.import_module("odibi_anchor.human_input_owner")
+    windows = importlib.import_module("odibi_anchor.human_input_windows")
+    shown = []
+    provider = owner.OwnerApprovalProvider(
+        transport=windows.LocalWindowsOwnerTransport("windows-account:Alex"),
+        expected_owner_id="windows-account:Alex", assurance="interactive_local_windows_account_presence",
+    )
+    real_select = owner.select_owner_approval_provider
+    monkeypatch.setattr(owner, "select_owner_approval_provider", lambda **kw: (
+        real_select(**kw) if kw.get("provider") else provider))
+    monkeypatch.setattr(windows, "_message_box", lambda message, _timeout: shown.append(message) or 6)
 
-    declined = delivery.d.request_delivery_approval(delivery.db, **delivery.args, request_id="approve")
+    asked = delivery.d.request_delivery_approval(delivery.db, **delivery.args, request_id="approve")
 
-    assert declined["kind"] == "workflow_owner_approval" and declined["status"] == "declined"
-    assert declined["state_changed"] is False
-    retained = delivery.w.read_workflow(delivery.db, owner=delivery.workflow["owner"],
-                                        workflow_id=delivery.workflow["workflow_id"])
-    assert retained["progress"] == "qualified"
+    assert asked["kind"] == "workflow_owner_approval" and asked["status"] == "approval_required"
+    assert asked["state_changed"] is False and shown == []
+    approved = chat_approve(delivery)
+    assert approved["progress"] == "approved_for_delivery" and shown == []
 
 
 def test_chat_in_session_reply_completes_delivery_with_lower_assurance(delivery, monkeypatch):
