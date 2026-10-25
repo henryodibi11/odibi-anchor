@@ -425,3 +425,60 @@ class TestSpecPersist:
         task_result = {"goal": "Widget work", "mode": "testing"}
         result = spec_action("/tmp", "persist", task_result, specs_dir=str(tmp_path), output_format="dict")
         assert result["created"] is True
+
+
+class TestSpecContentWrites:
+    """spec create with content and spec update write full Markdown atomically."""
+
+    def test_create_with_content_and_update_replace_atomically(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        created = spec_action(
+            tmp_path, "create", name="planning records", content="# Plan\n\nv1\n",
+            specs_dir=specs_dir, output_format="dict",
+        )
+        path = specs_dir / "PLANNING_RECORDS_SPEC.md"
+        assert created["write_performed"] is True and created["artifact_path"] == str(path)
+        assert path.read_bytes() == b"# Plan\n\nv1\n"
+        with pytest.raises(FileExistsError):
+            spec_action(tmp_path, "create", name="PLANNING_RECORDS", content="x", specs_dir=specs_dir)
+        updated = spec_action(
+            tmp_path, "update", "planning-records", content="# Plan\n\nv2\n",
+            specs_dir=specs_dir, output_format="dict",
+        )
+        assert updated["updated"] is True and updated["write_performed"] is True
+        assert path.read_bytes() == b"# Plan\n\nv2\n"
+        unchanged = spec_action(
+            tmp_path, "update", "PLANNING_RECORDS", content="# Plan\n\nv2\n",
+            specs_dir=specs_dir, output_format="dict",
+        )
+        assert unchanged["write_performed"] is False
+        assert [entry.name for entry in specs_dir.iterdir()] == [path.name]
+
+    def test_update_refuses_missing_spec_and_unsafe_names(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        with pytest.raises(FileNotFoundError):
+            spec_action(tmp_path, "update", "ABSENT", content="x", specs_dir=specs_dir)
+        with pytest.raises(ValueError, match="letters, digits"):
+            spec_action(tmp_path, "create", name="../escape", content="x", specs_dir=specs_dir)
+        with pytest.raises(ValueError, match="nonempty"):
+            spec_action(tmp_path, "update", "ABSENT", specs_dir=specs_dir)
+
+    def test_review_completeness_accepts_anchor_scaffold_and_from_problem(self, tmp_path):
+        from odibi_anchor._dispatcher._problem import problem_action
+
+        specs_dir = tmp_path / "specs"
+        spec_action(tmp_path, "create", name="SCAFFOLDED", specs_dir=specs_dir, output_format="dict")
+        created = problem_action(
+            tmp_path, "create", title="Export latency",
+            evidence={"source": "load test", "observation": "CPU exceeded 95%."},
+            recommendation="Scale workers.", recommendation_evidence="E1",
+            uncertainty="Traffic mix may change.", output_format="dict",
+        )
+        spec_action(
+            tmp_path, "from_problem", created["problem_id"], name="FROM_PROBLEM",
+            specs_dir=specs_dir, output_format="dict",
+        )
+        for name in ("SCAFFOLDED", "FROM_PROBLEM"):
+            result = spec_action(tmp_path, "review", name, specs_dir=specs_dir, output_format="dict")
+            completeness = next(c for c in result["checks"] if c["name"] == "completeness")
+            assert completeness["passed"] is True, completeness
