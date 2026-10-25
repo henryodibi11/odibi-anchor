@@ -16,8 +16,9 @@ from odibi_anchor.codebase._workflow import (
     transition_workflow,
 )
 
-DEFAULT_APPROVAL_TIMEOUT_MINUTES = 5
+DEFAULT_APPROVAL_TIMEOUT_MINUTES = 30
 MAX_APPROVAL_TIMEOUT_MINUTES = 240
+OWNER_APPROVAL_COMMANDS = frozenset({"request_delivery_approval", "revoke_delivery"})
 READ_COMMANDS = frozenset({"status", "check_plan", "prepare_delivery", "prepare_revocation"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
                             "request_delivery_approval", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan"})
@@ -26,15 +27,20 @@ WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "q
 def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     request_id=None, expected_generation=None, plan=None, findings=None,
                     reason=None, blocker_kind=None, resolution=None, criterion_id=None,
-                    timeout_minutes=None, output_format="dict"):
+                    timeout_minutes=None, provider=None, in_session_approval=None,
+                    wait_seconds=None, output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
     check_plan reports every problem accept_plan would refuse, storing nothing.
     Create returns a draft ID to bind at a fresh task acceptance via workflow_id.
     All transitions require a caller-observed generation and idempotency key.
     No actor, approval, measurement, candidate, or receipt payload is accepted.
-    ``timeout_minutes`` (integer 1-240, default 5) bounds the owner's response window
-    for request_delivery_approval and revoke_delivery only; it grants no authority.
+    For request_delivery_approval and revoke_delivery only: ``timeout_minutes``
+    (integer 1-240, default 30) bounds the owner's response window; ``wait_seconds``
+    (integer 0-120, default 45) bounds how long this call waits for a remote reply
+    before returning ``status: "pending"``; ``provider="chat_in_session"`` (or
+    ``"databricks_in_session"``) with ``in_session_approval`` completes the challenge
+    with the exact reply the owner typed in this session. None of these grants authority.
     """
     from odibi_anchor._dispatcher._workflow_delivery import (
         DESTINATION_KEYS,
@@ -63,14 +69,24 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         raise ValueError("workflow output_format must be dict or markdown")
     if command in WRITE_COMMANDS and output_format != "dict":
         raise ValueError("workflow writes require dict output for durability checkpointing")
-    if timeout_minutes is not None:
-        if command not in {"request_delivery_approval", "revoke_delivery"}:
-            raise ValueError("timeout_minutes applies only to request_delivery_approval and revoke_delivery")
-        if type(timeout_minutes) is not int or not 1 <= timeout_minutes <= MAX_APPROVAL_TIMEOUT_MINUTES:
-            raise ValueError(
-                f"timeout_minutes must be an integer from 1 to {MAX_APPROVAL_TIMEOUT_MINUTES} "
-                f"(default {DEFAULT_APPROVAL_TIMEOUT_MINUTES})"
-            )
+    owner_options = {"timeout_minutes": timeout_minutes, "provider": provider,
+                     "in_session_approval": in_session_approval, "wait_seconds": wait_seconds}
+    for name, value in owner_options.items():
+        if value is not None and command not in OWNER_APPROVAL_COMMANDS:
+            raise ValueError(f"{name} applies only to request_delivery_approval and revoke_delivery")
+    if timeout_minutes is not None and (
+        type(timeout_minutes) is not int or not 1 <= timeout_minutes <= MAX_APPROVAL_TIMEOUT_MINUTES
+    ):
+        raise ValueError(
+            f"timeout_minutes must be an integer from 1 to {MAX_APPROVAL_TIMEOUT_MINUTES} "
+            f"(default {DEFAULT_APPROVAL_TIMEOUT_MINUTES})"
+        )
+    if provider not in (None, "chat_in_session", "databricks_in_session"):
+        raise ValueError("provider must be omitted, 'chat_in_session' or 'databricks_in_session'")
+    if in_session_approval is not None and (not isinstance(in_session_approval, str) or provider is None):
+        raise ValueError("in_session_approval is the exact approval_response string and requires provider")
+    if wait_seconds is not None and (type(wait_seconds) is not int or not 0 <= wait_seconds <= 120):
+        raise ValueError("wait_seconds must be an integer from 0 to 120 (default 45)")
     public_request = {"command": command, "expected_generation": expected_generation,
                       "plan": plan, "findings": findings, "reason": reason,
                       "blocker_kind": blocker_kind, "resolution": resolution}
@@ -79,6 +95,10 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     # The default stays out of the replay key so existing receipts and retries match.
     if timeout_minutes not in (None, DEFAULT_APPROVAL_TIMEOUT_MINUTES):
         public_request["timeout_minutes"] = timeout_minutes
+    # wait_seconds only bounds this call's polling, so it never joins the replay key.
+    for name in ("provider", "in_session_approval"):
+        if owner_options[name] is not None:
+            public_request[name] = owner_options[name]
     approval_timeout = timeout_minutes or DEFAULT_APPROVAL_TIMEOUT_MINUTES
     replayed = False
     if command == "status":
@@ -147,16 +167,17 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                 state = qualify_recorded(path, session_state=session_state, workflow_id=workflow_id,
                                          expected_generation=expected_generation, request_id=request_id,
                                          public_request=public_request)
-            elif command == "request_delivery_approval":
-                state = request_delivery_approval(path, session_state=session_state,
-                                                  workflow_id=workflow_id, request_id=request_id,
-                                                  timeout_minutes=approval_timeout,
-                                                  public_request=public_request)
-            elif command == "revoke_delivery":
-                state = request_delivery_revocation(path, session_state=session_state,
-                                                    workflow_id=workflow_id, request_id=request_id,
-                                                    timeout_minutes=approval_timeout,
-                                                    public_request=public_request)
+            elif command in OWNER_APPROVAL_COMMANDS:
+                request_owner = (request_delivery_approval if command == "request_delivery_approval"
+                                 else request_delivery_revocation)
+                state = request_owner(path, session_state=session_state,
+                                      workflow_id=workflow_id, request_id=request_id,
+                                      timeout_minutes=approval_timeout, public_request=public_request,
+                                      provider=provider, in_session_approval=in_session_approval,
+                                      wait_seconds=wait_seconds)
+                if state.get("kind") == "workflow_owner_approval":
+                    # Not approved yet: nothing was transitioned or stored for replay.
+                    return {**state, "packet_sha256": digest(state)}
             else:
                 operation = command
                 if command == "accept_plan":

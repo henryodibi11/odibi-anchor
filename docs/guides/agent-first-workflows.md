@@ -32,6 +32,21 @@ One rule for plan approval, delivery, revocation and memory promotion.
   channel (Slack gets a thread reply saying the request was answered elsewhere) and rejects
   late replies.
 
+Interface (`odibi_anchor.owner_approval`, used by delivery, revocation and plan approval):
+
+- `challenge_for(subject, verb="APPROVE") -> (hex, "VERB <hex>")`.
+- `request_owner_approval(*, operation, subject, prompt, verb="APPROVE", provider=None,
+  in_session_approval=None, wait_seconds=45, timeout_minutes=30)` returns `status`
+  `approved` (with `owner`, `assurance`, `transport`, `authority_ref`,
+  `response_message_id`), `pending` (a Slack request is open; `channels`, `expires_at`),
+  `approval_required` (no remote channel; only an in-session reply can answer), `expired` or
+  `declined`. Every result carries `approval_response` and `challenge_sha256`. A reply that
+  is not the exact challenge raises `OwnerApprovalMismatch`, naming the failed checks.
+- Workflow `request_delivery_approval` and `revoke_delivery` accept `provider`,
+  `in_session_approval` and `wait_seconds`. Anything but `approved` returns a
+  `workflow_owner_approval` packet with `next_operation`/`available_operations`, changes
+  nothing and is not stored for replay; only an approved reply transitions.
+
 ## Modes are contracts
 
 Each task mode publishes a contract: the fields to fill, the evidence that counts, the review

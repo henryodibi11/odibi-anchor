@@ -45,6 +45,8 @@ os.environ["ANCHOR_HOME"] = _cw_test_home
 # never read or write a real .agent_memory.db, regardless of which environment
 # profile is detected or what the caller exported.
 os.environ["ANCHOR_MEMORY_DB"] = os.path.join(_cw_test_root, "agent_memory.db")
+# Owner-approval requests are durable; keep them out of the operator's state directory.
+os.environ["ANCHOR_HUMAN_INPUT_STATE_PATH"] = os.path.join(_cw_test_root, "human-input.sqlite3")
 
 # The orb can require signed commits globally. Test repositories are disposable
 # and deliberately unsigned, so override signing only for test subprocesses.

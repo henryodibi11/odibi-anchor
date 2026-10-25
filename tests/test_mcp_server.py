@@ -1167,6 +1167,16 @@ class TestStructuredArgs:
         asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {"action": "status", "args": None}))
         assert calls == [{"action": "status", "args": (), "kwargs": {}}]
 
+    @pytest.mark.parametrize("args", ["None", "null", "", "   "])
+    @pytest.mark.parametrize("options", [{}, {"response_version": 2, "telemetry_version": 1}])
+    def test_textual_none_args_dispatch_without_arguments(self, monkeypatch, args, options):
+        calls = self._capture(monkeypatch)
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": "status", "args": args, **options,
+        }))
+        assert "not valid UTF-8 JSON" not in result.content[0].text
+        assert calls == [{"action": "status", "args": (), "kwargs": {}}]
+
     @pytest.mark.parametrize("args", [[], [{"arg0": "x"}], 1, 2.5, True, False])
     def test_fastmcp_rejects_array_and_scalar_args_before_dispatch(self, monkeypatch, args):
         monkeypatch.setattr(mcp_server, "_boot", pytest.fail)
@@ -2018,6 +2028,7 @@ class TestTypedTools:
         plan = ("plan", "properties")
         assert enum("anchor_workflow", "command") == READ_COMMANDS | WRITE_COMMANDS
         assert enum("anchor_workflow", "blocker_kind") == _BLOCK_REASONS
+        assert enum("anchor_workflow", "provider") == {"chat_in_session", "databricks_in_session"}
         assert enum("anchor_workflow", *plan, "execution_mode") == _EXECUTION_MODES
         assert enum("anchor_workflow", *plan, "risk") == _RISKS
         assert enum("anchor_task", "work_type") == _WORK_TYPES

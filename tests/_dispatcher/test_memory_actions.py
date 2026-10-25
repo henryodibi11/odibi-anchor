@@ -871,7 +871,7 @@ def test_dispatcher_rejects_unsupported_owner_provider(tmp_path):
 
     with pytest.raises(
         HumanInputConfigurationError,
-        match="must be omitted or 'databricks_in_session'",
+        match="must be omitted or 'chat_in_session' or 'databricks_in_session'",
     ):
         memory_action(
             tmp_path, ("promotion",), {

@@ -445,6 +445,45 @@ def test_approval_retry_does_not_prompt_again(approved_runtime, monkeypatch):
     assert replay["replayed"] is True and replay["state"] == approved
 
 
+def test_public_pending_owner_approval_is_not_replayed_and_chat_reply_completes(runtime, monkeypatch, tmp_path):
+    from odibi_anchor import human_input_owner
+    from tests.test_owner_approval import FakeSlack
+
+    anchor, _, _, _ = runtime
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.sqlite3"))
+    implement(runtime)
+    anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    advance(anchor, "review", findings=[])
+    finish_producer(anchor)
+    qualified = advance(anchor, "qualify")
+    slack = FakeSlack()
+    real = human_input_owner.select_owner_approval_provider
+    monkeypatch.setattr(human_input_owner, "select_owner_approval_provider", lambda *, provider=None, in_session_approval=None: (
+        real(provider=provider, in_session_approval=in_session_approval) if provider else
+        human_input_owner.OwnerApprovalProvider(transport=slack, expected_owner_id="UOWNER",
+                                                assurance="remote_authenticated_slack_identity")))
+    kwargs = {"expected_generation": qualified["generation"], "request_id": "approval-1", "output_format": "dict"}
+    with pytest.raises(ValueError, match="applies only to request_delivery_approval"):
+        anchor("workflow", "verify_delivery", wait_seconds=0, **kwargs)
+    with pytest.raises(ValueError, match="wait_seconds must be an integer from 0 to 120"):
+        anchor("workflow", "request_delivery_approval", wait_seconds=121, **kwargs)
+
+    pending = anchor("workflow", "request_delivery_approval", wait_seconds=0, **kwargs)
+    again = anchor("workflow", "request_delivery_approval", wait_seconds=0, **kwargs)
+
+    assert pending["kind"] == "workflow_owner_approval" and pending["status"] == "pending"
+    assert pending["packet_sha256"] and again["status"] == "pending" and len(slack.delivered) == 1
+    assert pending["next_operation"]["copy_ready"].startswith("anchor('workflow', 'request_delivery_approval'")
+    assert anchor("workflow", output_format="dict")["state"] == qualified
+    complete = {**pending["available_operations"][1]["kwargs"], "request_id": "approval-2"}
+    assert complete["provider"] == "chat_in_session"
+    approved = anchor("workflow", "request_delivery_approval", **complete)
+    assert approved["state"]["progress"] == "approved_for_delivery" and approved["replayed"] is False
+    assert approved["state"]["approval"]["owner_assurance"] == "lower_assurance_single_user_chat_session_assertion"
+    assert anchor("workflow", "request_delivery_approval", **complete)["replayed"] is True
+    assert len(slack.closed) == 1
+
+
 def test_interrupted_readback_resumes_exact_request(approved_runtime, monkeypatch):
     from odibi_anchor._dispatcher import _workflow_runtime
 
