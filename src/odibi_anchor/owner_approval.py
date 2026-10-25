@@ -7,8 +7,8 @@ Channels open together and the first valid reply wins:
   ``wait_seconds``; until a reply arrives the result is ``pending``.
 - In-session chat (``provider="chat_in_session"``) or Databricks in-session completes the
   same challenge with the exact reply the owner typed, superseding an open Slack request.
-- Without Slack, the local Windows dialog is used as before (blocking, bounded by the
-  timeout); on Databricks or with no channel the result is ``approval_required``.
+- Without Slack the result is ``approval_required``: the owner answers in the session. A
+  blocking local dialog is never opened here, so an agent's call never pops up a window.
 
 A challenge is single use: once one channel records the exact reply, later replies on any
 channel are refused and the same approved record is returned again.
@@ -38,6 +38,7 @@ CHAT_IN_SESSION = "chat_in_session"
 DATABRICKS_IN_SESSION = "databricks_in_session"
 VERBS = ("APPROVE", "REVOKE")
 DECLINE = "DECLINE"
+_LOCAL_WINDOWS_TRANSPORT = "local-windows-owner-presence"
 ASSURANCE_BY_TRANSPORT = {
     "slack": "remote_authenticated_slack_identity",
     "local-windows-owner-presence": "interactive_local_windows_account_presence",
@@ -253,6 +254,11 @@ def request_owner_approval(
             raise HumanInputError(f"Owner approval request ended as {record.status}")
         return {"status": "pending", **base, "channels": [selected.transport.name, *_in_session_channels()],
                 "expires_at": _expires_at(record), "request_id": record.request_id}
+
+    if selected.transport.name == _LOCAL_WINDOWS_TRANSPORT:
+        # The local dialog would hold the agent's call and pop up on the desktop; without a
+        # remote channel the owner answers in the session instead.
+        return {"status": "approval_required", **base, "channels": _in_session_channels(), "expires_at": None}
 
     try:
         record = human_input.request_human_input_record(
