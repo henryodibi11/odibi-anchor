@@ -1347,6 +1347,20 @@ def init(
     def _help_action_impl(args, kwargs):
         from odibi_anchor._dispatcher._dispatch_table import build_help_text
         target = args[0] if args else None
+        if target == "mode":
+            from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
+            from odibi_anchor.planning.mode_contracts import contract_for
+
+            if len(args) > 1 and args[1]:
+                return contract_for(str(args[1]))
+            columns = ("mode", "work_type", "execution_mode", "risk", "rigor", "workflow_required")
+            return {
+                "kind": "mode_contracts",
+                "modes": [
+                    {key: contract_for(name)[key] for key in columns} for name in sorted(_LEGACY_DEFAULTS)
+                ],
+                "usage": 'anchor("help", "mode", "<mode>") returns that mode\'s full contract.',
+            }
 
         def _operational(name):
             return lambda: getattr(
@@ -2207,6 +2221,12 @@ def init(
                     _final["accepted_task_authority"] = authority
                     _final["task_window_id"] = authority["task_window_id"]
                     _final["workflow"] = task_workflow_packet
+                    # Response-only guidance; the persisted task authority above is unchanged.
+                    from odibi_anchor.planning.mode_contracts import contract_for
+
+                    _accepted_profile = _SESSION_STATE.active_task_profile
+                    if _accepted_profile is not None:
+                        _final["mode_contract"] = contract_for(None, profile=_accepted_profile)
                     _save_session_state({
                         "stage": "planned",
                         "files_changed": sorted(_SESSION_FILES_CHANGED),

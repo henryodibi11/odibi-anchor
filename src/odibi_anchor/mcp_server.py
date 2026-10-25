@@ -772,7 +772,7 @@ def _cw_execute_with_telemetry(
 
 
 @mcp.tool()
-def anchor_help(category: str | None = None, action: str | None = None) -> str:
+def anchor_help(category: str | None = None, action: str | None = None, mode: TaskMode | None = None) -> str:
     """Get comprehensive help for all anchor() actions.
 
     This tool provides discovery for all anchor() actions available through anchor_execute().
@@ -791,7 +791,9 @@ def anchor_help(category: str | None = None, action: str | None = None) -> str:
                   - "Testing" — dogfood
                   - "Composed Workflows" — reconcile, investigate, debug, trace_row, evolve, chain
         action: Get detailed help for a specific action (optional).
-                Example: "profile_table", "quality", "task"
+                Example: "profile_table", "quality", "task". "mode" lists every task mode.
+        mode: Return this task mode's contract: fields to fill, records, accepted criteria,
+              review requirement and owner touchpoints (optional).
 
     Returns:
         - If action specified: Detailed signature and usage for that action
@@ -812,6 +814,8 @@ def anchor_help(category: str | None = None, action: str | None = None) -> str:
         try:
             anchor = _boot()
 
+            if mode:
+                return _fmt(anchor("help", "mode", mode))
             # If specific action requested, use anchor("help", action)
             if action:
                 return _fmt(anchor("help", action))
