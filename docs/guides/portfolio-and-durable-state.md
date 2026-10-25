@@ -310,6 +310,41 @@ with the reason, and no tests run. Without the field, behaviour is unchanged. An
 before 0.3.40 reject `test_python` as an unknown portfolio field, so upgrade every host that reads
 the portfolio before adding it.
 
+## Named test environments
+
+A workflow criterion can name where it runs. The owner declares environments per project and
+host:
+
+```toml
+[projects."odibi".test_environments."desktop"."windows"]
+kind = "local"
+python = "C:\\Users\\henry\\odibi\\.venv\\Scripts\\python.exe"
+
+[projects."odibi".test_environments."desktop"."wsl-spark"]
+kind = "wsl"
+distro = "Ubuntu"
+python = "/home/henry/venvs/odibi-spark/bin/python"
+
+[projects."odibi".test_environments."desktop"."wsl-spark".env]
+SPARK_LOCAL_IP = "127.0.0.1"
+
+[projects."odibi".test_environments."databricks"."cluster"]
+kind = "runtime"
+```
+
+`kind = "local"` requires an absolute `python`. `kind = "wsl"` requires `distro` and a POSIX
+`python` inside it. `kind = "runtime"` uses the interpreter running Anchor (for example on
+Databricks) and takes no `python`. `env` is an optional table of non-secret, single-line string
+variables; secret-like names and `ANCHOR_` names are refused. Bootstrap delivers this host's
+environments as JSON in `ANCHOR_TEST_ENVIRONMENTS`, like `ANCHOR_TEST_PYTHON`.
+
+A pytest or command criterion with `"environment": "<name>"` runs there; an unknown name is
+refused before anything runs, naming the configured ones. A leading `"python"` in a command's
+`argv` is the environment's interpreter. WSL runs `wsl.exe -d <distro> --cd <cwd> -e env K=V ...`,
+translating Windows paths (`C:\x` becomes `/mnt/c/x`) and passing variables explicitly. Evidence
+records the environment name, kind and installed distributions, and `qualify` refuses a
+measurement whose environment has changed since. Without `environment`, criteria run as before.
+
 ## Durable state lifecycle
 
 The live database and managed project artifact tree stay on local compute. Substantive authority

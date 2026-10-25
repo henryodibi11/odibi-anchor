@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +28,8 @@ _DDL = (
 )
 SCHEMA_SHA256 = hashlib.sha256((";\n".join(_DDL) + ";\n").encode()).hexdigest()
 _OWNER_KEYS = {"project_id", "target_root", "artifact_root", "anchor_home", "trust_domain"}
+_RIGOR_RANKS = {None: -1, "direct": 0, "compact": 1, "full": 2}
+CriterionProblems = Callable[[dict[str, Any]], list[str]]
 _BLOCK_REASONS = {
     "missing_evidence", "unavailable", "unsafe", "awaiting_authority",
     "replan_required", "recovery_required", "conflict", "outcome_unknown",
@@ -105,6 +107,8 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
         raise ValueError("plan.risk must be low, medium or high")
     if plan.get("execution_mode") not in {"read_only", "artifact_only", "source_change", "data_change"}:
         raise ValueError("invalid plan execution_mode")
+    if "rigor" in plan and plan["rigor"] not in {"direct", "compact", "full"}:
+        raise ValueError("plan.rigor must be direct, compact or full (omit it for the default)")
     # Drafts may omit fields, but a present list field must already have its accepted
     # shape; otherwise the error surfaces only later at accept_plan.
     for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions",
@@ -131,13 +135,13 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
 
 
 def require_acceptable(plan: Any, destination_keys: Mapping[str, set[str]] | None = None,
-                       *, stored: bool = True) -> None:
+                       *, stored: bool = True, criterion_problems: CriterionProblems | None = None) -> None:
     """Refuse with every problem at once, not only the first.
 
     ``stored=False`` is create and replan: an unready draft is never stored, because a
     producer bound to it would go stale on the replan needed to fix it.
     """
-    problems = acceptance_problems(_plan(plan), destination_keys)
+    problems = acceptance_problems(_plan(plan), destination_keys, criterion_problems)
     if not problems:
         return
     message = "plan is not ready for acceptance: " + "; ".join(problems)
@@ -162,11 +166,12 @@ def _is_text(value: Any) -> bool:
 
 
 def acceptance_problems(plan: dict[str, Any],
-                        destination_keys: Mapping[str, set[str]] | None = None) -> list[str]:
+                        destination_keys: Mapping[str, set[str]] | None = None,
+                        criterion_problems: CriterionProblems | None = None) -> list[str]:
     """List every gap accept_plan would refuse, so one replan can fix them all.
 
-    This domain is destination-agnostic; runtime callers pass their supported
-    destination kinds and exact keys to check them as well.
+    This domain is destination- and collector-agnostic; runtime callers pass their
+    supported destination kinds and exact keys, and their criterion method checks.
     """
     problems = []
     for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions"):
@@ -206,17 +211,20 @@ def acceptance_problems(plan: dict[str, Any],
             ids.append(criterion.get("id"))
         if len(ids) != len(set(map(str, ids))):
             problems.append("criterion IDs must be unique")
+        if criterion_problems is not None:
+            problems.extend(criterion_problems(plan))
     return problems
 
 
 def acceptance_check(plan: Any,
-                     destination_keys: Mapping[str, set[str]] | None = None) -> dict[str, Any]:
+                     destination_keys: Mapping[str, set[str]] | None = None,
+                     criterion_problems: CriterionProblems | None = None) -> dict[str, Any]:
     """Report whether accept_plan would accept this plan, without storing or granting anything."""
     try:
         plan = _plan(plan)
     except (ValueError, WorkflowError) as error:
         return {"ready": False, "problems": [str(error)]}
-    problems = acceptance_problems(plan, destination_keys)
+    problems = acceptance_problems(plan, destination_keys, criterion_problems)
     return {"ready": not problems, "problems": problems}
 
 
@@ -326,6 +334,8 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         ranks = {"low": 0, "medium": 1, "high": 2}
         if ranks[plan["risk"]] < ranks[state["plan"]["risk"]]:
             raise WorkflowError("risk_downgrade", "replan cannot authorize a risk downgrade")
+        if _RIGOR_RANKS[plan.get("rigor")] < _RIGOR_RANKS[state["plan"].get("rigor")]:
+            raise WorkflowError("rigor_downgrade", "replan cannot lower or remove the plan rigor")
         result.update(phase="plan", status="active", progress="draft", plan=plan,
                       plan_sha256=digest(plan), admission=None, candidate=None, qualification=None,
                       approval=None, delivery=None, verification=None, blocker=None,
@@ -359,8 +369,9 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
     elif operation == "record_check" and progress == "implemented":
         _matching(payload, state)
         criterion = payload.get("criterion_id")
-        if criterion not in {c["id"] for c in state["plan"]["criteria"]}:
-            raise WorkflowError("missing_evidence", "measurement does not match a plan criterion")
+        methods = {c["id"]: c["method"] for c in state["plan"]["criteria"]}
+        if criterion not in methods or payload.get("method") != methods[criterion]:
+            raise WorkflowError("missing_evidence", "measurement does not match a plan criterion and method")
         for key in ("method", "evidence_ref", "collector"):
             _text(payload.get(key), key)
         if payload.get("status") not in {"satisfied", "failed", "unavailable"}:
@@ -393,13 +404,17 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         _matching(review, state)
         _text(review.get("reviewer"), "reviewer")
         _text(review.get("evidence_ref"), "review evidence_ref")
+        if any(check["method"] == "review" and check["evidence_ref"] != review["evidence_ref"]
+               for check in checks):
+            raise WorkflowError("stale_evidence", "a review criterion must cite the recorded review")
         if review.get("status") != "satisfied":
             raise WorkflowError("review_required", "review has unresolved findings")
-        if state["plan"]["risk"] == "high" and (
+        if (state["plan"]["risk"] == "high" or state["plan"].get("rigor") == "full") and (
             review.get("kind") != "independent"
             or review["reviewer"] == state["candidate"]["producer"]
         ):
-            raise WorkflowError("review_required", "high-risk work requires independent review")
+            raise WorkflowError("review_required", ("high-risk" if state["plan"]["risk"] == "high"
+                                                    else "full-rigor") + " work requires independent review")
         if review.get("kind") not in {"self", "independent"}:
             raise ValueError("unknown review kind")
         result.update(phase="deliver", progress="qualified", qualification=payload)
@@ -573,7 +588,8 @@ def _append(connection, state, request_id, request, previous):
 
 def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: str,
                     plan: dict[str, Any], artifact_baseline: dict[str, Any] | None = None,
-                    destination_keys: Mapping[str, set[str]] | None = None) -> dict[str, Any]:
+                    destination_keys: Mapping[str, set[str]] | None = None,
+                    criterion_problems: CriterionProblems | None = None) -> dict[str, Any]:
     """Create draft authority; request replay never invents historical evidence.
 
     A new draft must already be ready for acceptance; runtime callers pass their
@@ -592,7 +608,7 @@ def create_workflow(path: str | Path, *, owner: Mapping[str, Any], request_id: s
             if event["request"] != request:
                 raise WorkflowError("conflict", "request_id reused for different workflow creation")
             return event["state"]
-        require_acceptable(plan, destination_keys, stored=False)
+        require_acceptable(plan, destination_keys, stored=False, criterion_problems=criterion_problems)
         state = {"schema_version": VERSION, "workflow_id": identifier, "generation": 0,
                  "owner": identity, "phase": "plan", "status": "active", "progress": "draft",
                  "plan": plan, "plan_sha256": digest(plan), "admission": None,

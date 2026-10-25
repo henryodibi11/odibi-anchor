@@ -367,3 +367,45 @@ def test_host_package_version_pin_rejects_inexact_values(tmp_path, pin):
 
     with pytest.raises(ValueError, match=r"hosts\.amp-host\.package_version must be an exact"):
         validate_portfolio(portfolio)
+
+
+def test_test_environments_round_trip_validate_and_resolve_only_for_their_host(tmp_path):
+    import json
+
+    path = tmp_path / "anchor.toml"
+    portfolio = _portfolio(tmp_path)
+    environments = {
+        "windows": {"kind": "local", "python": "C:\\venvs\\odibi\\Scripts\\python.exe"},
+        "wsl-spark": {"kind": "wsl", "distro": "Ubuntu", "python": "/home/me/venv/bin/python",
+                      "env": {"SPARK_LOCAL_IP": "127.0.0.1"}},
+        "cluster": {"kind": "runtime"},
+    }
+    portfolio["projects"]["alpha"]["test_environments"] = {"amp-host": environments}
+
+    write_portfolio(path, portfolio)
+    loaded = load_portfolio(path)
+
+    assert loaded["projects"]["alpha"]["test_environments"] == {"amp-host": environments}
+    assert '[projects."alpha".test_environments."amp-host"."wsl-spark".env]' in path.read_text()
+    assert write_portfolio(tmp_path / "again.toml", loaded)["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    delivered = resolve_project(loaded, host_id="amp-host", project_id="alpha")["environment"]
+    assert json.loads(delivered["ANCHOR_TEST_ENVIRONMENTS"]) == environments
+    assert "ANCHOR_TEST_ENVIRONMENTS" not in resolve_project(loaded, host_id="remote", project_id="alpha")["environment"]
+    fields = {item["field"] for item in validate_portfolio(loaded)["configured"]}
+    assert "projects.alpha.test_environments.amp-host.wsl-spark" in fields
+
+
+@pytest.mark.parametrize("environment, message", [
+    ({"kind": "local"}, r"of kind local requires kind, python"),
+    ({"kind": "local", "python": "relative/python"}, r"python must be a non-empty absolute path"),
+    ({"kind": "wsl", "python": "C:\\python.exe", "distro": "Ubuntu"}, r"absolute POSIX path inside the distro"),
+    ({"kind": "runtime", "python": "/usr/bin/python3"}, r"allows only env, kind"),
+    ({"kind": "docker"}, r"kind must be local, wsl or runtime"),
+    ({"kind": "runtime", "env": {"DB_PASSWORD": "x"}}, r"secret-like field is forbidden"),
+    ({"kind": "runtime", "env": {"ANCHOR_HOME": "/x"}}, r"outside the ANCHOR_ prefix"),
+])
+def test_invalid_test_environments_are_refused(tmp_path, environment, message):
+    portfolio = _portfolio(tmp_path)
+    portfolio["projects"]["alpha"]["test_environments"] = {"amp-host": {"bad": environment}}
+    with pytest.raises(ValueError, match=message):
+        write_portfolio(tmp_path / "bad.toml", portfolio)
