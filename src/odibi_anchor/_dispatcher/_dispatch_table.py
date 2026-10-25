@@ -819,8 +819,17 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'or the ungated-edit limit; unplanned paths still do. A checkpoint closes the producer '
         'before `implemented`, so add a missing path through replan, not checkpoint.',
         '`request_delivery_approval` and `revoke_delivery` accept `timeout_minutes`, an integer '
-        'from 1 to 240 (default 5): the owner\'s response window. It grants no authority; a '
+        'from 1 to 240 (default 30): the owner\'s response window. It grants no authority; a '
         'non-default value is part of the request identity for exact retries.',
+        'Owner approval: the challenge is `APPROVE <64 hex>` (`REVOKE <64 hex>` to revoke). With '
+        'Slack configured the request posts once, waits at most `wait_seconds` (0-120, default 45) '
+        'and otherwise returns a `workflow_owner_approval` packet with `status: "pending"` and '
+        'copy-ready operations: check again with a new request_id, or complete with '
+        '`provider="chat_in_session"` and `in_session_approval=<approval_response>` once the owner '
+        'typed it in this session (lower assurance; `databricks_in_session` on Databricks). '
+        'Without a remote channel the status is `approval_required`; after `timeout_minutes` it is '
+        '`expired`: stop and report that approval is waiting. The first valid reply wins, the '
+        'challenge is single use, and only an approved reply changes the workflow.',
         'Base moved (rebase or integration-branch update): the candidate is diffed from the '
         'producer\'s start HEAD and cannot be carried across. Supported procedure: (1) keep the old '
         'commits on a side branch (rebased onto the new base if useful) and move the worktree '
@@ -963,7 +972,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`promotion`: use `command="inspect|evaluate|verify|attest|request_owner_activation|'
         'request_owner_confirmation|withdraw|quarantine"`. On Databricks, explicitly set '
         '`provider="databricks_in_session"` to choose the lower-assurance two-step challenge '
-        'even when Slack is configured; omitted `provider` preserves the default provider order.',
+        'even when Slack is configured; omitted `provider` preserves the default provider order. '
+        'On any host, `provider="chat_in_session"` runs the same two-step challenge for a reply '
+        'the owner typed in the chat session (lower assurance).',
         'For a candidate with no promotion event, reject it directly with '
         '`anchor("reject", "<memory_id>")`; `withdraw` and `quarantine` only reverse an existing '
         'promotion event. A Databricks approval result includes the exact second call under '

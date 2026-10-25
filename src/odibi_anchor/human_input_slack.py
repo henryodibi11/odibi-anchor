@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib import error, parse, request
+from uuid import uuid4
 
 from odibi_anchor.human_input import (
     HumanInputConfigurationError,
@@ -71,6 +72,8 @@ class SlackHumanInputTransport:
     """Deliver questions and collect authenticated threaded replies through Slack."""
 
     name = "slack"
+    #: Replies are read from Slack by reference, so a later process can resume a request.
+    resumable = True
 
     def __init__(
         self,
@@ -117,11 +120,17 @@ class SlackHumanInputTransport:
 
     def deliver(self, human_request: HumanInputRequest) -> str:
         self._validate_channel()
-        deadline = datetime.fromtimestamp(human_request.deadline_at, timezone.utc).isoformat()
+        deadline = datetime.fromtimestamp(human_request.deadline_at, UTC).isoformat()
+        instruction = (
+            "Reply in this message's thread with exactly the challenge line, or DECLINE. "
+            "The first valid reply from the configured user, here or in the agent session, wins."
+            if human_request.challenge else
+            "Reply in this message's thread. The first reply from the configured user wins."
+        )
         text = (
             f"<@{self.allowed_user_id}> :question: *Odibi Anchor needs your input*\n\n"
             f"{human_request.message}\n\n"
-            "Reply in this message's thread. The first reply from the configured user wins.\n"
+            f"{instruction}\n"
             f"Request: `{human_request.request_id}`\nDeadline: `{deadline}`"
         )
         return self._post_message(text, human_request.request_id)
@@ -134,6 +143,22 @@ class SlackHumanInputTransport:
             f"{message}\n\nNotification: `{notification_id}`"
         )
         return self._post_message(text, notification_id)
+
+    def close(self, human_request: HumanInputRequest, reason: str) -> str:
+        """Reply in the request's thread that it is closed and later replies are ignored."""
+        _channel, thread_timestamp = self._parse_reference(human_request.transport_ref or "")
+        text = f":lock: {reason}\nRequest: `{human_request.request_id}`"
+        return self._post_message(text, str(uuid4()), thread_timestamp=thread_timestamp)
+
+    def _parse_reference(self, transport_ref: str) -> tuple[str, str]:
+        try:
+            channel, thread_timestamp = transport_ref.split(":", 1)
+            float(thread_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise HumanInputDeliveryError("Invalid Slack delivery reference") from exc
+        if channel != self.channel_id:
+            raise HumanInputDeliveryError("Slack delivery reference does not match the configured channel")
+        return channel, thread_timestamp
 
     def _validate_channel(self) -> None:
         """Require a private, workspace-only Slack channel before posting."""
@@ -152,18 +177,18 @@ class SlackHumanInputTransport:
                 "ANCHOR_SLACK_CHANNEL_ID must identify a private, workspace-only channel"
             )
 
-    def _post_message(self, text: str, client_message_id: str) -> str:
+    def _post_message(self, text: str, client_message_id: str, *, thread_timestamp: str | None = None) -> str:
         """Post one message and return its opaque channel/timestamp reference."""
-        result = self._api_call(
-            "chat.postMessage",
-            {
-                "channel": self.channel_id,
-                "text": text,
-                "client_msg_id": client_message_id,
-                "unfurl_links": False,
-                "unfurl_media": False,
-            },
-        )
+        payload: dict[str, Any] = {
+            "channel": self.channel_id,
+            "text": text,
+            "client_msg_id": client_message_id,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+        if thread_timestamp is not None:
+            payload["thread_ts"] = thread_timestamp
+        result = self._api_call("chat.postMessage", payload)
         timestamp = result.get("ts")
         channel = result.get("channel")
         if not isinstance(timestamp, str) or not timestamp or channel != self.channel_id:
@@ -171,13 +196,7 @@ class SlackHumanInputTransport:
         return f"{self.channel_id}:{timestamp}"
 
     def replies(self, transport_ref: str) -> list[HumanInputReply]:
-        try:
-            channel, thread_timestamp = transport_ref.split(":", 1)
-            float(thread_timestamp)
-        except (TypeError, ValueError) as exc:
-            raise HumanInputDeliveryError("Invalid Slack delivery reference") from exc
-        if channel != self.channel_id:
-            raise HumanInputDeliveryError("Slack delivery reference does not match the configured channel")
+        channel, thread_timestamp = self._parse_reference(transport_ref)
         replies: list[HumanInputReply] = []
         cursor = ""
         while True:

@@ -8,19 +8,16 @@ import pytest
 
 from odibi_anchor._dispatcher import _workflow_delivery as delivery
 from odibi_anchor.codebase._workflow import WorkflowError
+from odibi_anchor.owner_approval import reply_mismatches
 from tests._dispatcher.test_workflow_runtime import advance
 from tests._dispatcher.test_workflow_runtime import runtime as workflow_runtime
 
-CHALLENGE = "APPROVE sha256:" + "a" * 64
+CHALLENGE = "APPROVE " + "a" * 64
 
 
 @pytest.fixture
 def runtime(tmp_path, monkeypatch, request):
     return workflow_runtime.__wrapped__(tmp_path, monkeypatch, request)
-
-
-def _provider():
-    return SimpleNamespace(expected_owner_id="U-OWNER", transport=SimpleNamespace(name="slack"))
 
 
 def _reply(text, *, user="U-OWNER", transport="slack", request_id="r-1", message_id="m-1"):
@@ -29,10 +26,11 @@ def _reply(text, *, user="U-OWNER", transport="slack", request_id="r-1", message
 
 
 def _check(response):
-    delivery._require_exact_response(
-        response, {"approval_response": CHALLENGE}, _provider(),
-        operation="request_delivery_approval", workflow_id="wf_x", generation=6,
-    )
+    mismatches = reply_mismatches(response, CHALLENGE, expected_owner_id="U-OWNER", transport_name="slack")
+    if mismatches:
+        raise delivery._approval_mismatch(
+            mismatches, CHALLENGE, operation="request_delivery_approval", workflow_id="wf_x", generation=6,
+        )
 
 
 def test_exact_reply_from_the_owner_is_accepted():

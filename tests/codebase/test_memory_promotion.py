@@ -670,6 +670,47 @@ def test_explicit_databricks_provider_prepares_with_complete_slack(tmp_path, mon
     assert activated["receipt"]["transport"] == "databricks-in-session-owner-assertion"
 
 
+def test_chat_in_session_provider_prepares_then_records_lower_assurance(tmp_path, monkeypatch):
+    db = tmp_path / "memory.db"
+    memory = append_memory(
+        tmp_path, entry_type="convention", content="Use the exact chat approval.",
+        project="project:test", db_path=str(db),
+    )
+    monkeypatch.setenv("ANCHOR_SLACK_BOT_TOKEN", "token")
+    monkeypatch.setenv("ANCHOR_SLACK_CHANNEL_ID", "C123")
+    monkeypatch.setenv("ANCHOR_SLACK_USER_ID", "U123")
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+
+    prepared = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:test", transition="activation",
+        provider="chat_in_session",
+    )
+    assert prepared["status"] == "approval_required"
+    assert prepared["provider"] == "chat_in_session"
+    assert prepared["owner_assurance"] == "lower_assurance_single_user_chat_session_assertion"
+    assert prepared["next_operation"]["kwargs"]["provider"] == "chat_in_session"
+    assert re.fullmatch(r"APPROVE [0-9a-f]{64}", prepared["approval_response"])
+    with pytest.raises(RuntimeError, match="does not match the current exact challenge"):
+        request_owner_promotion(
+            db, memory_id=memory["id"], project_id="project:test", transition="activation",
+            provider="chat_in_session", in_session_approval=prepared["approval_response"] + " ",
+        )
+
+    activated = request_owner_promotion(
+        db, memory_id=memory["id"], project_id="project:test", transition="activation",
+        provider="chat_in_session", in_session_approval=prepared["approval_response"],
+    )
+
+    assert activated["status"] == "recorded"
+    assert activated["receipt"]["transport"] == "chat-in-session-owner-assertion"
+    assert activated["receipt"]["owner_user_id"] == "single-user-chat-session"
+    assert activated["receipt"]["owner_assurance"] == "lower_assurance_single_user_chat_session_assertion"
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT status FROM memories WHERE id=?", (memory["id"],),
+        ).fetchone()[0] == "active"
+
+
 def test_owner_promotes_shared_memory_only_with_matching_work_authority(tmp_path, monkeypatch):
     db = tmp_path / "memory.db"
     memory = append_memory(

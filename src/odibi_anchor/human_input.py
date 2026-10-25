@@ -68,6 +68,9 @@ class HumanInputRequest:
     response_message_id: str | None
     responded_at: float | None
     last_error: str | None
+    challenge: str | None = None
+    operation: str | None = None
+    owner_id: str | None = None
 
     @property
     def response_latency_seconds(self) -> float | None:
@@ -78,7 +81,12 @@ class HumanInputRequest:
 
 
 class HumanInputTransport(Protocol):
-    """Narrow boundary between the request lifecycle and one communication channel."""
+    """Narrow boundary between the request lifecycle and one communication channel.
+
+    A transport may also set ``resumable = True`` when ``replies`` works from a stored
+    reference in a later process (a remote channel), and may define
+    ``close(request, reason)`` to tell the human that a request is no longer open.
+    """
 
     name: str
 
@@ -162,25 +170,61 @@ class _RequestStore:
                 )
                 """
             )
+            # Additive owner-approval columns; databases created before them gain them here.
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(human_input_requests)")}
+            for column in ("challenge", "operation", "owner_id"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE human_input_requests ADD COLUMN {column} TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_human_input_requests_challenge "
+                "ON human_input_requests(challenge, status)"
+            )
         if os.name == "posix":
             self.path.chmod(0o600)
             mode = self.path.stat().st_mode
             if not stat.S_ISREG(mode) or mode & 0o077:
                 raise HumanInputConfigurationError("Human-input state database must be a private regular file")
 
-    def create(self, message: str, timeout_minutes: float, transport: str, now: float) -> HumanInputRequest:
+    def create(
+        self, message: str, timeout_minutes: float, transport: str, now: float, *,
+        challenge: str | None = None, operation: str | None = None, owner_id: str | None = None,
+    ) -> HumanInputRequest:
         request_id = str(uuid4())
         deadline_at = now + timeout_minutes * 60
         with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO human_input_requests (
-                    request_id, message, status, created_at, deadline_at, transport
-                ) VALUES (?, ?, 'created', ?, ?, ?)
+                    request_id, message, status, created_at, deadline_at, transport,
+                    challenge, operation, owner_id
+                ) VALUES (?, ?, 'created', ?, ?, ?, ?, ?, ?)
                 """,
-                (request_id, message, now, deadline_at, transport),
+                (request_id, message, now, deadline_at, transport, challenge, operation, owner_id),
             )
         return self.get(request_id)
+
+    def find(self, challenge: str) -> list[HumanInputRequest]:
+        """Return every request for one exact challenge, oldest first."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM human_input_requests WHERE challenge = ? ORDER BY created_at, rowid",
+                (challenge,),
+            ).fetchall()
+        return [HumanInputRequest(**dict(row)) for row in rows]
+
+    def supersede(self, challenge: str, except_request_id: str | None) -> list[HumanInputRequest]:
+        """Close every still-open request for a challenge answered elsewhere."""
+        condition = "challenge = ? AND status IN ('created', 'pending') AND request_id != ?"
+        parameters = (challenge, except_request_id or "")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"SELECT request_id FROM human_input_requests WHERE {condition}", parameters
+            ).fetchall()
+            connection.execute(
+                f"UPDATE human_input_requests SET status = 'superseded' WHERE {condition}", parameters
+            )
+        return [self.get(row["request_id"]) for row in rows]
 
     def get(self, request_id: str) -> HumanInputRequest:
         with self._connection() as connection:
@@ -205,11 +249,11 @@ class _RequestStore:
             raise HumanInputError(f"Request {request_id} is not awaiting delivery")
         return self.get(request_id)
 
-    def record_poll_error(self, request_id: str, error: str) -> None:
+    def record_poll_error(self, request_id: str, error: str, *, status: str = "pending") -> None:
         with self._connection() as connection:
             connection.execute(
-                "UPDATE human_input_requests SET last_error = ? WHERE request_id = ? AND status = 'pending'",
-                (error[:500], request_id),
+                "UPDATE human_input_requests SET last_error = ? WHERE request_id = ? AND status = ?",
+                (error[:500], request_id, status),
             )
 
     def fail(self, request_id: str, error: str) -> None:
@@ -223,6 +267,11 @@ class _RequestStore:
             )
 
     def accept(self, request_id: str, reply: HumanInputReply) -> bool:
+        """Record the first reply; an owner-bound challenge accepts only its owner, and once.
+
+        A challenge is consumed by the first request answered with exactly that challenge,
+        so a later reply on any other channel for the same challenge is refused here.
+        """
         text = reply.text.strip()
         if not text or len(text) > MAX_RESPONSE_LENGTH:
             return False
@@ -234,6 +283,12 @@ class _RequestStore:
                     SET status = 'answered', response = ?, response_user_id = ?,
                         response_message_id = ?, responded_at = ?, last_error = NULL
                     WHERE request_id = ? AND status = 'pending' AND deadline_at > ?
+                      AND (owner_id IS NULL OR owner_id = ?)
+                      AND (challenge IS NULL OR NOT EXISTS (
+                          SELECT 1 FROM human_input_requests AS other
+                          WHERE other.challenge = human_input_requests.challenge
+                            AND other.status = 'answered' AND other.response = other.challenge
+                      ))
                     """,
                     (
                         text,
@@ -242,6 +297,7 @@ class _RequestStore:
                         reply.received_at,
                         request_id,
                         reply.received_at,
+                        reply.user_id,
                     ),
                 ).rowcount
         except sqlite3.IntegrityError:
@@ -297,6 +353,29 @@ def _safe_error(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def _require_transport_name(transport: HumanInputTransport) -> None:
+    if not isinstance(getattr(transport, "name", None), str) or not transport.name.strip():
+        raise HumanInputConfigurationError("transport.name must be a non-empty string")
+
+
+def _deliver(
+    store: _RequestStore, request: HumanInputRequest, transport: HumanInputTransport,
+    clock: Callable[[], float],
+) -> HumanInputRequest:
+    try:
+        transport_ref = transport.deliver(request)
+        if not isinstance(transport_ref, str) or not transport_ref.strip():
+            raise HumanInputDeliveryError("Transport returned an invalid delivery reference")
+        return store.mark_delivered(request.request_id, transport_ref, clock())
+    except HumanInputError as exc:
+        store.fail(request.request_id, _safe_error(exc))
+        raise
+    except Exception as exc:
+        error = HumanInputDeliveryError(f"Could not deliver human-input request: {type(exc).__name__}")
+        store.fail(request.request_id, _safe_error(exc))
+        raise error from exc
+
+
 def _request_human_input(
     message: str,
     timeout_minutes: float = 60,
@@ -308,27 +387,20 @@ def _request_human_input(
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
     return_record: bool = False,
+    challenge: str | None = None,
+    operation: str | None = None,
+    owner_id: str | None = None,
 ) -> str | HumanInputRequest:
     normalized = _validate_request(message, timeout_minutes, poll_interval_seconds)
     selected_transport = transport or _default_transport()
-    if not isinstance(getattr(selected_transport, "name", None), str) or not selected_transport.name.strip():
-        raise HumanInputConfigurationError("transport.name must be a non-empty string")
+    _require_transport_name(selected_transport)
     store = _RequestStore(state_path)
     wait_deadline = monotonic() + timeout_minutes * 60
-    request = store.create(normalized, timeout_minutes, selected_transport.name, clock())
-
-    try:
-        transport_ref = selected_transport.deliver(request)
-        if not isinstance(transport_ref, str) or not transport_ref.strip():
-            raise HumanInputDeliveryError("Transport returned an invalid delivery reference")
-        request = store.mark_delivered(request.request_id, transport_ref, clock())
-    except HumanInputError as exc:
-        store.fail(request.request_id, _safe_error(exc))
-        raise
-    except Exception as exc:
-        error = HumanInputDeliveryError(f"Could not deliver human-input request: {type(exc).__name__}")
-        store.fail(request.request_id, _safe_error(exc))
-        raise error from exc
+    request = store.create(normalized, timeout_minutes, selected_transport.name, clock(),
+                           challenge=challenge, operation=operation, owner_id=owner_id)
+    request = _deliver(store, request, selected_transport, clock)
+    transport_ref = request.transport_ref
+    assert transport_ref is not None
 
     while True:
         retry_after = poll_interval_seconds
@@ -392,8 +464,15 @@ def request_human_input_record(
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     state_path: str | os.PathLike[str] | None = None,
     transport: HumanInputTransport | None = None,
+    challenge: str | None = None,
+    operation: str | None = None,
+    owner_id: str | None = None,
 ) -> HumanInputRequest:
-    """Ask for input and return its durable authenticated request record."""
+    """Ask for input and return its durable authenticated request record.
+
+    ``challenge`` binds the request to one exact single-use reply and ``owner_id``
+    accepts replies from that identity only; both are optional.
+    """
     result = _request_human_input(
         message,
         timeout_minutes,
@@ -404,9 +483,159 @@ def request_human_input_record(
         monotonic=time.monotonic,
         sleep=time.sleep,
         return_record=True,
+        challenge=challenge,
+        operation=operation,
+        owner_id=owner_id,
     )
     assert isinstance(result, HumanInputRequest)
     return result
+
+
+def open_human_input_request(
+    message: str,
+    timeout_minutes: float = 60,
+    *,
+    challenge: str,
+    transport: HumanInputTransport,
+    operation: str | None = None,
+    owner_id: str | None = None,
+    state_path: str | os.PathLike[str] | None = None,
+) -> HumanInputRequest:
+    """Deliver a challenge-bound request without waiting for its reply.
+
+    For a resumable transport, a still-pending request for the same challenge on the same
+    transport is returned instead of delivering again, so one challenge never posts twice.
+    """
+    normalized = _validate_request(message, timeout_minutes, DEFAULT_POLL_INTERVAL_SECONDS)
+    if not isinstance(challenge, str) or not challenge.strip():
+        raise ValueError("challenge must be a non-empty string")
+    _require_transport_name(transport)
+    store = _RequestStore(state_path)
+    if getattr(transport, "resumable", False):
+        for existing in reversed(store.find(challenge)):
+            if existing.status == "pending" and existing.transport == transport.name:
+                return existing
+    request = store.create(normalized, timeout_minutes, transport.name, time.time(),
+                           challenge=challenge, operation=operation, owner_id=owner_id)
+    return _deliver(store, request, transport, time.time)
+
+
+def _poll_human_input_request(
+    request_id: str,
+    *,
+    transport: HumanInputTransport,
+    wait_seconds: float,
+    accept: Callable[[HumanInputReply], bool] | None,
+    poll_interval_seconds: float,
+    state_path: str | os.PathLike[str] | None,
+    clock: Callable[[], float],
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> HumanInputRequest:
+    if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, (int, float)) or wait_seconds < 0:
+        raise ValueError("wait_seconds must be a nonnegative number")
+    if isinstance(poll_interval_seconds, bool) or not 0 < poll_interval_seconds <= 60:
+        raise ValueError("poll_interval_seconds must be greater than 0 and at most 60")
+    store = _RequestStore(state_path)
+    request = store.get(request_id)
+    if request.status != "pending":
+        return request
+    if request.transport != transport.name or request.transport_ref is None:
+        raise HumanInputConfigurationError("The request was delivered through a different transport")
+    wait_deadline = monotonic() + wait_seconds
+    while True:
+        retry_after = poll_interval_seconds
+        try:
+            replies = transport.replies(request.transport_ref)
+        except TemporaryHumanInputTransportError as exc:
+            store.record_poll_error(request_id, _safe_error(exc))
+            if exc.retry_after_seconds is not None:
+                retry_after = max(retry_after, exc.retry_after_seconds)
+        except HumanInputError as exc:
+            store.fail(request_id, _safe_error(exc))
+            raise
+        except Exception as exc:
+            error = HumanInputDeliveryError(f"Could not check human-input responses: {type(exc).__name__}")
+            store.fail(request_id, _safe_error(exc))
+            raise error from exc
+        else:
+            for reply in sorted(replies, key=lambda candidate: candidate.received_at):
+                if (accept is None or accept(reply)) and store.accept(request_id, reply):
+                    return store.get(request_id)
+        current = store.get(request_id)
+        if current.status != "pending":
+            return current
+        if clock() >= current.deadline_at:
+            store.expire(request_id)
+            return store.get(request_id)
+        remaining = min(wait_deadline - monotonic(), current.deadline_at - clock())
+        if remaining <= 0:
+            return current
+        sleep(min(retry_after, remaining))
+
+
+def poll_human_input_request(
+    request_id: str,
+    *,
+    transport: HumanInputTransport,
+    wait_seconds: float = 0,
+    accept: Callable[[HumanInputReply], bool] | None = None,
+    poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    state_path: str | os.PathLike[str] | None = None,
+) -> HumanInputRequest:
+    """Check an open request for at most ``wait_seconds`` and return its current record.
+
+    Replies are accepted in arrival order when ``accept`` allows them. A request whose
+    deadline has passed without an accepted reply becomes ``expired``; a still-open one
+    stays ``pending`` and can be polled again later, from another process if resumable.
+    """
+    return _poll_human_input_request(
+        request_id,
+        transport=transport,
+        wait_seconds=wait_seconds,
+        accept=accept,
+        poll_interval_seconds=poll_interval_seconds,
+        state_path=state_path,
+        clock=time.time,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
+    )
+
+
+def find_human_input_requests(
+    challenge: str, *, state_path: str | os.PathLike[str] | None = None
+) -> list[HumanInputRequest]:
+    """Return every request recorded for one exact challenge, oldest first."""
+    if not isinstance(challenge, str) or not challenge.strip():
+        raise ValueError("challenge must be a non-empty string")
+    return _RequestStore(state_path).find(challenge)
+
+
+def supersede_human_input_requests(
+    challenge: str,
+    *,
+    reason: str,
+    except_request_id: str | None = None,
+    transport: HumanInputTransport | None = None,
+    state_path: str | os.PathLike[str] | None = None,
+) -> list[HumanInputRequest]:
+    """Close every other open request for a challenge that was answered elsewhere.
+
+    Superseded requests never accept a later reply. When ``transport`` can ``close`` a
+    request it delivered, the human is told; a failed notice is recorded, not raised.
+    """
+    _validate_message(reason)
+    store = _RequestStore(state_path)
+    superseded = store.supersede(challenge, except_request_id)
+    close = getattr(transport, "close", None) if transport is not None else None
+    for request in superseded:
+        if close is None or request.transport != transport.name or not request.transport_ref:
+            continue
+        try:
+            close(request, reason)
+        except Exception as exc:
+            store.record_poll_error(request.request_id, _safe_error(exc), status="superseded")
+    return [store.get(request.request_id) for request in superseded]
 
 
 def notify_human(
@@ -451,8 +680,12 @@ __all__ = [
     "HumanInputTransport",
     "HumanNotificationTransport",
     "TemporaryHumanInputTransportError",
+    "find_human_input_requests",
     "get_human_input_request",
     "notify_human",
+    "open_human_input_request",
+    "poll_human_input_request",
     "request_human_input",
     "request_human_input_record",
+    "supersede_human_input_requests",
 ]

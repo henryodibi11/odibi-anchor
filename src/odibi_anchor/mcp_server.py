@@ -638,6 +638,9 @@ def anchor_execute(
     Returns:
         Compact JSON string with anchor() action result (findings, risks, metrics, suggestions).
     """
+    # Some hosts send a missing argument object as the text "None", "null" or "".
+    if isinstance(args, str) and args.strip() in {"", "None", "null"}:
+        args = None
     response_version = _validate_response_version(response_version)
     response_detail = _validate_response_detail(response_detail)
     telemetry_version = _validate_telemetry_version(telemetry_version)
@@ -898,6 +901,9 @@ def anchor_workflow(
     resolution: str | _Unset = None,
     criterion_id: str | _Unset = None,
     timeout_minutes: int | _Unset = None,
+    provider: Literal["chat_in_session", "databricks_in_session"] | _Unset = None,
+    in_session_approval: str | _Unset = None,
+    wait_seconds: int | _Unset = None,
 ) -> str:
     """Run anchor("workflow", command, ...) with typed arguments.
 
@@ -919,7 +925,13 @@ def anchor_workflow(
         blocker_kind: block only.
         resolution: resume only.
         criterion_id: check_artifact only.
-        timeout_minutes: request_delivery_approval and revoke_delivery only.
+        timeout_minutes: request_delivery_approval and revoke_delivery only: the owner's
+            response window, 1 to 240 minutes (default 30).
+        provider: request_delivery_approval and revoke_delivery only: "chat_in_session" (or
+            "databricks_in_session") to complete with the reply the owner typed in this session.
+        in_session_approval: with provider only: exactly the approval_response the owner typed.
+        wait_seconds: request_delivery_approval and revoke_delivery only: how long to wait for a
+            Slack reply before returning status "pending", 0 to 120 (default 45).
     """
     return _forward("workflow", command, {k: v for k, v in locals().items() if k != "command"})
 
