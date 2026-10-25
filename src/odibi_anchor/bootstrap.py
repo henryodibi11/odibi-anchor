@@ -1098,6 +1098,13 @@ def init(
 
     def _auto_scope_tests(kwargs):
         from odibi_anchor._dispatcher._session_tools import _auto_scope_tests as _ast_impl
+        if "target" not in kwargs and kwargs.get("workflow_criterion") is not None:
+            from odibi_anchor._dispatcher._workflow_runtime import bound_criterion_method
+
+            # A command criterion runs its planned argv; a pytest target would not apply.
+            if bound_criterion_method(_DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                                      criterion_id=kwargs["workflow_criterion"]) == "command":
+                return kwargs
         scoped_files = _SESSION_FILES_CHANGED
         baseline = getattr(_SESSION_STATE, "task_repository_baseline", None)
         if baseline is not None:

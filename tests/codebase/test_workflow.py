@@ -468,3 +468,39 @@ def test_draft_rejects_list_fields_with_wrong_shape_at_create(tmp_path, owner, p
     # A stored draft would make this retry a conflicting request_id reuse.
     completed = workflow.create_workflow(tmp_path / "authority.db", owner=owner, request_id="partial", plan=plan)
     assert completed["generation"] == 0 and completed["progress"] == "draft"
+
+
+@pytest.mark.parametrize("plan", ["low"], indirect=True)
+def test_full_rigor_requires_independent_review_and_cannot_be_lowered(run, owner, plan, tmp_path):
+    with pytest.raises(ValueError, match=r"plan\.rigor must be direct, compact or full"):
+        workflow.create_workflow(tmp_path / "other.db", owner=owner, request_id="bad", plan={**plan, "rigor": "max"})
+    run("replan", {"reason": "raise rigor", "plan": {**plan, "rigor": "full"}})
+    for lowered in ({**plan, "rigor": "compact"}, plan):
+        with pytest.raises(workflow.WorkflowError, match="lower or remove the plan rigor"):
+            run("replan", {"reason": "avoid review", "plan": lowered})
+    state = implemented(run)
+    payload = qualification(state)
+    payload["review"].update(kind="self", reviewer="agent:implementer")
+    with pytest.raises(workflow.WorkflowError, match="full-rigor work requires independent review"):
+        run("qualify", payload)
+    assert run("qualify", qualification(state))["progress"] == "qualified"
+
+
+@pytest.mark.parametrize("plan", ["low"], indirect=True)
+def test_review_criterion_is_satisfied_only_by_the_recorded_review(run, plan):
+    criterion = {"id": "AC3", "expected": "the change reads clearly", "method": "review"}
+    run("replan", {"reason": "add review criterion", "plan": {**plan, "criteria": [*plan["criteria"], criterion]}})
+    state = implemented(run)
+    with pytest.raises(workflow.WorkflowError, match="criterion and method"):
+        run("record_check", {**binding(state), "criterion_id": "AC3", "method": "pytest", "status": "satisfied",
+                             "evidence_ref": "test:retained", "collector": "pytest:isolated"})
+    payload = qualification(state)
+    check = {**binding(state), "criterion_id": "AC3", "method": "review", "status": "satisfied",
+             "evidence_ref": "review:other", "collector": "anchor.workflow_review"}
+    with pytest.raises(workflow.WorkflowError, match="cite the recorded review"):
+        run("qualify", {**payload, "checks": [*payload["checks"], check]})
+    with pytest.raises(workflow.WorkflowError, match="not satisfied"):
+        run("qualify", {**payload, "checks": [*payload["checks"], {**check, "status": "failed",
+                                                                   "evidence_ref": "review:retained"}]})
+    qualified = run("qualify", {**payload, "checks": [*payload["checks"], {**check, "evidence_ref": "review:retained"}]})
+    assert qualified["progress"] == "qualified"

@@ -300,7 +300,7 @@ def test_qualification_rejects_environment_change(work, monkeypatch):
 
     db, producer, workflow = work
     retain_evidence(work)
-    monkeypatch.setattr(_workflow_evidence, "runtime_environment", lambda: {"python": "other"})
+    monkeypatch.setattr(_workflow_evidence, "runtime_environment", lambda name=None: {"python": "other"})
     with pytest.raises(WorkflowError, match="differs from retained measurement"):
         _workflow_evidence.qualify_recorded(db, session_state=producer, workflow_id=workflow["workflow_id"],
                                            expected_generation=4, request_id="qualify")

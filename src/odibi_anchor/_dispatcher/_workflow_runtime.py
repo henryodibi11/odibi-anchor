@@ -52,6 +52,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         collect_candidate,
         collect_plan_baseline,
         collect_review,
+        criterion_problems,
         qualify_recorded,
         validate_producer_policy,
     )
@@ -90,7 +91,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         if plan is None or workflow_id is not None or expected_generation is not None:
             raise ValueError("check_plan takes plan only; it stores nothing and needs no workflow_id")
         packet = {"kind": "workflow_plan_check", "schema_version": 1, "authority": "projection",
-                  **acceptance_check(plan, DESTINATION_KEYS), "state_changed": False}
+                  **acceptance_check(plan, DESTINATION_KEYS, criterion_problems), "state_changed": False}
     else:
         accepted = _accepted_task(path, session_state, session_state.task_window_id)
         if command == "create":
@@ -99,7 +100,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             state = create_workflow(
                 path, owner=workflow_owner(session_state), request_id=request_id, plan=plan,
                 artifact_baseline=collect_artifact_baseline(plan, session_state=session_state),
-                destination_keys=DESTINATION_KEYS,
+                destination_keys=DESTINATION_KEYS, criterion_problems=criterion_problems,
             )
         else:
             prior = None
@@ -190,7 +191,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         )
                         expected_generation = state["generation"]
                 elif command == "replan":
-                    require_acceptable(plan, DESTINATION_KEYS, stored=False)
+                    require_acceptable(plan, DESTINATION_KEYS, stored=False, criterion_problems=criterion_problems)
                     if state["progress"] == "draft" and state["plan"]["execution_mode"] == "artifact_only":
                         check_artifact_baseline(state, session_state=session_state, path=path)
                     payload = {"plan": plan, "reason": reason,
@@ -212,7 +213,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                   "observation_semantics": "historical acknowledgement" if replayed else "current transition"}
     state = packet.get("state")
     if isinstance(state, dict) and state.get("progress") == "draft":
-        packet["acceptance_check"] = acceptance_check(state["plan"], DESTINATION_KEYS)
+        packet["acceptance_check"] = acceptance_check(state["plan"], DESTINATION_KEYS, criterion_problems)
     packet.pop("packet_sha256", None)
     packet = {**packet, "packet_sha256": digest(packet)}
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
@@ -297,10 +298,23 @@ def bind_task_workflow(path, *, session_state, workflow_id, task_call=None):
     return bind_workflow(path, session_state=session_state, workflow_id=workflow_id)
 
 
+def bound_criterion_method(path, *, session_state, criterion_id):
+    """Name the bound plan's method for ``criterion_id``; None when unreadable or absent."""
+    try:
+        state = bound_workflow(path, session_state=session_state)
+    except (WorkflowError, ValueError):
+        return None
+    return next((c.get("method") for c in (state or {}).get("plan", {}).get("criteria", [])
+                 if c.get("id") == criterion_id), None)
+
+
 def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
     """Retain actual runner output with exact before/after candidate and environment."""
     from odibi_anchor._dispatcher._session_tools import finish_test_steps
 
+    if bound_criterion_method(path, session_state=session_state, criterion_id=criterion_id) == "command":
+        return measured_command(path, session_state=session_state, criterion_id=criterion_id,
+                                args=args, kwargs=kwargs)
     steps = measured_test_steps(path, session_state=session_state, criterion_id=criterion_id,
                                 args=args, kwargs=kwargs)
     options = next(steps)
@@ -331,6 +345,12 @@ def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
     if state is None or state["progress"] != "implemented" or state["status"] != "active":
         raise rejected(WorkflowError("missing_evidence", "measurement requires a bound implemented candidate"))
     criteria = [c for c in state["plan"]["criteria"] if c["id"] == criterion_id]
+    if len(criteria) == 1 and criteria[0]["method"] == "command":
+        raise rejected(ValueError("a command criterion runs synchronously: omit wait_seconds and poll"),
+                       dispatcher_operation("test", kwargs={"workflow_criterion": criterion_id,
+                                                            "output_format": "dict"},
+                                            reason="run the criterion's planned argv",
+                                            retry_safety="not_idempotent"))
     exact = []
     if len(criteria) == 1 and criteria[0]["method"] == "pytest":
         exact = [dispatcher_operation(
@@ -351,8 +371,12 @@ def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
         raise rejected(ValueError("workflow measurements require dict output for durability checkpointing"),
                        *exact)
     before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
-    environment = runtime_environment()
-    result = yield {**kwargs, "output_format": "dict"}
+    name = criteria[0].get("environment")
+    try:
+        environment = runtime_environment(name)
+    except ValueError as exc:
+        raise rejected(exc, *exact) from exc
+    result = yield {**kwargs, "output_format": "dict", **({"environment": name} if name else {})}
     after = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
     measurement = collect_test_measurement(state=state, before=before, after=after,
                                           criterion_id=criterion_id, targets=targets,
@@ -378,3 +402,84 @@ def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
                else " Inspect samples.skip_reasons for the skip causes.")
         )
     return _format_test_result(result, output_format)
+
+
+def measured_command(path, *, session_state, criterion_id, args, kwargs):
+    """Run a command criterion's accepted argv once, with the candidate stable before and after."""
+    from pathlib import Path
+
+    from odibi_anchor._dispatcher._session_tools import run_command
+    from odibi_anchor._dispatcher._workflow_evidence import (
+        DEFAULT_COMMAND_TIMEOUT_S,
+        collect_candidate,
+        collect_command_measurement,
+        runtime_environment,
+    )
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+    from odibi_anchor.pytest_runner import named_environment
+
+    exact = dispatcher_operation(
+        "test", kwargs={"workflow_criterion": criterion_id, "output_format": "dict"},
+        reason="run the criterion's planned argv", retry_safety="not_idempotent",
+    )
+
+    def rejected(exc):
+        # Nothing ran, so the call is neither passing nor failing evidence.
+        return attach_recovery(exc, error_code="workflow_measurement_rejected", context={
+            "executed": False, "criterion_id": criterion_id,
+            "reason_code": getattr(exc, "code", "invalid_request"),
+        }, next_operations=[exact])
+
+    state = bound_workflow(path, session_state=session_state)
+    if state is None or state["progress"] != "implemented" or state["status"] != "active":
+        raise rejected(WorkflowError("missing_evidence", "measurement requires a bound implemented candidate"))
+    criteria = [c for c in state["plan"]["criteria"] if c["id"] == criterion_id]
+    if len(criteria) != 1 or criteria[0]["method"] != "command":
+        raise rejected(WorkflowError("missing_evidence", "measurement must match an exact command criterion"))
+    if args or set(kwargs) - {"output_format"} or kwargs.get("output_format", "dict") != "dict":
+        raise rejected(ValueError("a command criterion runs its planned argv: pass only workflow_criterion "
+                                  "and output_format='dict', no target, mark or timeout"))
+    criterion = criteria[0]
+    root = Path(session_state.target_root).resolve()
+    cwd = root / criterion.get("cwd", "")
+    if (any(part.is_symlink() for part in (cwd, *cwd.parents) if part.is_relative_to(root))
+            or not cwd.resolve().is_relative_to(root) or not cwd.is_dir()):
+        raise rejected(WorkflowError("missing_evidence", "command cwd must be an existing directory under the target root"))
+    name = criterion.get("environment")
+    try:
+        environment = runtime_environment(name)
+        launch = named_environment(name) if name is not None else {
+            "kind": "local", "python": environment["executable"], "env": {}}
+    except ValueError as exc:
+        raise rejected(exc) from exc
+    before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
+    try:
+        run = run_command(criterion["argv"], cwd=cwd, environment=launch,
+                          timeout=criterion.get("timeout_seconds", DEFAULT_COMMAND_TIMEOUT_S))
+    except ValueError as exc:
+        raise rejected(exc) from exc
+    after = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
+    measurement = collect_command_measurement(state=state, before=before, after=after,
+                                              criterion_id=criterion_id, environment_before=environment,
+                                              run=run)
+    updated = transition_workflow(
+        path, owner=workflow_owner(session_state), workflow_id=state["workflow_id"],
+        expected_generation=state["generation"], request_id="command:" + digest(measurement),
+        operation="record_check", payload=measurement,
+    )
+    status = measurement["status"]
+    outcome = "TIMEOUT" if run["timed_out"] else f"exit code {run['exit_code']}"
+    return {
+        "kind": "command_run", "subject": criterion_id,
+        "summary": f"{'PASS' if status == 'satisfied' else 'FAIL'}: {outcome} "
+                   f"(expected {measurement['result']['expected_exit_code']}, {run['duration_s']:.1f}s)",
+        "metrics": {"exit_code": run["exit_code"], "timed_out": run["timed_out"],
+                    "duration_s": run["duration_s"]},
+        "findings": [] if status == "satisfied" else [
+            f"Criterion {criterion_id!r} failed: {outcome}; see samples.output_tail."],
+        "risks": [],
+        "samples": {"argv": criterion["argv"], "launched": run["launched"], "output_tail": run["output_tail"]},
+        "suggested_next_actions": [],
+        "workflow_measurement": {"workflow_id": state["workflow_id"], "criterion_id": criterion_id,
+                                 "status": status, "generation": updated["generation"]},
+    }
