@@ -884,13 +884,21 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`memory_limit`: optional integer from 1 through 20 controlling how many ranked memories '
         'are selected at task acceptance (default 5). Every selection requires disposition.',
         '`mode`: one of `analysis`, `data`, `debugging`, `decision`, `documentation`, `etl`, '
-        '`greenfield`, `handoff`, `implementation`, `migration`, `planning`, `reconciliation`, '
-        '`refresh`, `retrospective`, `review`, `spec_creation`, or `testing`. The mode sets the '
-        'execution mode and therefore what the task may change: `implementation` and `migration` '
-        'are `source_change`; `data`, `etl` and `refresh` are `data_change`; `documentation`, '
-        '`decision`, `greenfield`, `handoff`, `planning`, `retrospective` and `spec_creation` are '
-        '`artifact_only`; `analysis`, `debugging`, `reconciliation`, `review` and `testing` are '
-        '`read_only`. A `source_change` mode requires a clean initial Git worktree.',
+        '`greenfield`, `handoff`, `implementation`, `migration`, `pipeline`, `planning`, '
+        '`reconciliation`, `refresh`, `retrospective`, `review`, `spec_creation`, or `testing`. '
+        'The mode sets the execution mode and therefore what the task may change: '
+        '`implementation`, `migration` and `pipeline` are `source_change`; `data`, `etl` and '
+        '`refresh` are `data_change`; `documentation`, `decision`, `greenfield`, `handoff`, '
+        '`planning`, `retrospective` and `spec_creation` are `artifact_only`; `analysis`, '
+        '`debugging`, `reconciliation`, `review` and `testing` are `read_only`. A `source_change` '
+        'mode requires a clean initial Git worktree. `pipeline` covers pipeline and configuration '
+        'work (YAML, pipeline config) proven by command criteria; documentation in a repository '
+        'is `documentation` with `execution_mode="source_change"`.',
+        'Each mode is a contract: `anchor("help", "mode", "<mode>")` returns the fields to fill, '
+        'the records to write, the accepted criteria, the review the rigor requires and the owner '
+        'touchpoints; `anchor("help", "mode")` lists every mode. An accepted task carries the '
+        'same contract for its profile as `mode_contract`; fill everything it asks for and follow '
+        '`next_operation`.',
         '`repository_scope`: optional non-empty list of repository-relative path strings. It is '
         'not a prose string.',
     ],

@@ -15,6 +15,8 @@ def test_mode_only_requirements_match_native_contract():
     assert required_skills_for_task(profile("greenfield")) == ()
     assert required_skills_for_task(profile("planning")) == ()
     assert required_skills_for_task(profile("testing")) == ()
+    # pipeline is source_change configuration work: like implementation, no mode skill.
+    assert required_skills_for_task(profile("pipeline")) == ()
 
 
 def test_memory_governance_skill_requires_explicit_trait():

@@ -29,11 +29,13 @@ Usage:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from odibi_anchor._utils.render_utils import render_header_lines, render_metrics_lines, render_bullet_section
-from odibi_anchor.planning._task_profile import TaskProfile, normalize_task_profile
+from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS, TaskProfile, normalize_task_profile
 from odibi_anchor.planning.context_selection import select_context
 
+# The published type for MCP schemas. ``_LEGACY_DEFAULTS`` is the source of truth;
+# the import-time check below keeps this literal from drifting away from it.
 TaskMode = Literal[
     "planning",
     "documentation",
@@ -47,25 +49,20 @@ TaskMode = Literal[
     "analysis",
     "retrospective",
     "greenfield",
+    "spec_creation",
+    "data",
+    "etl",
+    "reconciliation",
+    "refresh",
+    "pipeline",
 ]
 
 Audience = Literal["self", "teammate", "agent", "mixed"]
 TaskPriority = Literal["low", "medium", "high", "critical"]
 
-_VALID_MODES = {
-    "planning",
-    "documentation",
-    "implementation",
-    "testing",
-    "debugging",
-    "review",
-    "migration",
-    "handoff",
-    "decision",
-    "analysis",
-    "retrospective",
-    "greenfield",
-}
+_VALID_MODES = frozenset(_LEGACY_DEFAULTS)
+if set(get_args(TaskMode)) != _VALID_MODES:
+    raise RuntimeError("TaskMode must list exactly the modes in _LEGACY_DEFAULTS")
 
 _VALID_AUDIENCES = {"self", "teammate", "agent", "mixed"}
 _VALID_PRIORITIES = {"low", "medium", "high", "critical"}

@@ -766,6 +766,16 @@ def run_post_dispatch(
             result, session_timings=session_timings, session_state=session_state,
         )
 
+    if isinstance(result, dict) and _dispatch_ok and (action == "gate" or (
+            action == "learning" and (str(args[0]).lower().strip() if args else "list") == "assess")):
+        # Outside terminal_task_record: that record is immutable and hash-bound.
+        from odibi_anchor._dispatcher._boot import _ENV
+        from odibi_anchor._dispatcher._owner_decisions import pending_owner_decisions
+
+        result["pending_owner_decisions"] = pending_owner_decisions(
+            _ENV["memory_db"], project=session_state.active_project,
+        )
+
     # Ledger only resolved, successful writes. Read responses and error-shaped
     # dictionaries must never become managed artifacts.
     _write_success = (_dispatch_ok and isinstance(result, dict)

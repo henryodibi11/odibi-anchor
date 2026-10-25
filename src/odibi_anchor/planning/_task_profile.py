@@ -37,6 +37,7 @@ _LEGACY_DEFAULTS: dict[str, tuple[str, str, str, str, tuple[str, ...], tuple[str
     "etl": ("operate", "data_change", "medium", "compact", ("data", "pipeline"), ("etl",)),
     "reconciliation": ("investigate", "read_only", "medium", "compact", ("data",), ("reconciliation",)),
     "refresh": ("operate", "data_change", "medium", "compact", ("data", "pipeline"), ("refresh",)),
+    "pipeline": ("change", "source_change", "medium", "compact", ("data", "pipeline"), ("pipeline-config",)),
 }
 
 
