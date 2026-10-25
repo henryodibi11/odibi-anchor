@@ -16,5 +16,7 @@ Do not load for a requested formal implementation Spec body or merely because co
 ## Workflow
 State outcome, scope, authority, owner, dependencies, acceptance evidence, risks, stop/reversal conditions, and next state. Apply the task's runtime `capture_guidance`. Preserve provider-neutral content before approved publication. Keep one authoritative state and handoff unresolved facts explicitly.
 
+Plans live in Anchor records: `spec create`/`update` with `content`, one work item per pull request with `depends_on`, reviewer verdicts via `work_item review`, `work_item next` for the ready items, and `work_item request_plan_approval` once the reviews satisfy the rigor.
+
 ## Enforcement
 Self-enforced. Global instructions apply. External publication requires explicit bounded approval.

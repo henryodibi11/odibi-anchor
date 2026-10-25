@@ -1034,6 +1034,37 @@ No gate-wide or exposure-based bulk confirmation occurs.
   so observations can be recorded when encountered. Assessment uses real Observation IDs or
   `nothing_reusable_learned`. State is local—no cloud replication.
 
+## Agent-first workflows
+
+Fill everything Anchor asks for and follow `next_operation`; the owner is needed only to
+approve a plan, approve a delivery, decide pending lessons, or resolve a real blocker.
+
+- Mode contract: an accepted task carries `mode_contract` (also `anchor("help", "mode", "<mode>")`):
+  required fields, records to write, accepted criteria, the review its rigor requires, and
+  the owner touchpoints. Documentation in a repository is `mode="documentation"` with
+  `execution_mode="source_change"`; pipeline or configuration work is `mode="pipeline"`.
+- Criteria: `pytest` (test targets), `command` (the plan's `argv`, run without a shell in the
+  target root; measured by `anchor("test", workflow_criterion=id)` with no target), `review`
+  (satisfied by the workflow review; an open finding fails it) and `artifact_sha256`. Never
+  write a test file only to satisfy a workflow; use a `command` or `review` criterion.
+- Environments: a criterion's `environment` names a portfolio entry
+  `projects.<id>.test_environments.<host>.<name>` (`local`, `wsl` or `runtime`); evidence
+  records which one ran.
+- Rigor: `direct` 1 plan review, `compact` 2 with distinct angles, `full` 4 with distinct angles
+  including `adversarial` and an independent delivery review.
+- Planning records: write the Problem Record, `spec create`/`update` with `content`, and one
+  work item per pull request with `depends_on`. Reviewers' verdicts go on the item with
+  `work_item review` (bound to its fingerprint); `work_item next` gives the ready items;
+  `work_item request_plan_approval` asks the owner once the reviews satisfy the rigor.
+- Owner approval (plan, delivery, revocation, memory activation): the call posts to Slack when
+  configured and returns `pending` instead of blocking; without Slack it returns
+  `approval_required`. Show the owner the exact `approval_response`, and when they reply in the
+  session call again with `provider="chat_in_session"` and `in_session_approval` set to their
+  exact reply. The first valid reply on any channel wins; after `timeout_minutes` the request
+  expires and you report that approval is waiting.
+- Lessons: `gate` and `learning assess` results carry `pending_owner_decisions`. List them in the
+  report with their options; record the owner's decisions with the copy-ready operations.
+
 ## Fresh workflow authority and legacy recovery
 
 Fresh source-capable tasks require an explicitly bound managed project, an explicit
