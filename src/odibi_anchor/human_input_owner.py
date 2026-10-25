@@ -11,6 +11,8 @@ from odibi_anchor.human_input import (
 from odibi_anchor.human_input_slack import slack_environment_source, slack_environment_variables
 
 _DATABRICKS_IN_SESSION_PROVIDER = "databricks_in_session"
+_CHAT_IN_SESSION_PROVIDER = "chat_in_session"
+_PROVIDER_ERROR = "Owner approval provider must be omitted or 'chat_in_session' or 'databricks_in_session'"
 
 
 @dataclass(frozen=True)
@@ -28,10 +30,10 @@ def _is_windows() -> bool:
 
 def databricks_in_session_preparation_available(*, provider: str | None = None) -> bool:
     """Return whether Databricks can prepare an exact in-session challenge."""
-    if provider is not None and provider != _DATABRICKS_IN_SESSION_PROVIDER:
-        raise HumanInputConfigurationError(
-            "Owner approval provider must be omitted or 'databricks_in_session'"
-        )
+    if provider not in (None, _DATABRICKS_IN_SESSION_PROVIDER, _CHAT_IN_SESSION_PROVIDER):
+        raise HumanInputConfigurationError(_PROVIDER_ERROR)
+    if provider == _CHAT_IN_SESSION_PROVIDER:
+        return False
     return (
         not _is_windows()
         and bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
@@ -45,13 +47,28 @@ def databricks_in_session_preparation_available(*, provider: str | None = None) 
 def select_owner_approval_provider(
     *, provider: str | None = None, in_session_approval: str | None = None,
 ) -> OwnerApprovalProvider:
-    """Prefer Slack, then an explicit local Windows or Databricks owner action."""
-    if provider is not None and provider != _DATABRICKS_IN_SESSION_PROVIDER:
-        raise HumanInputConfigurationError(
-            "Owner approval provider must be omitted or 'databricks_in_session'"
-        )
+    """Prefer Slack, then an explicit local Windows or Databricks owner action.
+
+    An explicit in-session provider (``chat_in_session`` on any host, or
+    ``databricks_in_session``) overrides Slack and needs the exact typed reply.
+    """
+    if provider not in (None, _DATABRICKS_IN_SESSION_PROVIDER, _CHAT_IN_SESSION_PROVIDER):
+        raise HumanInputConfigurationError(_PROVIDER_ERROR)
     # PRE-CODE GATE: provider selection grants no authority; the exact bound
     # challenge must still be supplied through the selected transport.
+    if provider == _CHAT_IN_SESSION_PROVIDER:
+        if in_session_approval is None:
+            raise HumanInputConfigurationError(
+                "Chat in-session owner approval requires the exact challenge response the owner typed"
+            )
+        from odibi_anchor.human_input_chat import ChatInSessionOwnerTransport
+
+        chat = ChatInSessionOwnerTransport(in_session_approval)
+        return OwnerApprovalProvider(
+            transport=chat,
+            expected_owner_id=chat.owner_user_id,
+            assurance="lower_assurance_single_user_chat_session_assertion",
+        )
     if provider == _DATABRICKS_IN_SESSION_PROVIDER:
         if _is_windows() or not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
             raise HumanInputConfigurationError(

@@ -400,6 +400,7 @@ def _verified_human_receipt(row: sqlite3.Row) -> dict[str, Any]:
             "databricks-in-session-owner-assertion": (
                 "lower_assurance_single_user_databricks_in_session_assertion"
             ),
+            "chat-in-session-owner-assertion": "lower_assurance_single_user_chat_session_assertion",
             "local-windows-owner-presence": "interactive_local_windows_account_presence",
             "slack": "remote_authenticated_slack_identity",
         }.get(row["transport"])
@@ -940,12 +941,19 @@ def request_owner_promotion(
         databricks_in_session_preparation_available,
         select_owner_approval_provider,
     )
+    from odibi_anchor.owner_approval import ASSURANCE_BY_TRANSPORT, CHAT_IN_SESSION, DATABRICKS_IN_SESSION
 
-    prepare_databricks = (
-        in_session_approval is None
-        and databricks_in_session_preparation_available(provider=provider)
+    # Chat in-session runs the same two-step challenge as Databricks, on any host.
+    prepare_in_session = in_session_approval is None and (
+        provider == CHAT_IN_SESSION
+        or databricks_in_session_preparation_available(provider=provider)
     )
-    selected_provider = None if prepare_databricks else select_owner_approval_provider(
+    in_session_provider = CHAT_IN_SESSION if provider == CHAT_IN_SESSION else DATABRICKS_IN_SESSION
+    in_session_assurance = ASSURANCE_BY_TRANSPORT[
+        "chat-in-session-owner-assertion" if provider == CHAT_IN_SESSION
+        else "databricks-in-session-owner-assertion"
+    ]
+    selected_provider = None if prepare_in_session else select_owner_approval_provider(
         provider=provider, in_session_approval=in_session_approval,
     )
     initialize_schema(path)
@@ -977,7 +985,7 @@ def request_owner_promotion(
         f"Type: {subject['memory_type']}\nSource: {subject['source']}\n"
         f"Claim: {subject['content']}\n\nReply exactly: {expected_response}"
     )
-    if prepare_databricks:
+    if prepare_in_session:
         from odibi_anchor._recovery import dispatcher_operation
 
         next_operation = dispatcher_operation(
@@ -985,7 +993,7 @@ def request_owner_promotion(
             kwargs={
                 "command": f"request_owner_{transition}",
                 "memory_id": memory_id,
-                "provider": "databricks_in_session",
+                "provider": in_session_provider,
                 "in_session_approval": expected_response,
             },
             reason="complete the prepared in-session owner approval",
@@ -1000,14 +1008,13 @@ def request_owner_promotion(
             "challenge_sha256": challenge,
             "approval_response": expected_response,
             "approval_prompt": request_message,
-            "provider": "databricks_in_session",
-            "owner_assurance": (
-                "lower_assurance_single_user_databricks_in_session_assertion"
-            ),
+            "provider": in_session_provider,
+            "owner_assurance": in_session_assurance,
             "warning": (
                 "No owner identity was authenticated and no authority was granted. The owner must "
-                "personally send the exact approval_response in this Genie Code session before "
-                "the command is rerun with provider='databricks_in_session' and "
+                "personally send the exact approval_response in this "
+                f"{'chat' if provider == CHAT_IN_SESSION else 'Genie Code'} session before "
+                f"the command is rerun with provider='{in_session_provider}' and "
                 "in_session_approval."
             ),
             "next_operation": next_operation,
@@ -1021,6 +1028,7 @@ def request_owner_promotion(
         request_message,
         timeout_minutes=timeout_minutes,
         transport=selected_provider.transport,
+        operation=f"memory_{transition}",
     )
     response = request.response
     if (

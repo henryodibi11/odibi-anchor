@@ -1,6 +1,7 @@
 """Focused tests for the portable human-input lifecycle and Slack transport."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -349,6 +350,26 @@ def test_slack_posts_question_and_accepts_only_configured_user(monkeypatch):
     assert "<@UOWNER>" in posted["text"]
     assert calls[0][0].get_header("Authorization") == "Bearer xoxb-secret"
     assert "xoxb-secret" not in calls[2][0].full_url
+
+
+def test_slack_close_replies_in_the_request_thread(monkeypatch):
+    calls = []
+
+    def fake_urlopen(slack_request, timeout):
+        calls.append(json.loads(slack_request.data.decode("utf-8")))
+        return FakeHTTPResponse({"ok": True, "channel": "C123", "ts": "1700000009.100"})
+
+    monkeypatch.setitem(SlackHumanInputTransport._api_call.__globals__, "_urlopen", fake_urlopen)
+    transport = SlackHumanInputTransport(bot_token="xoxb-secret", channel_id="C123", allowed_user_id="UOWNER")
+    human_request = dataclasses.replace(make_request(), transport_ref="C123:1700000000.100")
+
+    assert transport.resumable is True
+    transport.close(human_request, "Answered elsewhere.")
+
+    assert calls[0]["thread_ts"] == "1700000000.100"
+    assert calls[0]["channel"] == "C123"
+    assert "Answered elsewhere." in calls[0]["text"]
+    assert calls[0]["client_msg_id"] != human_request.request_id
 
 
 def test_slack_rejects_public_channel_before_posting(monkeypatch):

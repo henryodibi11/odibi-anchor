@@ -149,35 +149,15 @@ def _fresh(path, session_state, workflow_id, *, allow_unknown=False):
     return state
 
 
-def _require_exact_response(response, prepared, provider, *, operation, workflow_id, generation):
-    """Refuse any reply that is not the exact challenge from the configured owner, naming why.
+def _approval_mismatch(mismatches, expected, *, operation, workflow_id, generation):
+    """Refuse a reply that is not the exact challenge from the configured owner, naming why.
 
     The context names failed checks only; it never echoes the received reply text.
     """
-    expected = prepared["approval_response"]
-    received = response.response if isinstance(response.response, str) else ""
-    mismatches = []
-    if received != expected:
-        mismatches.append({
-            "check": "reply_text",
-            "detail": "the reply must be exactly the challenge line, with nothing added or removed",
-            "received_length": len(received), "expected_length": len(expected),
-            "matches_after_trimming_whitespace": received.strip() == expected,
-        })
-    if response.response_user_id != provider.expected_owner_id:
-        mismatches.append({"check": "owner", "detail": "the reply came from a different user than the configured owner",
-                           "expected_owner_id": provider.expected_owner_id})
-    if response.transport != provider.transport.name:
-        mismatches.append({"check": "transport", "detail": "the reply arrived through a different transport",
-                           "expected_transport": provider.transport.name})
-    if not response.request_id or not response.response_message_id:
-        mismatches.append({"check": "message_ids", "detail": "the reply is missing its request or message id"})
-    if not mismatches:
-        return
     from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
     summary = "; ".join(item["check"] for item in mismatches)
-    raise attach_recovery(WorkflowError(
+    return attach_recovery(WorkflowError(
         "authority_required",
         f"human response does not match exact challenge and owner (failed: {summary}). Nothing was "
         f"approved. Request again and reply exactly: {expected}",
@@ -194,8 +174,84 @@ def _require_exact_response(response, prepared, provider, *, operation, workflow
     )])
 
 
+def _owner_wait(result, *, operation, workflow_id, generation):
+    """Report an unanswered owner request as a normal result; nothing was transitioned."""
+    from odibi_anchor._recovery import dispatcher_operation
+
+    status = result["status"]
+    request = {"workflow_id": workflow_id, "expected_generation": generation,
+               "request_id": "<new-request-id>", "output_format": "dict"}
+    channels = result.get("channels") or ["chat_in_session"]
+    provider = "databricks_in_session" if "databricks_in_session" in channels else "chat_in_session"
+    check = dispatcher_operation(
+        "workflow", operation, kwargs=request,
+        reason=("check whether the owner replied; the open request is reused, never posted twice"
+                if status == "pending" else "ask the owner again with a new request"),
+        requires_owner=status != "pending",
+        retry_safety="idempotent" if status == "pending" else "not_idempotent",
+    )
+    complete = dispatcher_operation(
+        "workflow", operation, kwargs={**request, "provider": provider,
+                                       "in_session_approval": result["approval_response"]},
+        reason="complete only after the owner personally typed exactly approval_response in this session",
+        requires_owner=True, retry_safety="single_use_challenge",
+    )
+    operations = {"pending": [check, complete], "approval_required": [complete],
+                  "expired": [check, complete], "declined": [check]}[status]
+    guidance = {
+        "pending": "The owner has not replied yet. Check again, or complete with the owner's in-session reply.",
+        "approval_required": "No remote owner channel is configured. Show approval_response; the owner "
+                             "must type it exactly in this session.",
+        "expired": "The owner request expired without a reply. Stop and report that approval is waiting.",
+        "declined": "The owner declined this exact request. Nothing was approved.",
+    }[status]
+    return {"kind": "workflow_owner_approval", "schema_version": 1, "authority": "projection",
+            "command": operation, "workflow_id": workflow_id, "generation": generation, **result,
+            "guidance": guidance, "state_changed": False, "destination_mutation_performed": False,
+            "next_operation": operations[0], "available_operations": operations}
+
+
+def _owner_transition(path, prepare, *, operation, transition, verb, intro, session_state, workflow_id,
+                      request_id, timeout_minutes, public_request, provider, in_session_approval,
+                      wait_seconds):
+    """Ask the owner through owner_approval; only an approved exact reply transitions."""
+    from odibi_anchor.owner_approval import DEFAULT_WAIT_SECONDS, OwnerApprovalMismatch, request_owner_approval
+
+    prepared = prepare(path, session_state=session_state, workflow_id=workflow_id)
+    subject = prepared["subject"]
+    try:
+        result = request_owner_approval(
+            operation=operation, subject=subject, prompt=intro + "\n" + canonical(subject), verb=verb,
+            provider=provider, in_session_approval=in_session_approval, timeout_minutes=timeout_minutes,
+            wait_seconds=DEFAULT_WAIT_SECONDS if wait_seconds is None else wait_seconds,
+        )
+    except OwnerApprovalMismatch as exc:
+        raise _approval_mismatch(exc.mismatches, prepared["approval_response"], operation=operation,
+                                 workflow_id=workflow_id, generation=subject["generation"]) from None
+    if result["approval_response"] != prepared["approval_response"]:
+        raise WorkflowError("authority_required", "owner challenge differs from the prepared challenge")
+    if result["status"] != "approved":
+        return _owner_wait(result, operation=operation, workflow_id=workflow_id,
+                           generation=subject["generation"])
+    if prepare(path, session_state=session_state, workflow_id=workflow_id) != prepared:
+        raise WorkflowError("stale_evidence", f"{_STALE[operation]} changed during human approval")
+    return transition_workflow(
+        path, owner=workflow_owner(session_state), workflow_id=workflow_id,
+        expected_generation=subject["generation"], request_id=request_id, operation=transition,
+        payload={**subject, "actor_kind": "human", "owner": result["owner"],
+                 "authority_ref": result["authority_ref"], "response_message_id": result["response_message_id"],
+                 "owner_assurance": result["assurance"]},
+        public_request=public_request,
+    )
+
+
+_STALE = {"request_delivery_approval": "candidate or qualification", "revoke_delivery": "workflow approval"}
+
+
 def prepare_delivery(path, *, session_state, workflow_id):
     """Produce an exact, inspectable human challenge; grant no permission."""
+    from odibi_anchor.owner_approval import challenge_for
+
     state = _fresh(path, session_state, workflow_id)
     if state["progress"] != "qualified":
         raise WorkflowError("invalid_transition", "approval requires qualified work")
@@ -208,38 +264,31 @@ def prepare_delivery(path, *, session_state, workflow_id):
                "review_assurance": state["qualification"]["review"].get("independence"),
                "reviewer_authentication": state["qualification"]["review"].get("reviewer_authentication", "none")}
     return {"kind": "workflow_delivery_request", "subject": subject,
-            "approval_response": "APPROVE " + digest(subject), "authority_granted": False}
+            "approval_response": challenge_for(subject, "APPROVE")[1], "authority_granted": False}
 
 
-def request_delivery_approval(path, *, session_state, workflow_id, request_id, timeout_minutes=5,
-                              public_request=None):
-    """Collect exact human response through configured owner transport, then CAS."""
-    from odibi_anchor.human_input import request_human_input_record
-    from odibi_anchor.human_input_owner import select_owner_approval_provider
+def request_delivery_approval(path, *, session_state, workflow_id, request_id, timeout_minutes=30,
+                              public_request=None, provider=None, in_session_approval=None,
+                              wait_seconds=None):
+    """Ask the owner to approve the exact candidate and destination, then CAS.
 
-    prepared = prepare_delivery(path, session_state=session_state, workflow_id=workflow_id)
-    subject = prepared["subject"]
-    provider = select_owner_approval_provider()
-    message = ("Authorize only this candidate and destination operation. Review task separation "
-               "does not authenticate a different reviewer.\n" + canonical(subject)
-               + "\nReply exactly: " + prepared["approval_response"])
-    response = request_human_input_record(message, timeout_minutes=timeout_minutes, transport=provider.transport)
-    _require_exact_response(response, prepared, provider, operation="request_delivery_approval",
-                            workflow_id=workflow_id, generation=subject["generation"])
-    if prepare_delivery(path, session_state=session_state, workflow_id=workflow_id) != prepared:
-        raise WorkflowError("stale_evidence", "candidate or qualification changed during human approval")
-    return transition_workflow(
-        path, owner=workflow_owner(session_state), workflow_id=workflow_id,
-        expected_generation=subject["generation"], request_id=request_id, operation="approve_delivery",
-        payload={**subject, "actor_kind": "human", "owner": provider.expected_owner_id,
-                 "authority_ref": response.request_id, "response_message_id": response.response_message_id,
-                 "owner_assurance": provider.assurance},
-        public_request=public_request,
+    Only an approved reply transitions. A pending, approval_required, expired or declined
+    owner result is returned as a ``workflow_owner_approval`` packet and changes nothing.
+    """
+    return _owner_transition(
+        path, prepare_delivery, operation="request_delivery_approval", transition="approve_delivery",
+        verb="APPROVE", intro=("Authorize only this candidate and destination operation. Review task "
+                               "separation does not authenticate a different reviewer."),
+        session_state=session_state, workflow_id=workflow_id, request_id=request_id,
+        timeout_minutes=timeout_minutes, public_request=public_request, provider=provider,
+        in_session_approval=in_session_approval, wait_seconds=wait_seconds,
     )
 
 
 def prepare_revocation(path, *, session_state, workflow_id):
     """Bind withdrawal to retained authority even when the candidate is stale."""
+    from odibi_anchor.owner_approval import challenge_for
+
     state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
     if state["progress"] != "approved_for_delivery" or not state.get("approval"):
         raise WorkflowError("invalid_transition", "revocation requires an unused delivery approval")
@@ -251,33 +300,20 @@ def prepare_revocation(path, *, session_state, workflow_id):
                "approval_sha256": digest(state["approval"]),
                "destination": state["plan"]["destination"], "operation": "revoke_delivery"}
     return {"kind": "workflow_revocation_request", "subject": subject,
-            "approval_response": "REVOKE " + digest(subject), "authority_granted": False}
+            "approval_response": challenge_for(subject, "REVOKE")[1], "authority_granted": False}
 
 
 def request_delivery_revocation(path, *, session_state, workflow_id, request_id,
-                                timeout_minutes=5, public_request=None):
-    """Withdraw only the exact retained grant confirmed by the configured owner."""
-    from odibi_anchor.human_input import request_human_input_record
-    from odibi_anchor.human_input_owner import select_owner_approval_provider
-
-    prepared = prepare_revocation(path, session_state=session_state, workflow_id=workflow_id)
-    subject = prepared["subject"]
-    provider = select_owner_approval_provider()
-    message = ("Revoke this exact unused delivery approval. This does not roll back any destination "
-               "or prove that an external operation did not occur.\n" + canonical(subject)
-               + "\nReply exactly: " + prepared["approval_response"])
-    response = request_human_input_record(message, timeout_minutes=timeout_minutes, transport=provider.transport)
-    _require_exact_response(response, prepared, provider, operation="revoke_delivery",
-                            workflow_id=workflow_id, generation=subject["generation"])
-    if prepare_revocation(path, session_state=session_state, workflow_id=workflow_id) != prepared:
-        raise WorkflowError("stale_evidence", "workflow approval changed during revocation")
-    return transition_workflow(
-        path, owner=workflow_owner(session_state), workflow_id=workflow_id,
-        expected_generation=subject["generation"], request_id=request_id, operation="revoke_delivery",
-        payload={**subject, "actor_kind": "human", "owner": provider.expected_owner_id,
-                 "authority_ref": response.request_id, "response_message_id": response.response_message_id,
-                 "owner_assurance": provider.assurance},
-        public_request=public_request,
+                                timeout_minutes=30, public_request=None, provider=None,
+                                in_session_approval=None, wait_seconds=None):
+    """Withdraw only the exact retained grant confirmed by the owner; same rules as approval."""
+    return _owner_transition(
+        path, prepare_revocation, operation="revoke_delivery", transition="revoke_delivery",
+        verb="REVOKE", intro=("Revoke this exact unused delivery approval. This does not roll back any "
+                              "destination or prove that an external operation did not occur."),
+        session_state=session_state, workflow_id=workflow_id, request_id=request_id,
+        timeout_minutes=timeout_minutes, public_request=public_request, provider=provider,
+        in_session_approval=in_session_approval, wait_seconds=wait_seconds,
     )
 
 

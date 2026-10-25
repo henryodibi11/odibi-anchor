@@ -18,7 +18,7 @@ _IDYES = 6
 _IDNO = 7
 _IDTIMEOUT = 32_000
 _MESSAGE_BOX_FLAGS = 0x00000004 | 0x00000020 | 0x00002000 | 0x00010000 | 0x00040000
-_APPROVAL_PATTERN = re.compile(r"(?:^|\n)Reply exactly: (APPROVE [0-9a-f]{64})$")
+_APPROVAL_PATTERN = re.compile(r"(?:^|\n)Reply exactly: ((?:APPROVE|REVOKE) [0-9a-f]{64})$")
 
 
 def _windows_username() -> str:
@@ -94,10 +94,12 @@ class LocalWindowsOwnerTransport:
         remaining_seconds = request.deadline_at - time.time()
         if remaining_seconds <= 0:
             raise HumanInputDeliveryError("Local owner request expired before display")
+        verb = "revoke" if match.group(1).startswith("REVOKE ") else "approve"
+        operation = f" ({request.operation})" if request.operation else ""
         prompt = (
             f"{request.message}\n\n"
-            "This request came from a local agent. Click Yes only if you personally approve "
-            "this exact memory transition. Click No to deny it."
+            f"This request came from a local agent. Click Yes only if you personally {verb} "
+            f"this exact request{operation}. Click No to decline it."
         )
         result = _message_box(prompt, max(1, int(remaining_seconds * 1_000)))
         transport_ref = f"local-windows:{request.request_id}:{uuid4()}"
