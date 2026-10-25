@@ -27,7 +27,7 @@ def runtime(tmp_path, monkeypatch, request):
     anchor("orient", output_format="dict")
     anchor("new_session", name="workflow_plan", inline=True, output_format="dict")
     with pytest.raises(RuntimeError, match="Fresh substantive artifact tasks require"):
-        anchor("task", "Produce report without workflow", goal="Qualify report bytes", mode="planning",
+        anchor("task", "Produce report without workflow", goal="Qualify report bytes", mode="decision",
                risk="medium", rigor="compact", trust_domain="personal",
                in_scope=["notebooks/report.md"], constraints=["Managed artifacts only"],
                acceptance_criteria=["Report matches contract"], output_format="dict")
