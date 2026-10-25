@@ -170,6 +170,7 @@ def spec_action(
     name: str | None = None,
     specs_dir: str | Path | None = None,
     output_format: str = "markdown",
+    content: str | None = None,
     **_extra: Any,
 ) -> Any:
     """anchor("spec") lifecycle action.
@@ -177,6 +178,8 @@ def spec_action(
     Sub-commands:
         anchor("spec")                    -- list all specs with status
         anchor("spec", "create", name="X")-- scaffold new spec with frontmatter
+        anchor("spec", "create", name="X", content="...") -- write full markdown
+        anchor("spec", "update", "X", content="...")      -- replace an existing spec
         anchor("spec", "status", "X")     -- show detailed spec status
         anchor("spec", "done", "X")       -- mark spec as done
     """
@@ -192,7 +195,11 @@ def spec_action(
         return _spec_list(_specs_dir, output_format, list_specs)
     elif sub_command == "create":
         _name = sub_arg or name
+        if content is not None:
+            return _spec_write(_specs_dir, _name, content, output_format, create=True)
         return _spec_create(_specs_dir, _name, output_format, root_path)
+    elif sub_command == "update":
+        return _spec_write(_specs_dir, sub_arg or name, content, output_format, create=False)
     elif sub_command == "status":
         return _spec_status(_specs_dir, sub_arg, output_format, find_spec)
     elif sub_command == "done":
@@ -218,7 +225,7 @@ def spec_action(
     else:
         msg = (
             f"Unknown spec sub-command: '{sub_command}'. "
-            "Valid: list, create, status, done, persist, validate, execute, review, from_problem"
+            "Valid: list, create, update, status, done, persist, validate, execute, review, from_problem"
         )
         if output_format == "dict":
             return {"error": msg}
@@ -312,6 +319,55 @@ def _spec_create(
             "write_performed": True, "artifact_path": str(spec_path),
         }
     return msg
+
+
+def spec_path(specs_dir: Path, name: str) -> Path:
+    """Return the exact spec file for ``name``, normalized as ``spec create`` names it."""
+    clean_name = str(name).strip().upper().replace(" ", "_").replace("-", "_")
+    if re.fullmatch(r"[A-Z0-9_]+", clean_name) is None:
+        raise ValueError("spec name may contain only letters, digits, spaces, hyphens and underscores")
+    return specs_dir / f"{clean_name}_SPEC.md"
+
+
+def _spec_write(
+    specs_dir: Path, name: str | None, content: str | None, output_format: str, *, create: bool
+) -> Any:
+    """Create or replace a spec with caller-supplied Markdown through an atomic replace."""
+    import hashlib
+
+    from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
+
+    command = "create" if create else "update"
+    if not name:
+        raise ValueError(f'spec {command} requires a name: anchor("spec", "{command}", "NAME", content="...")')
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(f"spec {command} requires nonempty Markdown content")
+    path = spec_path(specs_dir, name)
+    current = path.read_bytes() if path.is_file() else None
+    if create and (current is not None or path.exists()):
+        raise FileExistsError(f"Spec already exists: {path}")
+    if not create and current is None:
+        raise FileNotFoundError(f"Spec does not exist: {path}")
+    clean_name = path.name[: -len("_SPEC.md")]
+    changed = current != content.encode("utf-8")
+    if changed:
+        specs_dir.mkdir(parents=True, exist_ok=True)
+        digest = write_descriptor_atomic(
+            path, content, expected_sha256=hashlib.sha256(current).hexdigest() if current is not None else None,
+        )
+    else:
+        digest = hashlib.sha256(current or b"").hexdigest()
+    summary = f"{'Created' if create else 'Updated' if changed else 'Unchanged'}: {path}"
+    result = {
+        "created" if create else "updated": changed,
+        "path": str(path),
+        "name": clean_name,
+        "sha256": digest,
+        "summary": summary,
+        "write_performed": changed,
+        "artifact_path": str(path),
+    }
+    return result if output_format == "dict" else summary
 
 
 def _spec_done(
@@ -1251,9 +1307,14 @@ def _update_spec_status(spec_path: Path, new_status: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-_REQUIRED_SECTIONS = frozenset({
-    "problem", "design", "acceptance criteria", "verification",
-})
+# Each required section and the headings that satisfy it, including the ones
+# Anchor's own scaffold ("The Problem", "Success Criteria") and from_problem write.
+_REQUIRED_SECTIONS = {
+    "problem": ("problem", "the problem", "problem context"),
+    "design": ("design",),
+    "acceptance criteria": ("acceptance criteria", "success criteria"),
+    "verification": ("verification",),
+}
 
 
 def _has_docstring(source_text: str) -> bool:
@@ -1264,9 +1325,12 @@ def _has_docstring(source_text: str) -> bool:
 
 
 def _acceptance_block(spec_text_lower: str) -> str:
-    """Extract the Acceptance Criteria section body (lowercased), or '' if absent."""
+    """Extract the Acceptance (or Success) Criteria section body (lowercased), or '' if absent."""
     marker = "## acceptance criteria"
     idx = spec_text_lower.find(marker)
+    if idx == -1:
+        marker = "## success criteria"
+        idx = spec_text_lower.find(marker)
     if idx == -1:
         return ""
     rest = spec_text_lower[idx + len(marker):]
@@ -1313,8 +1377,8 @@ def _spec_review(
 
     # ---- Check 1: Completeness ----
     missing_sections = []
-    for section in _REQUIRED_SECTIONS:
-        if f"## {section}" not in spec_lower:
+    for section, headings in _REQUIRED_SECTIONS.items():
+        if not any(f"## {heading}" in spec_lower for heading in headings):
             missing_sections.append(section.title())
 
     checks.append({

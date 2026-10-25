@@ -173,8 +173,8 @@ def test_emission_predicate_and_shared_markdown_are_conservative():
 def test_every_real_mutating_selector_and_representative_reads():
     selectors = {
         "problem": {"create", "update", "link_spec", "close"},
-        "spec": {"create", "done", "persist", "execute", "review", "from_problem"},
-        "work_item": {"create", "update", "approve", "record_publish", "close"},
+        "spec": {"create", "update", "done", "persist", "execute", "review", "from_problem"},
+        "work_item": {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"},
     }
     for action, values in selectors.items():
         assert all(should_emit_operating_protocol(action, (value,)) for value in values)

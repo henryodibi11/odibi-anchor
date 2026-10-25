@@ -529,16 +529,18 @@ def build_static_action_contracts(
         _family(
             {"", "list", "status"},
             {"validate"},
-            {"create", "done", "persist", "execute", "review", "from_problem"},
+            {"create", "update", "done", "persist", "execute", "review", "from_problem"},
         ),
     )
     contracts["work_item"] = ActionContract(
         frozenset({"read", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _family(
-            {"", "list", "status", "show"},
+            {"", "list", "status", "show", "next"},
             {"preview"},
-            {"create", "update", "approve", "record_publish", "close"},
+            # request_plan_approval contacts the owner and records the approval, like
+            # memory promotion's request_owner_activation.
+            {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"},
         ),
     )
     contracts["project"] = ActionContract(

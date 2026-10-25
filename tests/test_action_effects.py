@@ -71,10 +71,12 @@ def test_exact_pre_task_access_assignment_for_all_builtins():
     *[("problem", value, "artifact_write", "task_required") for value in ("create", "update", "link_spec", "close")],
     *[("spec", value, "read", "context_collection") for value in (None, "list", "status")],
     ("spec", "validate", "read", "task_required"),
-    *[("spec", value, "artifact_write", "task_required") for value in ("create", "done", "persist", "execute", "review", "from_problem")],
-    *[("work_item", value, "read", "context_collection") for value in (None, "list", "status", "show")],
+    *[("spec", value, "artifact_write", "task_required") for value in ("create", "update", "done", "persist", "execute", "review", "from_problem")],
+    *[("work_item", value, "read", "context_collection") for value in (None, "list", "status", "show", "next")],
     ("work_item", "preview", "read", "task_required"),
-    *[("work_item", value, "artifact_write", "task_required") for value in ("create", "update", "approve", "record_publish", "close")],
+    *[("work_item", value, "artifact_write", "task_required") for value in (
+        "create", "update", "review", "request_plan_approval", "approve", "record_publish", "close",
+    )],
     *[("learning", value, "read", "context_collection") for value in (None, "list", "show", "insights", "export")],
     *[("learning", value, "governance_write", "task_required") for value in ("capture", "assess", "safe_stop")],
     *[("learning", value, "artifact_write", "task_required") for value in ("triage", "backup")],
@@ -243,17 +245,19 @@ def test_spec_read_selectors(selector):
     assert resolved("spec", *(() if selector is None else (selector,))) == "read"
 
 
-@pytest.mark.parametrize("selector", ["create", "done", "persist", "execute", "review", "from_problem"])
+@pytest.mark.parametrize("selector", ["create", "update", "done", "persist", "execute", "review", "from_problem"])
 def test_spec_write_selectors(selector):
     assert resolved("spec", selector) == "artifact_write"
 
 
-@pytest.mark.parametrize("selector", [None, "list", "status", "show", "preview"])
+@pytest.mark.parametrize("selector", [None, "list", "status", "show", "next", "preview"])
 def test_work_item_read_selectors(selector):
     assert resolved("work_item", *(() if selector is None else (selector,))) == "read"
 
 
-@pytest.mark.parametrize("selector", ["create", "update", "approve", "record_publish", "close"])
+@pytest.mark.parametrize(
+    "selector", ["create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"]
+)
 def test_work_item_write_selectors(selector):
     assert resolved("work_item", selector) == "artifact_write"
 
