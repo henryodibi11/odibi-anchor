@@ -641,6 +641,7 @@ def bootstrap_managed_project(
         optional_managed_names = {
             "ANCHOR_DURABLE_ROOT",
             "ANCHOR_TEST_PYTHON",
+            "ANCHOR_TEST_ENVIRONMENTS",
             "ANCHOR_RETENTION_DAYS",
             "ANCHOR_RETENTION_MINIMUM_SNAPSHOTS",
         }

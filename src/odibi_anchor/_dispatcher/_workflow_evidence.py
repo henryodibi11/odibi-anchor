@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -366,6 +367,96 @@ def collect_candidate(path: str | Path, *, session_state: Any,
             "snapshot": snapshot}
 
 
+COMMAND_MODES = frozenset({"source_change", "artifact_only", "data_change"})
+COMMAND_KEYS = frozenset({"id", "method", "expected", "argv", "environment", "cwd",
+                          "timeout_seconds", "expected_exit_code"})
+DEFAULT_COMMAND_TIMEOUT_S = 600
+MAX_COMMAND_TIMEOUT_S = 3600
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+
+def _criterion_problems(plan: dict[str, Any]):
+    """Yield (code, message) for every criterion that no trusted collector can measure."""
+    mode = plan.get("execution_mode")
+    criteria = plan.get("criteria")
+    artifact_checks = set()
+    # pytest and command criteria run against the files, so planned artifacts they do not
+    # name in an artifact_sha256 digest are still examined; a review is judgment only.
+    file_evidence = False
+    for index, criterion in enumerate(criteria if isinstance(criteria, list) else []):
+        if not isinstance(criterion, dict):
+            continue
+        method = criterion.get("method")
+        label = f"criteria[{index}]"
+        if (method in {"pytest", "command"} and "environment" in criterion
+                and not (isinstance(criterion["environment"], str)
+                         and _ENVIRONMENT_NAME.fullmatch(criterion["environment"]))):
+            yield "missing_evidence", (f"{label}.environment must name a portfolio test environment "
+                                       "(letters, digits, '.', '_' or '-')")
+        if method == "pytest":
+            targets = criterion.get("test_targets")
+            if (not isinstance(targets, list) or not targets
+                    or any(not isinstance(t, str) or not t.strip() for t in targets)):
+                yield "missing_evidence", f"{label}: pytest criterion requires explicit test_targets"
+            expected_xfailed = criterion.get("expected_xfailed", 0)
+            if type(expected_xfailed) is not int or expected_xfailed < 0:
+                yield "missing_evidence", f"{label}: pytest criterion expected_xfailed must be a nonnegative integer"
+            file_evidence = True
+        elif method == "artifact_sha256" and mode == "artifact_only":
+            expected = criterion.get("expected_sha256")
+            try:
+                planned = set(_paths(plan, "artifact_paths"))
+            except WorkflowError as error:
+                yield error.code, f"{label}: {error}"
+                continue
+            if (not isinstance(expected, dict) or not expected or set(expected) - planned
+                    or any(not isinstance(value, str) or len(value) != 64
+                           or any(char not in "0123456789abcdef" for char in value)
+                           for value in expected.values())):
+                yield "missing_evidence", f"{label}: artifact criterion requires exact planned paths and SHA256 digests"
+            else:
+                artifact_checks.update(expected)
+        elif method == "command" and mode in COMMAND_MODES:
+            file_evidence = True
+            unknown = sorted(set(criterion) - COMMAND_KEYS)
+            if unknown:
+                yield "missing_evidence", f"{label}: command criterion has unknown key(s): {', '.join(unknown)}"
+            argv = criterion.get("argv")
+            if (not isinstance(argv, list) or not argv
+                    or any(not isinstance(item, str) or not item or "\x00" in item for item in argv)):
+                yield "missing_evidence", (f"{label}: command criterion requires argv, a nonempty array of "
+                                           "nonempty strings run without a shell")
+            cwd = criterion.get("cwd")
+            if cwd is not None and (
+                not isinstance(cwd, str) or not cwd or "\\" in cwd or PurePosixPath(cwd).is_absolute()
+                or ".." in PurePosixPath(cwd).parts or PurePosixPath(cwd).as_posix() != cwd or cwd == "."
+            ):
+                yield "missing_evidence", (f"{label}: command cwd must be a canonical relative directory "
+                                           "under the target root (omit it for the root)")
+            timeout = criterion.get("timeout_seconds", DEFAULT_COMMAND_TIMEOUT_S)
+            if type(timeout) is not int or not 1 <= timeout <= MAX_COMMAND_TIMEOUT_S:
+                yield "missing_evidence", (f"{label}: command timeout_seconds must be an integer from 1 to "
+                                           f"{MAX_COMMAND_TIMEOUT_S} (default {DEFAULT_COMMAND_TIMEOUT_S})")
+            if type(criterion.get("expected_exit_code", 0)) is not int:
+                yield "missing_evidence", f"{label}: command expected_exit_code must be an integer (default 0)"
+        elif method == "review":
+            unknown = sorted(set(criterion) - {"id", "method", "expected"})
+            if unknown:
+                yield "missing_evidence", f"{label}: review criterion has unknown key(s): {', '.join(unknown)}"
+        else:
+            yield "unavailable", (
+                f"{label}: criterion method has no supported trusted collector in a {mode} plan: use pytest, "
+                "review, command (source_change, artifact_only, data_change) or artifact_sha256 (artifact_only)"
+            )
+    if artifact_checks and not file_evidence and artifact_checks != set(_paths(plan, "artifact_paths")):
+        yield "missing_evidence", "artifact checks must cover all planned artifact paths"
+
+
+def criterion_problems(plan: dict[str, Any]) -> list[str]:
+    """List every method-specific criterion problem, for check_plan, create and replan."""
+    return [message for _, message in _criterion_problems(plan)]
+
+
 def validate_producer_policy(plan: dict[str, Any], profile: Any) -> None:
     """Enforce declared producer risk and supported checks, not semantic certainty."""
     from odibi_anchor.assurance.evaluator import build_assurance_plan
@@ -374,32 +465,8 @@ def validate_producer_policy(plan: dict[str, Any], profile: Any) -> None:
     floor = "high" if build_assurance_plan(profile).tier == "T3" else profile.risk
     if ranks[plan["risk"]] < ranks[floor]:
         raise WorkflowError("risk_downgrade", "workflow plan cannot downgrade accepted producer risk")
-    artifact_checks = set()
-    has_pytest = False
-    for criterion in plan.get("criteria", []):
-        method = criterion.get("method")
-        if method == "pytest":
-            targets = criterion.get("test_targets")
-            if (not isinstance(targets, list) or not targets
-                    or any(not isinstance(t, str) or not t.strip() for t in targets)):
-                raise WorkflowError("missing_evidence", "pytest criterion requires explicit test_targets")
-            expected_xfailed = criterion.get("expected_xfailed", 0)
-            if type(expected_xfailed) is not int or expected_xfailed < 0:
-                raise WorkflowError("missing_evidence", "pytest criterion expected_xfailed must be a nonnegative integer")
-            has_pytest = True
-        elif method == "artifact_sha256" and plan["execution_mode"] == "artifact_only":
-            expected = criterion.get("expected_sha256")
-            if (not isinstance(expected, dict) or not expected
-                    or set(expected) - set(_paths(plan, "artifact_paths"))
-                    or any(not isinstance(value, str) or len(value) != 64
-                           or any(char not in "0123456789abcdef" for char in value)
-                           for value in expected.values())):
-                raise WorkflowError("missing_evidence", "artifact criterion requires exact planned paths and SHA256 digests")
-            artifact_checks.update(expected)
-        else:
-            raise WorkflowError("unavailable", "criterion method has no supported trusted collector")
-    if artifact_checks and not has_pytest and artifact_checks != set(_paths(plan, "artifact_paths")):
-        raise WorkflowError("missing_evidence", "artifact checks must cover all planned artifact paths")
+    for code, message in _criterion_problems(plan):
+        raise WorkflowError(code, message)
 
 
 def collect_artifact_measurement(path: str | Path, *, session_state: Any,
@@ -457,6 +524,8 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
         raise WorkflowError("review_required", "independent critique requires an accepted read-only verification task")
     if state["plan"]["risk"] == "high" and not distinct:
         raise WorkflowError("review_required", "high-risk work cannot review its own candidate")
+    if state["plan"].get("rigor") == "full" and not distinct:
+        raise WorkflowError("review_required", "full-rigor work cannot review its own candidate")
     if distinct:
         expected = bind_review(path, session_state=session_state, workflow_id=workflow_id)
         if reviewer["task"].get("workflow_binding") != expected:
@@ -478,21 +547,30 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
             "distinct_session": reviewer["identity"]["session_id"] != producer["identity"]["session_id"]}
 
 
-def runtime_environment() -> dict[str, Any]:
+def runtime_environment(name: str | None = None) -> dict[str, Any]:
     """Observe the test interpreter's distribution metadata, not unobservable host history.
 
     With an owner-configured test interpreter, that interpreter is run to describe itself.
+    A named test environment is described the same way and also records its name, kind,
+    variables and (for WSL) distro; ``runtime`` describes Anchor's own interpreter.
     """
-    from odibi_anchor.pytest_runner import configured_environment, probe_test_python
+    from odibi_anchor.pytest_runner import configured_environment, named_environment, probe_test_python
 
-    test_python = probe_test_python()
-    if test_python is not None:
+    selected = named_environment(name) if name is not None else None
+    test_python = probe_test_python() if selected is None else None
+    if selected is not None and selected["kind"] != "runtime":
+        observed = configured_environment(selected["python"], selected)
+    elif test_python is not None:
         return configured_environment(test_python["executable"])
-    return {"python": sys.version, "executable": str(Path(sys.executable).resolve()),
-            "distributions": sorted(
-                [[d.metadata["Name"], d.version] for d in importlib.metadata.distributions()],
-                key=lambda item: (item[0] or "", item[1]),
-            )}
+    else:
+        observed = {"python": sys.version, "executable": str(Path(sys.executable).resolve()),
+                    "distributions": sorted(
+                        [[d.metadata["Name"], d.version] for d in importlib.metadata.distributions()],
+                        key=lambda item: (item[0] or "", item[1]),
+                    )}
+    if selected is None:
+        return observed
+    return {**observed, **{key: value for key, value in selected.items() if key != "python"}}
 
 
 def missing_optional_dependencies(skip_reasons: Any) -> list[str]:
@@ -526,7 +604,7 @@ def collect_test_measurement(*, state: dict[str, Any], before: dict[str, Any],
         raise WorkflowError("missing_evidence", "measurement must match an exact pytest criterion")
     if not targets or criteria[0].get("test_targets") != targets:
         raise WorkflowError("missing_evidence", "executed test targets differ from the accepted criterion")
-    environment = runtime_environment()
+    environment = runtime_environment(criteria[0].get("environment"))
     if environment_before != environment:
         raise WorkflowError("stale_evidence", "qualification environment changed during measurement")
     metrics = result.get("metrics")
@@ -549,6 +627,33 @@ def collect_test_measurement(*, state: dict[str, Any], before: dict[str, Any],
             "evidence_ref": digest(retained), "result": retained}
 
 
+def collect_command_measurement(*, state: dict[str, Any], before: dict[str, Any],
+                                after: dict[str, Any], criterion_id: str,
+                                environment_before: dict[str, Any],
+                                run: dict[str, Any]) -> dict[str, Any]:
+    """Convert one trusted command run of the accepted argv, never a caller pass claim."""
+    if state["candidate"] != before or before != after:
+        raise WorkflowError("stale_evidence", "candidate changed across the measurement")
+    criteria = [c for c in state["plan"]["criteria"] if c["id"] == criterion_id]
+    if len(criteria) != 1 or criteria[0]["method"] != "command":
+        raise WorkflowError("missing_evidence", "measurement must match an exact command criterion")
+    criterion = criteria[0]
+    environment = runtime_environment(criterion.get("environment"))
+    if environment_before != environment:
+        raise WorkflowError("stale_evidence", "qualification environment changed during measurement")
+    expected_exit_code = criterion.get("expected_exit_code", 0)
+    result = {"argv": criterion["argv"], "cwd": criterion.get("cwd", "."),
+              "timeout_seconds": criterion.get("timeout_seconds", DEFAULT_COMMAND_TIMEOUT_S),
+              "expected_exit_code": expected_exit_code,
+              **{key: run[key] for key in ("exit_code", "timed_out", "duration_s", "stdout_sha256",
+                                           "stderr_sha256", "output_tail")}}
+    satisfied = run["timed_out"] is False and run["exit_code"] == expected_exit_code
+    return {"plan_sha256": state["plan_sha256"], "candidate_sha256": digest(before),
+            "criterion_id": criterion_id, "method": "command", "collector": "anchor.command_runner",
+            "status": "satisfied" if satisfied else "failed", "environment": environment,
+            "environment_sha256": digest(environment), "evidence_ref": digest(result), "result": result}
+
+
 def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
                      expected_generation: int, request_id: str,
                      public_request: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -564,16 +669,29 @@ def qualify_recorded(path: str | Path, *, session_state: Any, workflow_id: str,
     review = state.get("review_result")
     if not review:
         raise WorkflowError("review_required", "no retained review evidence")
-    environment_sha256 = digest(runtime_environment())
-    if any(check.get("environment_sha256") != environment_sha256
-           for check in state.get("measurements", {}).values() if check["method"] == "pytest"):
-        raise WorkflowError("stale_evidence", "qualification environment differs from retained measurement")
+    criteria = {criterion["id"]: criterion for criterion in state["plan"]["criteria"]}
+    measurements = state.get("measurements", {})
+    environments = {}
+    for check in measurements.values():
+        if check["method"] in {"pytest", "command"}:
+            name = criteria[check["criterion_id"]].get("environment")
+            if name not in environments:
+                environments[name] = digest(runtime_environment(name))
+            if check.get("environment_sha256") != environments[name]:
+                raise WorkflowError("stale_evidence", "qualification environment differs from retained measurement")
+    # A review criterion is satisfied by the recorded workflow review itself.
+    checks = [check for key, check in measurements.items() if criteria[key]["method"] != "review"]
+    checks += [{"plan_sha256": review["plan_sha256"], "candidate_sha256": review["candidate_sha256"],
+                "criterion_id": key, "method": "review", "collector": "anchor.workflow_review",
+                "status": review["status"], "evidence_ref": review["evidence_ref"],
+                "review_kind": review["kind"], "reviewer": review["reviewer"]}
+               for key, criterion in criteria.items() if criterion["method"] == "review"]
     completion = producer_completion(path, session_state=session_state, producer=candidate["producer"])
     return transition_workflow(
         path, owner=owner, workflow_id=workflow_id, expected_generation=expected_generation,
         request_id=request_id, operation="qualify", payload={
             "plan_sha256": state["plan_sha256"], "candidate_sha256": digest(candidate),
-            "checks": list(state.get("measurements", {}).values()), "review": review,
+            "checks": checks, "review": review,
             "producer_terminal_record_sha256": completion,
         }, public_request=public_request,
     )

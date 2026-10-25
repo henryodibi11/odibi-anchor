@@ -16,12 +16,21 @@ _Forbid = ConfigDict(extra="forbid")
 
 @with_config(_Forbid)
 class PlanCriterion(TypedDict):
+    """pytest: test_targets (expected_xfailed). artifact_sha256: expected_sha256. command: argv
+    (cwd, timeout_seconds, expected_exit_code). review: no extra keys. pytest and command take
+    an optional environment naming a portfolio test environment."""
+
     id: str
     expected: str
-    method: Literal["pytest", "artifact_sha256"]
+    method: Literal["pytest", "artifact_sha256", "command", "review"]
     test_targets: NotRequired[list[str]]
     expected_xfailed: NotRequired[int]
     expected_sha256: NotRequired[dict[str, str]]
+    argv: NotRequired[list[str]]
+    environment: NotRequired[str]
+    cwd: NotRequired[str]
+    timeout_seconds: NotRequired[int]
+    expected_exit_code: NotRequired[int]
 
 
 @with_config(_Forbid)
@@ -68,6 +77,8 @@ class WorkflowPlan(TypedDict):
     goal: str
     risk: Literal["low", "medium", "high"]
     execution_mode: Literal["read_only", "artifact_only", "source_change", "data_change"]
+    rigor: NotRequired[Annotated[Literal["direct", "compact", "full"], Field(
+        description="full requires an independent review at qualify; replan cannot lower it.")]]
     scope: NotRequired[list[str]]
     exclusions: NotRequired[list[str]]
     constraints: NotRequired[list[str]]

@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 SCHEMA_VERSION = 1
@@ -42,6 +42,10 @@ PRESERVED_ENV_NAMES = frozenset({
 #: Owner-configured interpreter for project tests, set only through the portfolio
 #: (``projects.<id>.test_python.<host>``) and delivered in the bound runtime environment.
 TEST_PYTHON_ENV = "ANCHOR_TEST_PYTHON"
+#: This host's owner-named test environments (``projects.<id>.test_environments.<host>``)
+#: as JSON ``{name: {kind, python?, distro?, env?}}``, delivered like TEST_PYTHON_ENV.
+TEST_ENVIRONMENTS_ENV = "ANCHOR_TEST_ENVIRONMENTS"
+TEST_ENVIRONMENT_KINDS = ("local", "wsl", "runtime")
 _PROBE = (
     "import importlib.util, json, sys; import pytest; "
     "print(json.dumps({'pytest_timeout': importlib.util.find_spec('pytest_timeout') is not None}))"
@@ -99,11 +103,109 @@ def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def _run_configured(python: str, code: str) -> subprocess.CompletedProcess[str]:
+def named_environment(name: str) -> dict[str, Any]:
+    """Resolve a criterion's named test environment on this host; refuse an unknown name."""
+    raw = os.environ.get(TEST_ENVIRONMENTS_ENV) or "{}"
+    try:
+        configured = json.loads(raw)
+    except ValueError:
+        configured = None
+    if not isinstance(configured, dict):
+        raise ValueError(f"{TEST_ENVIRONMENTS_ENV} is not a JSON object; restart and rebootstrap "
+                         "so the portfolio delivers it")
+    selected = configured.get(name)
+    if not isinstance(selected, dict):
+        names = ", ".join(sorted(configured)) or "none"
+        raise ValueError(
+            f"test environment {name!r} is not configured on this host (configured: {names}). "
+            "Add projects.<id>.test_environments.<host>.<name> to the portfolio, then restart "
+            "and rebootstrap; or remove the criterion's environment to use the default interpreter."
+        )
+    kind = selected.get("kind")
+    python = sys.executable if kind == "runtime" else selected.get("python")
+    variables = selected.get("env") or {}
+    if (kind not in TEST_ENVIRONMENT_KINDS or not isinstance(python, str) or not python
+            or (kind == "wsl" and not isinstance(selected.get("distro"), str))
+            or not isinstance(variables, dict)
+            or not all(isinstance(value, str) for value in variables.values())):
+        raise ValueError(f"test environment {name!r} is malformed in {TEST_ENVIRONMENTS_ENV}; "
+                         "fix projects.<id>.test_environments.<host>.<name> in the portfolio")
+    environment = {"name": name, "kind": kind, "python": python, "env": dict(variables)}
+    if kind == "wsl":
+        environment["distro"] = selected["distro"]
+    return environment
+
+
+def wsl_path(path: str | os.PathLike[str]) -> str:
+    """Translate an absolute Windows path to its WSL path (C:\\x -> /mnt/c/x).
+
+    ``\\\\wsl$\\<distro>\\`` and ``\\\\wsl.localhost\\<distro>\\`` paths map to the distro root;
+    anything else (relative paths, POSIX paths, options) passes through unchanged.
+    """
+    text = os.fspath(path)
+    windows = PureWindowsPath(text)
+    if not windows.is_absolute():
+        return text
+    rest = "/".join(windows.parts[1:])
+    drive = windows.drive
+    if len(drive) == 2 and drive[1] == ":":
+        return f"/mnt/{drive[0].lower()}/{rest}"
+    if drive.lower().startswith(("\\\\wsl$\\", "\\\\wsl.localhost\\")):
+        return f"/{rest}"
+    return text
+
+
+def environment_launch(
+    environment: dict[str, Any], argv: Sequence[str], *, cwd: str | os.PathLike[str] | None = None,
+    variables: dict[str, str] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """Return the child environment and argv that run ``argv`` in a named test environment.
+
+    A leading ``"python"`` is the environment's interpreter. Local and runtime environments
+    run directly with their variables added to the hermetic child environment. WSL runs
+    ``wsl.exe -d <distro> --cd <cwd> -e env K=V ... argv``: Windows variables do not cross
+    into the distro, so the hermetic settings and variables are passed explicitly, and
+    absolute Windows paths in argv and variable values are translated.
+    """
+    env = child_environment()
+    passed = {**environment.get("env", {}), **(variables or {})}
+    command = list(argv)
+    if command and command[0] == "python":
+        command[0] = environment["python"]
+    if environment["kind"] != "wsl":
+        env.update(passed)
+        return env, command
+    passed = {**child_environment({}), **passed}
+    prefix = ["wsl.exe", "-d", environment["distro"]]
+    if cwd is not None:
+        prefix += ["--cd", wsl_path(cwd)]
+    return env, [*prefix, "-e", "env", *(f"{key}={wsl_path(value)}" for key, value in passed.items()),
+                 *(wsl_path(item) for item in command)]
+
+
+def _run_configured(python: str, code: str,
+                    environment: dict[str, Any] | None = None) -> subprocess.CompletedProcess[str]:
+    env, cmd = (child_environment(), [python, "-B", "-c", code]) if environment is None else (
+        environment_launch(environment, ["python", "-B", "-c", code]))
     return subprocess.run(
-        [python, "-B", "-c", code], env=child_environment(), stdin=subprocess.DEVNULL,
+        cmd, env=env, stdin=subprocess.DEVNULL,
         capture_output=True, text=True, timeout=120,
     )
+
+
+def probe_environment(environment: dict[str, Any]) -> dict[str, Any]:
+    """Check that pytest imports in a named test environment; report pytest-timeout."""
+    fix = (f"Fix projects.<id>.test_environments.<host>.{environment['name']} in the portfolio, "
+           "then restart and rebootstrap.")
+    try:
+        probe = _run_configured(environment["python"], _PROBE, environment)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"test environment {environment['name']!r} could not run: {exc}. {fix}") from exc
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip().splitlines()[-1:] or ["no output"]
+        raise ValueError(f"pytest is not importable in test environment {environment['name']!r} "
+                         f"({detail[0]}). Install pytest there, or {fix[0].lower()}{fix[1:]}")
+    return {"executable": environment["python"], **json.loads(probe.stdout.strip().splitlines()[-1])}
 
 
 def probe_test_python() -> dict[str, Any] | None:
@@ -137,15 +239,16 @@ def probe_test_python() -> dict[str, Any] | None:
     return {"executable": raw, **json.loads(probe.stdout.strip().splitlines()[-1])}
 
 
-def configured_environment(python: str) -> dict[str, Any]:
-    """Describe the configured test interpreter by running it, never Anchor's own."""
-    result = _run_configured(python, _ENVIRONMENT)
+def configured_environment(python: str, environment: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Describe the configured interpreter or named environment by running it, never Anchor's own."""
+    result = _run_configured(python, _ENVIRONMENT, environment)
     if result.returncode != 0:
         raise ValueError(f"the configured test interpreter could not report its distributions: "
                          f"{(result.stderr or '').strip()[-300:]}")
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     return {"python": observed["python"], "executable": python,
-            "distributions": observed["distributions"], "source": TEST_PYTHON_ENV}
+            "distributions": observed["distributions"],
+            "source": TEST_PYTHON_ENV if environment is None else TEST_ENVIRONMENTS_ENV}
 
 
 def run_pytest(
@@ -155,13 +258,14 @@ def run_pytest(
     timeout: float | None = None,
     capture_output: bool = False,
     python: str | None = None,
+    environment: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str] | None]:
-    """Run pytest through this interpreter, or ``python``, and return its bounded hook summary."""
+    """Run pytest through this interpreter, ``python`` or a named ``environment``; return its summary."""
     started = time.monotonic()
     summary_path: Path | None = None
     try:
         summary_path = _new_summary_path()
-        env, cmd = _launch_spec(pytest_args, summary_path, python)
+        env, cmd = _launch_spec(pytest_args, summary_path, python, environment, cwd)
         try:
             proc = subprocess.run(
                 cmd,
@@ -193,6 +297,7 @@ def start_pytest(
     timeout: float | None = None,
     capture_output: bool = False,
     python: str | None = None,
+    environment: dict[str, Any] | None = None,
 ) -> PytestProcess:
     """Launch the same hermetic pytest child as `run_pytest` without waiting for it.
 
@@ -206,7 +311,7 @@ def start_pytest(
     if timeout is not None and timeout < 0:
         raise ValueError("timeout must be non-negative")
     return PytestProcess(pytest_args, cwd=cwd, timeout=timeout, capture_output=capture_output,
-                         python=python)
+                         python=python, environment=environment)
 
 
 class PytestProcess:
@@ -229,6 +334,7 @@ class PytestProcess:
         timeout: float | None,
         capture_output: bool,
         python: str | None = None,
+        environment: dict[str, Any] | None = None,
     ) -> None:
         self.timeout = timeout
         self.capture_output = capture_output
@@ -239,7 +345,7 @@ class PytestProcess:
         self._stderr: Any = None
         self._summary_path: Path | None = _new_summary_path()
         try:
-            env, self.args = _launch_spec(pytest_args, self._summary_path, python)
+            env, self.args = _launch_spec(pytest_args, self._summary_path, python, environment, cwd)
             if timeout is not None:
                 env[DEADLINE_ENV] = repr(float(timeout) + CHILD_DEADLINE_GRACE_S)
             if capture_output:
@@ -412,7 +518,13 @@ def _new_summary_path() -> Path:
 
 def _launch_spec(
     pytest_args: Sequence[str], summary_path: Path, python: str | None = None,
+    environment: dict[str, Any] | None = None, cwd: str | os.PathLike[str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
+    if environment is not None:
+        return environment_launch(
+            environment, ["python", "-B", str(Path(__file__).resolve()), "-p", "no:cacheprovider", *pytest_args],
+            cwd=cwd, variables={SUMMARY_ENV: str(summary_path)},
+        )
     env = child_environment()
     env[SUMMARY_ENV] = str(summary_path)
     cmd = [

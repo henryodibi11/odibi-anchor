@@ -110,6 +110,8 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
     Returns:
         Contract-compliant dict: kind='test_run', metrics={passed, failed, errors, duration_s}, ...
     """
+    # A workflow criterion's named test environment; anchor("test") itself never accepts one.
+    environment = kwargs.pop("environment", None)
     supported = {"target", "mark", "timeout", "verbose", "output_format"}
     unsupported = sorted(set(kwargs) - supported)
     if unsupported:
@@ -130,9 +132,11 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
     # isolation, stdin isolation, hermetic Git settings, and structured counts.
     pytest_args = ["--no-header", "-q", "--tb=short", "--color=no"]
 
-    # An owner-configured project interpreter runs the suite; otherwise Anchor's own.
-    from odibi_anchor.pytest_runner import probe_test_python
-    test_python = probe_test_python()
+    # A named environment, else an owner-configured project interpreter, runs the suite;
+    # otherwise Anchor's own.
+    from odibi_anchor.pytest_runner import named_environment, probe_environment, probe_test_python
+    selected = named_environment(environment) if environment is not None else None
+    test_python = probe_environment(selected) if selected is not None else probe_test_python()
 
     # Add timeout only if pytest-timeout is installed in the interpreter that runs the tests
     if test_python is not None:
@@ -161,7 +165,9 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
         pytest_args.extend(["-m", mark])
 
     runner_options = {"cwd": root, "timeout": 600, "capture_output": True}
-    if test_python is not None:
+    if selected is not None:
+        runner_options["environment"] = selected
+    elif test_python is not None:
         runner_options["python"] = test_python["executable"]
     summary_data, proc = yield pytest_args, runner_options
     cmd = proc.args
@@ -268,6 +274,36 @@ def test_run_steps(root, failure_pattern_fn=None, *args, **kwargs):
         "suggested_next_actions": next_actions,
     }
     return _format_test_result(result, output_format)
+
+
+def run_command(argv, *, cwd, timeout, environment):
+    """Run a workflow command criterion's argv once, without a shell, in ``environment``.
+
+    Returns bounded evidence: exit code, timeout, duration, a redacted stdout-then-stderr
+    tail and the SHA-256 of each full channel. A command that cannot start raises.
+    """
+    import hashlib
+    import subprocess
+    import time
+
+    from odibi_anchor.pytest_runner import environment_launch
+
+    env, cmd = environment_launch(environment, argv, cwd=cwd)
+    started = time.monotonic()
+    timed_out = False
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=timeout)
+        stdout, stderr, exit_code = proc.stdout, proc.stderr, proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr, exit_code, timed_out = exc.stdout or b"", exc.stderr or b"", None, True
+    except OSError as exc:
+        raise ValueError(f"command could not start: {exc}") from exc
+    return {"launched": cmd, "exit_code": exit_code, "timed_out": timed_out,
+            "duration_s": round(time.monotonic() - started, 3),
+            "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+            "output_tail": _diagnostic_output_tail(stdout, stderr)}
 
 
 def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):

@@ -90,13 +90,25 @@ def portfolio_schema() -> dict[str, Any]:
         "projects": {
             "key": "safe_id",
             "required": ["targets"],
-            "optional": ["repository", "artifact_namespace", "test_python"],
+            "optional": ["repository", "artifact_namespace", "test_python", "test_environments"],
             "targets": {"key": "host_id", "value": "absolute_path"},
             "test_python": {
                 "key": "host_id",
                 "value": "absolute path of the Python interpreter that runs this project's tests",
                 "default": "the interpreter running Anchor",
                 "effect": "anchor('test') and workflow pytest criteria run and describe this interpreter",
+            },
+            "test_environments": {
+                "key": "host_id, then safe_id environment name",
+                "value": {
+                    "kind": "local | wsl | runtime",
+                    "python": "interpreter path: absolute for local, POSIX inside the distro for wsl; "
+                              "not used by runtime",
+                    "distro": "WSL distribution name (wsl only)",
+                    "env": "table of non-secret string variables",
+                },
+                "effect": "a workflow pytest or command criterion's environment selects one; "
+                          "delivered as ANCHOR_TEST_ENVIRONMENTS for this host",
             },
         },
         "personas": {"key": "safe_id", "fields": ["task_mode", "memory_scope"], "advisory": True},
@@ -172,6 +184,35 @@ def _table(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _test_environment(name: Any, value: Any, label: str) -> None:
+    _safe_id(name, "test environment name")
+    environment = _table(value, label)
+    _check_keys(environment, {"kind", "python", "distro", "env"}, label)
+    kind = environment.get("kind")
+    if kind not in {"local", "wsl", "runtime"}:
+        raise ValueError(f"{label}.kind must be local, wsl or runtime")
+    required = {"local": {"kind", "python"}, "wsl": {"kind", "python", "distro"}, "runtime": {"kind"}}[kind]
+    allowed = required | {"env"}
+    if not required <= set(environment) or set(environment) - allowed:
+        raise ValueError(f"{label} of kind {kind} requires {', '.join(sorted(required))}"
+                         f" and allows only {', '.join(sorted(allowed))}")
+    if kind == "local":
+        _absolute(environment["python"], f"{label}.python")
+    elif kind == "wsl":
+        python = environment["python"]
+        if (not isinstance(python, str) or not python.startswith("/")
+                or any(char in python for char in "\\\n\r\x00")):
+            raise ValueError(f"{label}.python must be an absolute POSIX path inside the distro")
+        _safe_id(environment["distro"], f"{label}.distro")
+    variables = _table(environment.get("env", {}), f"{label}.env")
+    _check_keys(variables, set(variables), f"{label}.env")
+    for key, item in variables.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", key) or key.upper().startswith("ANCHOR_"):
+            raise ValueError(f"{label}.env.{key} must be a variable name outside the ANCHOR_ prefix")
+        if not isinstance(item, str) or any(char in item for char in "\n\r\x00"):
+            raise ValueError(f"{label}.env.{key} must be a single-line string")
+
+
 def _structural(portfolio: Any) -> dict[str, Any]:
     root = _table(portfolio, "portfolio")
     if ".active_project" in root or "active_project" in root:
@@ -237,12 +278,17 @@ def _structural(portfolio: Any) -> dict[str, Any]:
     for project_id, project_value in projects.items():
         _safe_project_id(project_id)
         project = _table(project_value, f"projects.{project_id}")
-        _check_keys(project, {"repository", "artifact_namespace", "targets", "test_python"},
+        _check_keys(project, {"repository", "artifact_namespace", "targets", "test_python", "test_environments"},
                     f"projects.{project_id}")
         test_python = _table(project.get("test_python", {}), f"projects.{project_id}.test_python")
         for python_host, python in test_python.items():
             _safe_id(python_host, "test_python host ID")
             _absolute(python, f"projects.{project_id}.test_python.{python_host}")
+        label = f"projects.{project_id}.test_environments"
+        for environment_host, named in _table(project.get("test_environments", {}), label).items():
+            _safe_id(environment_host, "test_environments host ID")
+            for name, value in _table(named, f"{label}.{environment_host}").items():
+                _test_environment(name, value, f"{label}.{environment_host}.{name}")
         for key in ("repository", "artifact_namespace"):
             if key in project and not isinstance(project[key], str):
                 raise ValueError(f"projects.{project_id}.{key} must be a string")
@@ -364,6 +410,13 @@ def validate_portfolio(portfolio: Any, *, host_id: str | None = None) -> dict[st
                 "field": f"projects.{key}.test_python.{python_host}",
                 "reason": "Tests on this host run with this interpreter; it is checked when tests run.",
             })
+        for environment_host, named in sorted(project.get("test_environments", {}).items()):
+            for name in sorted(named):
+                configured.append({
+                    "field": f"projects.{key}.test_environments.{environment_host}.{name}",
+                    "reason": f"Criteria on this host may select this {named[name]['kind']} test "
+                              "environment; it is checked when a criterion runs in it.",
+                })
 
     selected: dict[str, Any] | None = None
     if host_id is None:
@@ -493,6 +546,18 @@ def _render(portfolio: dict[str, Any], *, comments: bool = False) -> bytes:
             lines += ["", f"[projects.{_quote(project_id)}.test_python]"]
             for python_host in sorted(project["test_python"]):
                 lines.append(f"{_quote(python_host)} = {_quote(project['test_python'][python_host])}")
+        for environment_host in sorted(project.get("test_environments", {})):
+            for name in sorted(project["test_environments"][environment_host]):
+                environment = project["test_environments"][environment_host][name]
+                header = f"projects.{_quote(project_id)}.test_environments.{_quote(environment_host)}.{_quote(name)}"
+                lines += ["", f"[{header}]"]
+                for key in ("kind", "python", "distro"):
+                    if key in environment:
+                        lines.append(f"{key} = {_quote(environment[key])}")
+                if environment.get("env"):
+                    lines += ["", f"[{header}.env]"]
+                    for key in sorted(environment["env"]):
+                        lines.append(f"{_quote(key)} = {_quote(environment['env'][key])}")
     for persona_id in sorted(root.get("personas", {})):
         persona = root["personas"][persona_id]
         lines += ["", f"[personas.{_quote(persona_id)}]"]
@@ -751,6 +816,12 @@ def resolve_project(
             **(
                 {"ANCHOR_TEST_PYTHON": projects[selected[0]]["test_python"][host]}
                 if host in projects[selected[0]].get("test_python", {})
+                else {}
+            ),
+            **(
+                {"ANCHOR_TEST_ENVIRONMENTS": json.dumps(
+                    projects[selected[0]]["test_environments"][host], sort_keys=True, separators=(",", ":"))}
+                if projects[selected[0]].get("test_environments", {}).get(host)
                 else {}
             ),
             **(

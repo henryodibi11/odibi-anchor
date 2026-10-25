@@ -775,6 +775,19 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'exact xfailed count. For method="artifact_sha256", expected_sha256 maps every '
         'artifact path to its expected hash; use check_artifact with criterion_id. Caller-authored '
         'results, grants and receipts are not accepted.',
+        'method="command" (source_change, artifact_only, data_change): {"id", "method", "expected", '
+        '"argv": [...], "environment"?, "cwd"?, "timeout_seconds"? (1-3600, default 600), '
+        '"expected_exit_code"? (default 0)}. Measure with anchor("test", workflow_criterion="id", '
+        'output_format="dict") and no target: argv runs once without a shell in the target root (or '
+        'cwd under it); a leading "python" is the environment\'s interpreter. Satisfied when it '
+        'exits with expected_exit_code before the timeout; evidence keeps the exit code, a redacted '
+        'output tail, output SHA-256 and the environment. No test file is needed. method="review" '
+        '{"id", "method", "expected"} is satisfied at qualify by the recorded workflow review; an '
+        'open finding fails it. "environment" (pytest and command) names this host\'s portfolio '
+        'projects.<id>.test_environments.<host>.<name>; without it the project test_python or '
+        'Anchor\'s interpreter runs. With only artifact_sha256 file evidence, digests must cover '
+        'every artifact path. Optional plan rigor (direct, compact, full): full requires an '
+        'independent review at qualify, like high risk; replan cannot lower or remove it.',
         'Producer order: edit, touched, preflight, test, review, commit, workflow `implemented`, '
         'measure each criterion, workflow `review`, gate, learning assess, then `qualify`. A gate '
         'before `implemented` (the gate response warns) leaves the task unable to produce a '
@@ -866,6 +879,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'Skipped tests report bounded `samples.skip_reasons`. A strict workflow criterion that '
         'fails on skips names `workflow_measurement.missing_dependencies` when the skips are '
         'missing optional modules.',
+        '`workflow_criterion` naming a command criterion takes no target: the plan\'s argv runs '
+        'synchronously (no wait_seconds or poll) and returns kind `command_run`. A criterion\'s '
+        '`environment` selects a portfolio test environment (local, wsl or runtime) for pytest '
+        'and command criteria; an unknown name is refused before anything runs.',
     ],
     "task": [
         'Refusals retain their original first message and error type and add `context.problems`: '
