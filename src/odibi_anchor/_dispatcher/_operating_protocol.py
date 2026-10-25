@@ -13,8 +13,8 @@ from odibi_anchor._dispatcher._effects import (
 _PROFILE_EFFECTS = ("read", "governance_write", "artifact_write", "source_write", "data_write")
 _MUTATING_SELECTORS = {
     "problem": {"create", "update", "link_spec", "close"},
-    "spec": {"create", "done", "persist", "execute", "review", "from_problem"},
-    "work_item": {"create", "update", "approve", "record_publish", "close"},
+    "spec": {"create", "update", "done", "persist", "execute", "review", "from_problem"},
+    "work_item": {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"},
 }
 
 

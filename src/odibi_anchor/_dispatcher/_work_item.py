@@ -65,7 +65,18 @@ REQUIRED_META = frozenset({
     "publication_receipts",
     "revisions",
 })
-OPTIONAL_META = frozenset({"implementation_disposition", "reopening_triggers"})
+# Planning metadata lives outside _MATERIAL so adding it never changes an existing
+# fingerprint; files without these keys read as empty lists.
+OPTIONAL_META = frozenset(
+    {"implementation_disposition", "reopening_triggers", "depends_on", "reviews", "plan_approvals"}
+)
+_CLOSED_STATUSES = frozenset({"completed", "cancelled"})
+_REVIEW_VERDICTS = frozenset({"approve", "changes_requested", "reject"})
+_FINDING_STATUSES = frozenset({"open", "resolved"})
+_MAX_FINDINGS = 64
+# rigor -> (approving reviews with distinct angles, adversarial angle required)
+_PLAN_RIGOR = {"direct": (1, False), "compact": (2, False), "full": (4, True)}
+_PENDING_APPROVAL_STATUSES = frozenset({"pending", "approval_required", "expired"})
 
 _SECTION_NAMES = (
     "Outcome",
@@ -212,10 +223,13 @@ def _render(record: dict[str, Any]) -> str:
             "revision",
             "implementation_disposition",
             "reopening_triggers",
+            "depends_on",
             "approvals",
             "provider_bindings",
             "publication_receipts",
             "revisions",
+            "reviews",
+            "plan_approvals",
         )
     }
     lines = (
@@ -290,6 +304,11 @@ def _parse(path: Path) -> dict[str, Any]:
         )
     ):
         raise ValueError("Invalid work-item ledger metadata")
+    record["depends_on"] = _depends_on(record.get("depends_on", []), str(record["work_item_id"]))
+    for key in ("reviews", "plan_approvals"):
+        record[key] = record.get(key, [])
+        if not isinstance(record[key], list) or not all(isinstance(entry, dict) for entry in record[key]):
+            raise ValueError("Invalid work-item ledger metadata")
     title_match = re.search(r"(?m)^# (WI-\d{4}-\d{4}): (.*)$", body)
     if title_match is None:
         raise ValueError(f"Invalid work-item body: {path}")
@@ -383,7 +402,24 @@ def _write(path: Path, record: dict[str, Any], *, create_only: bool = False) -> 
             os.unlink(temporary)
 
 
+def _plan_approval_current(approval: dict[str, Any], item: dict[str, Any], fingerprint: str) -> bool:
+    # A plan approval binds the item's material fingerprint and its dependencies.
+    return approval.get("fingerprint") == fingerprint and approval.get("depends_on") == item["depends_on"]
+
+
+def _plan_approval_state(item: dict[str, Any], fingerprint: str) -> dict[str, Any]:
+    current = [a for a in item["plan_approvals"] if _plan_approval_current(a, item, fingerprint)]
+    return {
+        "approved": bool(current),
+        "approval_id": current[-1].get("approval_id") if current else None,
+        "stale_approval_ids": [
+            a.get("approval_id") for a in item["plan_approvals"] if not _plan_approval_current(a, item, fingerprint)
+        ],
+    }
+
+
 def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
+    fingerprint = _fingerprint(item)
     result = {
         "kind": "work_item_context",
         "work_item_id": item["work_item_id"],
@@ -391,7 +427,16 @@ def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
         "status": item["status"],
         "implementation_disposition": item["implementation_disposition"],
         "reopening_triggers": deepcopy(item["reopening_triggers"]),
-        "fingerprint": _fingerprint(item),
+        "fingerprint": fingerprint,
+        "depends_on": list(item["depends_on"]),
+        "reviews": [
+            {**deepcopy(review), "stale": review.get("fingerprint") != fingerprint} for review in item["reviews"]
+        ],
+        "plan_approvals": [
+            {**deepcopy(approval), "stale": not _plan_approval_current(approval, item, fingerprint)}
+            for approval in item["plan_approvals"]
+        ],
+        "plan_approval": _plan_approval_state(item, fingerprint),
         "artifact_path": str(path),
         "write_performed": False,
     }
@@ -411,6 +456,30 @@ def render_work_item_result(selector: str, result: dict[str, Any]) -> str:
                 for x in items
             ] or ["No work items."])
         )
+    if selector == "next":
+        ready = [
+            f"- **{x['work_item_id']}** \u2014 {x['title']} "
+            f"(plan {'approved' if x['plan_approval']['approved'] else 'not approved'})"
+            for x in result.get("ready", [])
+        ]
+        blocked = [
+            f"- **{x['work_item_id']}** \u2014 waiting on "
+            + ", ".join(x["unmet_dependencies"] + [f"{d} (unknown)" for d in x["unknown_dependencies"]])
+            for x in result.get("blocked", [])
+        ]
+        return "\n".join(
+            ["# Next work items", ""] + (ready or ["No ready work items."]) + ["", "## Blocked", ""]
+            + (blocked or ["None."])
+        )
+    if selector == "request_plan_approval":
+        lines = [
+            f"# Plan approval: {result.get('status', '')}",
+            "",
+            f"**Plan SHA-256:** `{result.get('plan_sha256', '')}`",
+        ]
+        lines += [f"- {x['work_item_id']}: `{x['approval_id']}`" for x in result.get("plan_approvals", [])]
+        lines += [f"- {x['purpose']}: `{x['operation']}`" for x in result.get("next_operations", [])]
+        return "\n".join(lines)
     return "\n".join(
         [
             f"# {result['work_item_id']}: {result.get('title', '')}",
@@ -466,9 +535,18 @@ def work_item_action(
             "suggested_next_actions": next_actions,
             "write_performed": False,
         }
+    elif command == "next":
+        if changes or item_id:
+            raise ValueError("next does not accept arguments")
+        result = _next(directory)
+    elif command == "request_plan_approval":
+        if item_id:
+            raise ValueError("request_plan_approval takes work_items=[...], not a work item ID")
+        result = _request_plan_approval(artifact_root, changes)
     elif command == "create":
         title = _material_text(changes.pop("title", ""), "title", required=True)
         outcome = _material_text(changes.pop("outcome", ""), "outcome", required=True)
+        depends_on = _depends_on(changes.pop("depends_on", []))
         unknown = set(changes) - (set(_MATERIAL) - {"title", "outcome"})
         if unknown:
             raise ValueError("unknown work-item fields: " + ", ".join(sorted(unknown)))
@@ -487,10 +565,13 @@ def work_item_action(
                     "revision": 1,
                     "implementation_disposition": "unknown",
                     "reopening_triggers": [],
+                    "depends_on": _depends_on(depends_on, new_id),
                     "approvals": [],
                     "provider_bindings": [],
                     "publication_receipts": [],
                     "revisions": [{"revision": 1, "time": now, "change": "Work item created"}],
+                    "reviews": [],
+                    "plan_approvals": [],
                 }
             )
             record["acceptance_criteria"], record["publication_plan"] = [], []
@@ -514,12 +595,17 @@ def work_item_action(
                 raise ValueError("show does not accept changes")
             result = _context(record, path, record=record)
         elif command == "update":
+            if record["status"] in _CLOSED_STATUSES:
+                raise ValueError(f"{record['status']} work items cannot be updated")
             candidate = deepcopy(record)
+            if "depends_on" in changes:
+                candidate["depends_on"] = _depends_on(changes.pop("depends_on"), record["work_item_id"])
             _apply_material(candidate, changes)
-            if _normalize_material(candidate) == _normalize_material(record):
+            material_changed = _normalize_material(candidate) != _normalize_material(record)
+            if not material_changed and candidate["depends_on"] == record["depends_on"]:
                 result = _context(record, path, updated=False)
             else:
-                if candidate["provider_bindings"]:
+                if material_changed and candidate["provider_bindings"]:
                     candidate["status"] = "changes_pending"
                 _revise(candidate, str(changes.get("change_note", "Work item updated")))
                 _write(path, candidate)
@@ -567,6 +653,8 @@ def work_item_action(
             result = _context(
                 candidate, path, approval=approval, approval_id=approval["approval_id"], write_performed=True
             )
+        elif command == "review":
+            result = _review(record, path, changes)
         elif command == "record_publish":
             result = _record_publish(record, path, changes)
         elif command == "close":
@@ -589,7 +677,8 @@ def work_item_action(
             result = _context(candidate, path, closed=True, write_performed=True)
         else:
             raise ValueError(
-                "Unknown work_item sub-command. Valid: list, create, show, update, preview, approve, record_publish, close"
+                "Unknown work_item sub-command. Valid: list, next, create, show, update, review, "
+                "request_plan_approval, preview, approve, record_publish, close"
             )
     if output_format == "dict":
         return result
@@ -757,3 +846,269 @@ def _record_publish(record: dict[str, Any], path: Path, values: dict[str, Any]) 
         accepted_attestations=[attestation],
         write_performed=True,
     )
+
+
+def _depends_on(value: Any, own_id: str | None = None) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("depends_on must be a list of work item IDs")
+    result: list[str] = []
+    for entry in value:
+        item = entry.strip().upper() if isinstance(entry, str) else ""
+        if re.fullmatch(r"WI-\d{4}-\d{4}", item) is None:
+            raise ValueError("depends_on entries must match WI-YYYY-NNNN")
+        if own_id is not None and item == own_id.strip().upper():
+            raise ValueError("a work item cannot depend on itself")
+        if item in result:
+            raise ValueError("depends_on entries must be unique")
+        result.append(item)
+    return sorted(result)
+
+
+def _findings(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) > _MAX_FINDINGS:
+        raise ValueError(f"findings must be a list of at most {_MAX_FINDINGS} findings")
+    result = []
+    for index, finding in enumerate(value):
+        name = f"findings[{index}]"
+        if not isinstance(finding, dict) or set(finding) != {"summary", "status"}:
+            raise ValueError(f"{name} must contain exactly: status, summary")
+        status = _one_line(finding["status"], f"{name}.status", required=True)
+        if status not in _FINDING_STATUSES:
+            raise ValueError(f"{name}.status must be open or resolved")
+        result.append({"summary": _bounded_trigger_text(finding["summary"], f"{name}.summary"), "status": status})
+    return result
+
+
+def _review(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[str, Any]:
+    _reject_unknown(values, {"angle", "verdict", "findings", "reviewer_ref", "expected_fingerprint"}, "review")
+    if record["status"] in _CLOSED_STATUSES:
+        raise ValueError("closed work items cannot be reviewed")
+    angle = _one_line(values.get("angle"), "angle", required=True)
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", angle) is None or len(angle) > 64:
+        raise ValueError("angle must be a canonical lowercase kebab-case identifier")
+    verdict = _one_line(values.get("verdict"), "verdict", required=True)
+    if verdict not in _REVIEW_VERDICTS:
+        raise ValueError("verdict must be approve, changes_requested, or reject")
+    findings = _findings(values.get("findings", []))
+    reviewer_ref = _one_line(values.get("reviewer_ref"), "reviewer_ref", required=True)
+    expected = _string(values.get("expected_fingerprint"), "expected_fingerprint", required=True)
+    if expected != _fingerprint(record):
+        raise ValueError("expected fingerprint does not match the current work item")
+    review = {
+        "review_id": "WIR-" + uuid4().hex,
+        "angle": angle,
+        "verdict": verdict,
+        "findings": findings,
+        "reviewer_ref": reviewer_ref,
+        "fingerprint": expected,
+        "recorded_at": _now(),
+    }
+    candidate = deepcopy(record)
+    candidate["reviews"].append(review)
+    _revise(candidate, f"Review recorded: {angle} {verdict}")
+    _write(path, candidate)
+    return _context(candidate, path, review=review, review_id=review["review_id"], write_performed=True)
+
+
+def _next(directory: Path) -> dict[str, Any]:
+    records: dict[str, dict[str, Any]] = {}
+    malformed: list[dict[str, Any]] = []
+    if directory.is_dir():
+        for path in sorted(directory.glob("WI-????-????.md")):
+            try:
+                records[path.stem] = _parse(path)
+            except ValueError as exc:
+                malformed.append({"path": str(path), "reason": str(exc)})
+    ready, blocked = [], []
+    for work_item_id, record in sorted(records.items()):
+        if record["status"] in _CLOSED_STATUSES:
+            continue
+        fingerprint = _fingerprint(record)
+        entry = {
+            "work_item_id": work_item_id,
+            "title": record["title"],
+            "status": record["status"],
+            "fingerprint": fingerprint,
+            "depends_on": list(record["depends_on"]),
+            "plan_approval": _plan_approval_state(record, fingerprint),
+        }
+        unmet = [d for d in record["depends_on"] if d in records and records[d]["status"] != "completed"]
+        unknown = [d for d in record["depends_on"] if d not in records]
+        if unmet or unknown:
+            blocked.append({**entry, "unmet_dependencies": unmet, "unknown_dependencies": unknown})
+        else:
+            ready.append(entry)
+    return {
+        "kind": "work_item_next_context",
+        "ready": ready,
+        "blocked": blocked,
+        "malformed_records": malformed,
+        "write_performed": False,
+    }
+
+
+def _plan_readiness_problems(
+    artifact_root: str | Path, items: list[tuple[str, dict[str, Any] | None]], rigor: str
+) -> list[str]:
+    problems: list[str] = []
+    position = {work_item_id: index for index, (work_item_id, _) in enumerate(items)}
+    required, adversarial = _PLAN_RIGOR[rigor]
+    for work_item_id, record in items:
+        if record is None:
+            problems.append(f"{work_item_id}: work item does not exist")
+            continue
+        if record["status"] in _CLOSED_STATUSES:
+            problems.append(f"{work_item_id}: status is {record['status']}; only open work items can be approved")
+        for dependency in record["depends_on"]:
+            if dependency in position:
+                if position[dependency] > position[work_item_id]:
+                    problems.append(f"{work_item_id}: dependency {dependency} must come earlier in work_items")
+                continue
+            dependency_path = _path(artifact_root, dependency)
+            try:
+                status = _parse(dependency_path)["status"] if dependency_path.is_file() else None
+            except ValueError as exc:
+                problems.append(f"{work_item_id}: dependency {dependency} is malformed: {exc}")
+                continue
+            if status is None:
+                problems.append(f"{work_item_id}: dependency {dependency} does not exist")
+            elif status != "completed":
+                problems.append(
+                    f"{work_item_id}: dependency {dependency} is {status}; include it in work_items or complete it"
+                )
+        fingerprint = _fingerprint(record)
+        current = [review for review in record["reviews"] if review.get("fingerprint") == fingerprint]
+        for index, review in enumerate(current):
+            label = f"review {review.get('review_id')} ({review.get('angle')})"
+            for finding in review.get("findings", []):
+                if finding.get("status") == "open":
+                    problems.append(f"{work_item_id}: {label} has an open finding: {finding.get('summary')}")
+            superseded = any(
+                later.get("angle") == review.get("angle") and later.get("verdict") == "approve"
+                for later in current[index + 1:]
+            )
+            if review.get("verdict") != "approve" and not superseded:
+                problems.append(
+                    f"{work_item_id}: {label} verdict is {review.get('verdict')} "
+                    "with no later approving review from the same angle"
+                )
+        angles = {review.get("angle") for review in current if review.get("verdict") == "approve"}
+        if len(angles) < required:
+            stale = len(record["reviews"]) - len(current)
+            problems.append(
+                f"{work_item_id}: {rigor} rigor needs {required} approving current review(s) with distinct "
+                f"angles; found {len(angles)}" + (f" ({', '.join(sorted(angles))})" if angles else "")
+                + (f"; {stale} stale review(s) ignored" if stale else "")
+            )
+        if adversarial and "adversarial" not in angles:
+            problems.append(f"{work_item_id}: {rigor} rigor needs an approving current adversarial review")
+    return problems
+
+
+def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) -> dict[str, Any]:
+    passthrough = ("provider", "in_session_approval", "wait_seconds", "timeout_minutes")
+    _reject_unknown(values, {"work_items", "spec", "rigor", *passthrough}, "plan approval")
+    rigor = _one_line(values.get("rigor"), "rigor", required=True)
+    if rigor not in _PLAN_RIGOR:
+        raise ValueError("rigor must be direct, compact, or full")
+    requested = values.get("work_items")
+    if not isinstance(requested, list) or not requested or not all(isinstance(x, str) for x in requested):
+        raise ValueError("work_items must be a nonempty list of work item IDs")
+    paths = [_path(artifact_root, value) for value in requested]
+    ids = [path.stem for path in paths]
+    if len(set(ids)) != len(ids):
+        raise ValueError("work_items must not repeat a work item")
+    items = [(work_item_id, _parse(path) if path.is_file() else None) for work_item_id, path in zip(ids, paths, strict=True)]
+    problems = _plan_readiness_problems(artifact_root, items, rigor)
+    spec: dict[str, str] | None = None
+    if values.get("spec") is not None:
+        from odibi_anchor._dispatcher._spec import spec_path
+
+        spec_file = spec_path(Path(artifact_root).resolve() / "specs", _one_line(values["spec"], "spec", required=True))
+        if spec_file.is_file():
+            spec = {"name": spec_file.name[: -len("_SPEC.md")], "sha256": hashlib.sha256(spec_file.read_bytes()).hexdigest()}
+        else:
+            problems.append(f"spec {spec_file.name} does not exist")
+    if problems:
+        raise ValueError("work items are not ready for plan approval:\n- " + "\n- ".join(problems))
+    subject = {
+        "kind": "anchor.work_item_plan",
+        "rigor": rigor,
+        "spec": spec,
+        "work_items": [
+            {"work_item_id": work_item_id, "fingerprint": _fingerprint(record), "depends_on": list(record["depends_on"])}
+            for work_item_id, record in items
+            if record is not None
+        ],
+    }
+    plan_sha256 = hashlib.sha256(
+        json.dumps(subject, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    from odibi_anchor.owner_approval import request_owner_approval
+
+    prompt = (
+        f"Approve the plan of {len(ids)} work item(s) ({', '.join(ids)}) at {rigor} rigor"
+        + (f" with spec {spec['name']}" if spec else "") + "."
+    )
+    outcome = request_owner_approval(
+        operation="work_item.plan_approval",
+        subject=subject,
+        prompt=prompt,
+        **{key: values[key] for key in passthrough if values.get(key) is not None},
+    )
+    status = outcome.get("status")
+    result: dict[str, Any] = {
+        "kind": "work_item_plan_approval",
+        "status": status,
+        "plan_sha256": plan_sha256,
+        "subject": subject,
+        "owner_approval": outcome,
+        "plan_approvals": [],
+        "next_operations": [],
+        "write_performed": False,
+    }
+    if status in _PENDING_APPROVAL_STATUSES:
+        call = (
+            f'anchor("work_item", "request_plan_approval", work_items={json.dumps(ids)}, rigor="{rigor}"'
+            + (f', spec="{spec["name"]}"' if spec else "")
+        )
+        reply = outcome.get("approval_response") or f"APPROVE {outcome.get('challenge_sha256', '')}"
+        result["next_operations"] = [
+            {"purpose": "check_again", "operation": call + ")"},
+            {
+                "purpose": "complete_in_session",
+                "operation": call + f', provider="chat_in_session", in_session_approval={json.dumps(reply)})',
+                "note": "only after the owner typed exactly this reply in the session",
+            },
+        ]
+        return result
+    if status == "declined":
+        return result
+    if status != "approved":
+        raise ValueError(f"unexpected owner approval status: {status!r}")
+    current = [(work_item_id, path, _parse(path)) for work_item_id, path in zip(ids, paths, strict=True)]
+    for (work_item_id, _, record), bound in zip(current, subject["work_items"], strict=True):
+        if _fingerprint(record) != bound["fingerprint"] or record["depends_on"] != bound["depends_on"]:
+            raise ValueError(f"{work_item_id} changed while approval was pending; request plan approval again")
+    approval_id = "WIP-" + uuid4().hex
+    approved_at = _now()
+    for work_item_id, path, record in current:
+        approval = {
+            "approval_id": approval_id,
+            "plan_sha256": plan_sha256,
+            "fingerprint": _fingerprint(record),
+            "depends_on": list(record["depends_on"]),
+            "rigor": rigor,
+            "owner": outcome.get("owner"),
+            "assurance": outcome.get("assurance"),
+            "authority_ref": outcome.get("authority_ref"),
+            "approved_at": approved_at,
+        }
+        candidate = deepcopy(record)
+        candidate["plan_approvals"].append(approval)
+        _revise(candidate, f"Plan approved: {approval_id}")
+        _write(path, candidate)
+        result["plan_approvals"].append({"work_item_id": work_item_id, **approval})
+    result["write_performed"] = True
+    result["managed_writes"] = [{"path": str(path), "kind": "work_item"} for _, path, _ in current]
+    return result
