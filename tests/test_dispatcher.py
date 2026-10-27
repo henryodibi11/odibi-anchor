@@ -472,13 +472,12 @@ class TestActionRouting:
     def test_empty_change_scope_preserves_intentional_full_suite(self):
         from odibi_anchor._dispatcher._session_tools import _auto_scope_tests
 
-        result = _auto_scope_tests(
-            {}, session_files_changed=set(),
-            test_focus_fn=lambda *_args, **_kwargs: pytest.fail("discovery should not run"),
-            root="/project",
-        )
-
-        assert result == {}
+        with pytest.raises(ValueError, match="whole suite"):
+            _auto_scope_tests(
+                {}, session_files_changed=set(),
+                test_focus_fn=lambda *_args, **_kwargs: pytest.fail("discovery should not run"),
+                root="/project",
+            )
 
     def test_session_diff_action(self, anchor_func, clean_session_state):
         result = anchor_func("session_diff", stat=True, output_format="dict")

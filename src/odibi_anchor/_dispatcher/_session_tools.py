@@ -333,9 +333,15 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
         raise TypeError("changed_files must be a list, tuple, or set of paths")
     changed_scope = list(explicit_changed) if explicit_changed is not None else list(session_files_changed)
     if not changed_scope:
+        if kwargs.get("workflow_criterion") is None:
+            raise ValueError(
+                "anchor('test') with no target, no changed_files and no workflow_criterion "
+                "would run the whole suite. Refused: pass target=..., workflow_criterion=..., "
+                "or target=['tests/'] explicitly."
+            )
         cleaned = dict(kwargs)
         cleaned.pop("changed_files", None)
-        return cleaned  # No scope means an intentional full-suite invocation.
+        return cleaned
 
     py_changed = [str(f) for f in changed_scope if str(f).endswith(".py")]
     if not py_changed:
