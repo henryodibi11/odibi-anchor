@@ -2,6 +2,26 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-11-02
+
+### Fixed
+
+- Databricks native `.assistant_instructions.md` now includes the effective operating
+  contract inline, generated from the same contract as `<host-home>/instructions.md`,
+  rather than a pointer Genie Code does not proactively follow. Both copies use the
+  canonical configured-home bootstrap path; the native file retains the machine-readable
+  home identity. Amp, ChatGPT and Claude keep their existing instruction entrypoints.
+- Refuse Databricks setup before publication if the rendered native file, including its
+  identity marker, exceeds 20,000 characters. Python bootstrap paths are escaped for
+  owner-selected homes containing quotes, spaces or Unicode.
+
+### Verification boundary
+
+- Focused tests cover native rendering, size boundaries, legacy/0.4.1 migration,
+  repeat setup, rollback, other hosts and installed-wheel behavior. Fresh Genie ingestion
+  and live Databricks migration require separate host validation; this release does not
+  migrate a live installation or rename durable Volume paths.
+
 ## [0.4.1] - 2026-11-02
 
 ### Added

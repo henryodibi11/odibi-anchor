@@ -1,4 +1,4 @@
-# Host home and safe migration (0.4.1)
+# Host home and safe migration (0.4.2)
 
 Host installation is distinct from project/runtime state. `setup_host(target, adapter=...)`
 defaults to `<target>/anchor`. Choose an absolute folder name/location with `home=...`, CLI
@@ -22,13 +22,22 @@ state remains compute-local. Do not point `ANCHOR_HOME` at the host home to relo
 | Operating contract | `<host-home>/instructions.md` |
 | Backups, journal, last rollback receipt | `<host-home>/backups/`, `pending.json`, `last-migration.json` |
 | Native instruction entry points | Existing instruction root (`AGENTS.md` or `CLAUDE.md`) |
-| Instruction discovery pointer | `<instruction-root>/.assistant_instructions.md` |
+| Instruction discovery (inline on Databricks; pointer on other hosts) | `<instruction-root>/.assistant_instructions.md` |
 | Guidance resources and native skills | Existing `.assistant/` resources and Claude `.claude/skills/` |
 | Project artifacts, runtime database, durable snapshots | Their existing configured owners/locations |
 
 Amp/ChatGPT and Claude need native instruction discovery files; Claude also discovers native
-skills under `.claude/skills`. The `.assistant_instructions.md` pointer preserves existing host
-integrations. `.assistant` references and skills remain for compatibility; neither a bootstrap
+skills under `.claude/skills`. Their `.assistant_instructions.md` pointer preserves existing host
+integrations. Databricks requires effective instructions inline in `.assistant_instructions.md`:
+[Genie Code does not proactively fetch linked instructions](https://learn.microsoft.com/en-us/azure/databricks/genie-code/instructions).
+Since 0.4.2, its native file contains the machine-readable home marker followed by the same
+rendered contract as `<host-home>/instructions.md`, including the canonical bootstrap path.
+Setup refuses before publication if this complete native file exceeds 20,000 characters;
+it never silently truncates the contract. Upgrading a managed 0.4.1 pointer uses the normal
+read-only reconcile plan, approved apply and verified rollback, not a manual native-file edit.
+Fresh Genie ingestion still requires validation in a new host conversation.
+
+`.assistant` references and skills remain for compatibility; neither a bootstrap
 nor the host configuration/ownership manifest belongs there. Databricks does not require a
 root `agent_bootstrap.py`: it was a source-only launcher, not a platform entry point. The
 source repository and distribution still contain their separate source/managed launcher
