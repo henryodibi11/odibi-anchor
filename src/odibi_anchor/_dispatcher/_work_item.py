@@ -478,6 +478,10 @@ def render_work_item_result(selector: str, result: dict[str, Any]) -> str:
             f"**Plan SHA-256:** `{result.get('plan_sha256', '')}`",
         ]
         lines += [f"- {x['work_item_id']}: `{x['approval_id']}`" for x in result.get("plan_approvals", [])]
+        lines += [
+            f"- {x['work_item_id']} / {x['review_id']} (minor, open): {x['summary']}"
+            for x in result.get("open_minor_findings", [])
+        ]
         lines += [f"- {x['purpose']}: `{x['operation']}`" for x in result.get("next_operations", [])]
         return "\n".join(lines)
     return "\n".join(
@@ -488,6 +492,13 @@ def render_work_item_result(selector: str, result: dict[str, Any]) -> str:
             f"**Implementation disposition:** {result.get('implementation_disposition', '')}",
             f"**Fingerprint:** `{result.get('fingerprint', '')}`",
             f"**Artifact:** `{result.get('artifact_path', '')}`",
+        ]
+        + [
+            f"- Review {review.get('review_id')} ({review.get('angle')}, {review.get('verdict')}, "
+            f"{'stale' if review.get('stale') else 'current'}): "
+            f"{finding.get('summary')} ({finding.get('severity', 'blocking')}, {finding.get('status')})"
+            for review in result.get("reviews", [])
+            for finding in review.get("findings", [])
         ]
     )
 
@@ -870,12 +881,17 @@ def _findings(value: Any) -> list[dict[str, str]]:
     result = []
     for index, finding in enumerate(value):
         name = f"findings[{index}]"
-        if not isinstance(finding, dict) or set(finding) != {"summary", "status"}:
-            raise ValueError(f"{name} must contain exactly: status, summary")
+        if (not isinstance(finding, dict) or not {"summary", "status"} <= set(finding)
+                or set(finding) - {"summary", "status", "severity"}):
+            raise ValueError(f"{name} must contain status and summary, and optional severity")
         status = _one_line(finding["status"], f"{name}.status", required=True)
         if status not in _FINDING_STATUSES:
             raise ValueError(f"{name}.status must be open or resolved")
-        result.append({"summary": _bounded_trigger_text(finding["summary"], f"{name}.summary"), "status": status})
+        severity = finding.get("severity", "blocking")
+        if severity not in ("blocking", "minor"):
+            raise ValueError(f"{name}.severity must be blocking or minor")
+        result.append({"summary": _bounded_trigger_text(finding["summary"], f"{name}.summary"),
+                       "status": status, "severity": severity})
     return result
 
 
@@ -981,7 +997,8 @@ def _plan_readiness_problems(
         for index, review in enumerate(current):
             label = f"review {review.get('review_id')} ({review.get('angle')})"
             for finding in review.get("findings", []):
-                if finding.get("status") == "open":
+                if (finding.get("status") == "open"
+                        and (finding.get("severity", "blocking") != "minor" or review.get("verdict") != "approve")):
                     problems.append(f"{work_item_id}: {label} has an open finding: {finding.get('summary')}")
             superseded = any(
                 later.get("angle") == review.get("angle") and later.get("verdict") == "approve"
@@ -1031,10 +1048,19 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
             problems.append(f"spec {spec_file.name} does not exist")
     if problems:
         raise ValueError("work items are not ready for plan approval:\n- " + "\n- ".join(problems))
+    open_minor_findings = [
+        {"work_item_id": work_item_id, "review_id": review.get("review_id"),
+         "angle": review.get("angle"), **deepcopy(finding)}
+        for work_item_id, record in items if record is not None
+        for review in record["reviews"] if review.get("fingerprint") == _fingerprint(record)
+        for finding in review.get("findings", [])
+        if finding.get("status") == "open" and finding.get("severity") == "minor"
+    ]
     subject = {
         "kind": "anchor.work_item_plan",
         "rigor": rigor,
         "spec": spec,
+        "open_minor_findings": open_minor_findings,
         "work_items": [
             {"work_item_id": work_item_id, "fingerprint": _fingerprint(record), "depends_on": list(record["depends_on"])}
             for work_item_id, record in items
@@ -1050,6 +1076,11 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
         f"Approve the plan of {len(ids)} work item(s) ({', '.join(ids)}) at {rigor} rigor"
         + (f" with spec {spec['name']}" if spec else "") + "."
     )
+    if open_minor_findings:
+        prompt += "\nOpen minor findings (nonblocking):\n" + "\n".join(
+            f"- {finding['work_item_id']} / {finding['review_id']}: {finding['summary']}"
+            for finding in open_minor_findings
+        )
     outcome = request_owner_approval(
         operation="work_item.plan_approval",
         subject=subject,
@@ -1062,6 +1093,7 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
         "status": status,
         "plan_sha256": plan_sha256,
         "subject": subject,
+        "open_minor_findings": open_minor_findings,
         "owner_approval": outcome,
         "plan_approvals": [],
         "next_operations": [],

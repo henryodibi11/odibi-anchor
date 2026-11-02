@@ -352,7 +352,7 @@ def _discovery_operations(
 
 def _host_binding(instruction_root: Path, nested: Mapping[str, object] | None) -> dict[str, str]:
     """Strictly validate the sidecar written by ``anchor setup-host --portfolio``."""
-    path = instruction_root / _HOST_BINDING
+    path = (_host_home or instruction_root) / _HOST_BINDING
 
     def invalid(reason: str) -> BaseException:
         return _structured(
@@ -415,10 +415,11 @@ def _portfolio_search(
     The sidecar entry appears only when the sidecar exists, so hosts without one keep the
     v0.3.24 search exactly. A sidecar that disagrees with an existing default is ambiguous.
     """
-    default = instruction_root / ".odibi-anchor" / "anchor.toml"
+    default = (_host_home / "anchor.toml" if _host_home is not None
+               else instruction_root / ".odibi-anchor" / "anchor.toml")
     nested = _nested_install(instruction_root)
     explicit = "ANCHOR_PORTFOLIO_CONFIG" in globals() or "ANCHOR_PORTFOLIO_CONFIG" in os.environ
-    has_binding = os.path.lexists(instruction_root / _HOST_BINDING)
+    has_binding = os.path.lexists((_host_home or instruction_root) / _HOST_BINDING)
     binding = _host_binding(instruction_root, nested) if has_binding and not explicit else None
     candidates: list[tuple[str, object, bool]] = [
         ("ANCHOR_PORTFOLIO_CONFIG init global", globals().get("ANCHOR_PORTFOLIO_CONFIG"),
@@ -480,6 +481,41 @@ def _portfolio_search(
     return selected, searched, binding
 
 
+_host_home = None
+_host_record = _launcher.parent / "host.json"
+if (_launcher.parent.name == ".assistant"
+        and os.path.lexists(_launcher.parent.parent / ".anchor-host-migration.json")):
+    raise _structured(RuntimeError("host migration pending; recover before legacy bootstrap"),
+        error_code="host_migration_pending", context={"instruction_root": str(_launcher.parent.parent)})
+if os.path.lexists(_launcher.parent / "pending.json"):
+    raise _structured(RuntimeError("host migration pending; rollback before bootstrap"),
+        error_code="host_migration_pending", context={"home": str(_launcher.parent)})
+if _launcher.parent.name != ".assistant" and not _host_record.is_file():
+    raise RuntimeError("canonical host identity is missing; rerun setup-host or recover the pending migration")
+if _host_record.is_file():
+    _host_home = _launcher.parent
+    _host_identity = json.loads(_host_record.read_bytes())
+    if (not isinstance(_host_identity, dict)
+            or set(_host_identity) != {"version", "instruction_root"}
+            or _host_identity["version"] != 1
+            or not isinstance(_host_identity["instruction_root"], str)
+            or not Path(_host_identity["instruction_root"]).is_absolute()):
+        raise RuntimeError("invalid canonical host identity")
+    _host_pointer = Path(_host_identity["instruction_root"]) / ".assistant_instructions.md"
+    if os.path.lexists(_host_pointer.parent / ".anchor-host-migration.json"):
+        raise _structured(RuntimeError("host migration pending; recover before bootstrap"),
+            error_code="host_migration_pending", context={"home": str(_host_home)})
+    try:
+        _pointer_line = _host_pointer.read_text(encoding="utf-8").splitlines()[0]
+        _marker = "<!-- anchor-host-home: "
+        if not _pointer_line.startswith(_marker) or not _pointer_line.endswith(" -->"):
+            raise ValueError("not a canonical instruction pointer")
+        _recorded_home = json.loads(_pointer_line[len(_marker):-4])
+        if not isinstance(_recorded_home, str) or Path(_recorded_home).resolve() != _host_home:
+            raise ValueError("host pointer does not name this home")
+    except (OSError, ValueError, IndexError) as exc:
+        raise RuntimeError("canonical launcher ownership mismatch; refusing a copied or incomplete home") from exc
+
 if "ANCHOR_SOURCE_CHECKOUT" in globals():
     _checkout = _validated_checkout(
         globals()["ANCHOR_SOURCE_CHECKOUT"], source="ANCHOR_SOURCE_CHECKOUT init global"
@@ -489,7 +525,7 @@ elif "ANCHOR_SOURCE_CHECKOUT" in os.environ:
         os.environ["ANCHOR_SOURCE_CHECKOUT"], source="ANCHOR_SOURCE_CHECKOUT environment variable"
     )
 else:
-    _assistant_parent = _launcher.parent.parent
+    _assistant_parent = _launcher.parent.parent if _host_home is None else _launcher.parent
     _source_candidate = _assistant_parent
     _copied_candidate = _assistant_parent / "odibi_anchor"
     try:
@@ -501,7 +537,8 @@ else:
             _checkout = None
 
 if _checkout is None:
-    _instruction_root = _launcher.parent.parent
+    _instruction_root = (Path(_host_identity["instruction_root"]) if _host_home is not None
+                         else _launcher.parent.parent)
     _is_databricks = _launcher.as_posix().startswith("/Workspace/") or bool(
         os.environ.get("DATABRICKS_RUNTIME_VERSION")
     )

@@ -525,6 +525,10 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "work_item":    [
         'anchor("work_item", "create", title="Ship export scaling", outcome="Reduce processing delay", depends_on=["WI-2026-0001"])',
         'anchor("work_item", "review", "WI-2026-0002", angle="adversarial", verdict="approve", findings=[], reviewer_ref="task-123", expected_fingerprint="sha256:...")',
+        'Review findings require summary and status (open|resolved); optional severity is blocking (default) or minor. '
+        'Open minor findings are nonblocking only in approving reviews, and remain visible in show and plan approval. '
+        'changes_requested and reject verdicts still block. '
+        'Example finding: {"summary": "Add a follow-up example", "status": "open", "severity": "minor"}.',
         'anchor("work_item", "next")  # open items whose dependencies are completed',
         'anchor("work_item", "request_plan_approval", work_items=["WI-2026-0001", "WI-2026-0002"], spec="FEATURE_NAME", rigor="compact")',
         'anchor("work_item", "preview", "WI-2026-0001", provider="asana", operations=["create_tasks"])',

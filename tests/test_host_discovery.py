@@ -1,6 +1,10 @@
-"""Deterministic portfolio discovery, host-guidance reconcile and the host-root launcher (#30)."""
+"""Legacy portfolio discovery, host-guidance reconcile and host-root launcher (#30).
+
+The current public host-home layout is covered by test_host_home.py.
+"""
 from __future__ import annotations
 
+import importlib
 import json
 import runpy
 import shutil
@@ -11,7 +15,7 @@ import pytest
 
 import odibi_anchor.host_setup as module
 from odibi_anchor import cli
-from odibi_anchor.host_setup import HostSetupError, setup_host
+from odibi_anchor.host_setup import HostSetupError, _setup_legacy_host as setup_host
 from odibi_anchor.portfolio import write_portfolio
 from tests.test_host_setup import _resources, _workspace_setup
 
@@ -619,6 +623,8 @@ def test_cli_reconcile_flags_and_fresh_compute_inputs(tmp_path, monkeypatch, cap
     resources = _resources(tmp_path)
     monkeypatch.setattr("odibi_anchor._runtime_paths.resolve_resource_root", lambda: resources)
     monkeypatch.setattr(cli, "_boot", lambda _root: pytest.fail("dispatcher booted"))
+    # Exercise the retained legacy reconcile contract, not the public host-home installer.
+    monkeypatch.setattr(importlib.import_module("odibi_anchor.host_setup"), "setup_host", setup_host)
     host = (tmp_path / "host").resolve()
     host.mkdir()
 

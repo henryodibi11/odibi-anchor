@@ -589,6 +589,23 @@ def _decode_args(args: str | dict[str, Any]) -> dict[str, Any]:
     return decode_json_document(args)
 
 
+def _normalize_typed_positional_alias(payload: dict[str, Any]) -> None:
+    """Accept the first-argument names published by the four typed tools."""
+    key = {"workflow": "command", "learning": "command", "memory": "command", "task": "task"}.get(
+        payload["action"].strip()
+    )
+    keywords = payload.get("kwargs", {})
+    if key is None or key not in keywords:
+        return
+    if "arg0" in payload or "args" in payload:
+        raise RequestError(
+            f"{key} is an alias for arg0 for {payload['action']}; do not supply both. "
+            f'Use {{"action": "{payload["action"]}", "args": {{"arg0": "<value>"}}}} '
+            f"or the anchor_{payload['action'].strip()} tool."
+        )
+    payload["arg0"] = keywords.pop(key)
+
+
 @mcp.tool()
 def anchor_execute(
     action: str,
@@ -607,6 +624,9 @@ def anchor_execute(
         args: Keyword arguments as a JSON object, or as a string containing one.
               Example: '{"arg0": "catalog.schema.table", "level": "quick"}'
               For actions with positional args, use special keys like "arg0", "arg1".
+              The typed tools' first-argument names are also accepted: command for
+              learning/workflow/memory, and task for task. Do not combine an alias
+              with arg0 or an args array.
               Only the table parameters of data actions (e.g. quality ``df``) turn a
               csv/parquet/json path or catalog name into a DataFrame; every other value,
               such as a touched path, reaches the action unchanged.
@@ -669,6 +689,7 @@ def anchor_execute(
                             raise ValueError(f"duplicate keyword representation: {key}")
                         keyword_args[key] = value
                     payload["kwargs"] = keyword_args
+                _normalize_typed_positional_alias(payload)
                 request = normalize_request(
                     payload, resolver=functools.partial(_resolve_request_value, action.strip()),
                 )
@@ -727,6 +748,7 @@ def _cw_execute_with_telemetry(
                                 raise ValueError(f"duplicate keyword representation: {key}")
                             keyword_args[key] = value
                         payload["kwargs"] = keyword_args
+                    _normalize_typed_positional_alias(payload)
                     request = normalize_request(
                         payload,
                         resolver=functools.partial(_resolve_request_value, action.strip()),

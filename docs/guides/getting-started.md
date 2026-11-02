@@ -72,12 +72,13 @@ user = spark.sql("SELECT current_user()").first()[0]
 instruction_root = f"/Workspace/Users/{user}"
 project_id = "personal-work"
 project_root = f"{instruction_root}/projects/{project_id}"
-config_path = f"{instruction_root}/.odibi-anchor/anchor.toml"
+host_home = f"{instruction_root}/anchor"  # choose another absolute name/location if desired
+config_path = f"{host_home}/anchor.toml"
 
 workspace = WorkspaceClient().workspace
 workspace.mkdirs(f"/Users/{user}/projects/{project_id}")
 
-guidance = setup_host(instruction_root, adapter="databricks")
+guidance = setup_host(instruction_root, adapter="databricks", home=host_home)
 
 portfolio = scaffold_portfolio(
     config_path,
@@ -94,8 +95,9 @@ assert portfolio["validation"]["status"] == "valid", portfolio
 ```
 
 `scaffold_portfolio` refuses to overwrite an existing portfolio. Keep this file at
-`<instruction_root>/.odibi-anchor/anchor.toml`: that is the managed launcher's default persistent
-location. `local_state_root` is a stable logical base: on shared/serverless compute the launcher
+`<host_home>/anchor.toml`: that is the canonical launcher's default persistent
+location. Host home is not runtime `ANCHOR_HOME`; see [migration and rollback](host-home.md).
+`local_state_root` is a stable logical base: on shared/serverless compute the launcher
 uses a physical root isolated by effective UID and OS-account fingerprint, then restores verified
 v2 state when the compute identity changes. Do not rewrite the portfolio with each observed UID.
 A plain Workspace directory is sufficient for managed-artifact work. Choose the task's
@@ -157,28 +159,16 @@ same root for `config_path`, `instruction_root`, and the launcher:
 workspace = WorkspaceClient().workspace
 workspace.mkdirs(f"/Users/{user}/odibi-anchor-host")
 instruction_root = f"/Workspace/Users/{user}/odibi-anchor-host"
-config_path = f"{instruction_root}/.odibi-anchor/anchor.toml"
+host_home = f"{instruction_root}/anchor"
+config_path = f"{host_home}/anchor.toml"
 guidance = setup_host(instruction_root, adapter="databricks")
 ```
 
 Then run the portfolio scaffold from step 2 with these updated variables.
 
-**Replace confirmed obsolete guidance:** after inspecting and confirming that all three paths are
-from an installation you no longer need, remove only those exact paths through the Workspace API:
-
-```python
-from databricks.sdk.errors import NotFound
-
-api_root = f"/Users/{user}"
-for relative in [".assistant", ".assistant_instructions.md", "agent_bootstrap.py"]:
-    try:
-        workspace.delete(f"{api_root}/{relative}", recursive=True)
-    except NotFound:
-        pass
-```
-
-Rerun `setup_host` afterward. Do not remove `.odibi-anchor-host-guidance.json` from a working
-Anchor installation; it is the ownership and drift manifest used for safe reconciliation.
+**Replace confirmed obsolete guidance:** use the [host-home reconciliation dry run](host-home.md)
+and inspect each conflict before approving replacement. Do not recursively delete `.assistant`
+or a legacy manifest to force setup to pass; they may contain user content or ownership evidence.
 
 ### 4. Launch and verify
 
@@ -186,7 +176,7 @@ Anchor installation; it is the ownership and drift manifest used for safe reconc
 import runpy
 
 namespace = runpy.run_path(
-    f"{instruction_root}/.assistant/agent_bootstrap.py",
+    f"{host_home}/agent_bootstrap.py",
     init_globals={"ANCHOR_PROJECT_ID": project_id},
 )
 anchor = namespace["anchor"]

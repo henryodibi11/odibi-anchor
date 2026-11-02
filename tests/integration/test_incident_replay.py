@@ -262,8 +262,8 @@ def test_host_guidance_and_bootstrap_succeed_under_workspace_latency(replay, dat
 
     assert installed["status"] == "installed"
     assert repeated["status"] == "unchanged"
-    assert f"{workspace_root}/.odibi-anchor-host-guidance.json" in databricks.workspace.files
-    assert f"{workspace_root}/agent_bootstrap.py" in databricks.workspace.files
+    assert f"{workspace_root}/anchor/guidance.json" in databricks.workspace.files
+    assert f"{workspace_root}/anchor/agent_bootstrap.py" in databricks.workspace.files
     assert databricks.clients[0].config.settings == {
         "http_timeout_seconds": 30, "retry_timeout_seconds": 60,
     }

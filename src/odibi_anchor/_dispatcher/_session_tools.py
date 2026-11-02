@@ -336,8 +336,10 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
         if kwargs.get("workflow_criterion") is None:
             raise ValueError(
                 "anchor('test') with no target, no changed_files and no workflow_criterion "
-                "would run the whole suite. Refused: pass target=..., workflow_criterion=..., "
-                "or target=['tests/'] explicitly."
+                "would run the whole suite. Refused; no tests were run. Choose explicitly:\n"
+                'Name targets: anchor("test", target=["tests/test_x.py"])\n'
+                'Measure a criterion: anchor("test", workflow_criterion="<id>")\n'
+                'Run the whole suite intentionally: anchor("test", target=["tests/"])'
             )
         cleaned = dict(kwargs)
         cleaned.pop("changed_files", None)
@@ -360,7 +362,7 @@ def _auto_scope_tests(kwargs, *, session_files_changed, test_focus_fn, root):
     except Exception as exc:
         raise RuntimeError(
             f"Test auto-scope failed ({type(exc).__name__}: {exc}); no tests were run. "
-            "Pass target=... for a focused run or call anchor('test') with an empty change ledger "
+            'Pass target=["tests/test_x.py"] for a focused run or target=["tests/"] '
             "for an intentional full-suite run."
         ) from exc
     raise ValueError(

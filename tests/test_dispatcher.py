@@ -443,12 +443,13 @@ class TestActionRouting:
         assert result["kind"] == "test_run"
         assert "conftest" in str(result["samples"]["command"])
 
-    def test_python_change_scope_resolves_to_applicable_tests(self):
+    @pytest.mark.parametrize("explicit", [False, True])
+    def test_python_change_scope_resolves_to_applicable_tests(self, explicit):
         from odibi_anchor._dispatcher._session_tools import _auto_scope_tests
 
         result = _auto_scope_tests(
-            {"changed_files": ["src/module.py"]},
-            session_files_changed=set(),
+            {"changed_files": ["src/module.py"]} if explicit else {},
+            session_files_changed=set() if explicit else {"src/module.py"},
             test_focus_fn=lambda *_args, **_kwargs: {
                 "affected_test_files": [{"path": "tests/test_module.py"}]
             },
@@ -469,15 +470,36 @@ class TestActionRouting:
 
         assert result == {"target": "tests/test_module.py"}
 
-    def test_empty_change_scope_preserves_intentional_full_suite(self):
+    @pytest.mark.parametrize("kwargs", [{}, {"changed_files": []}])
+    def test_empty_change_scope_refuses_with_copy_ready_options(self, kwargs):
         from odibi_anchor._dispatcher._session_tools import _auto_scope_tests
 
-        with pytest.raises(ValueError, match="whole suite"):
+        with pytest.raises(ValueError, match="whole suite") as caught:
             _auto_scope_tests(
-                {}, session_files_changed=set(),
+                kwargs, session_files_changed=set(),
                 test_focus_fn=lambda *_args, **_kwargs: pytest.fail("discovery should not run"),
                 root="/project",
             )
+        for option in ('anchor("test", target=["tests/test_x.py"])',
+                       'anchor("test", workflow_criterion="<id>")',
+                       'anchor("test", target=["tests/"])'):
+            assert option in str(caught.value)
+
+    def test_bare_test_refuses_before_spawn(self, anchor_func, monkeypatch, clean_session_state):
+        from odibi_anchor._dispatcher import _session_tools
+
+        monkeypatch.setattr(_session_tools, "test_run_steps", lambda *_a, **_k: pytest.fail("must not prepare pytest"))
+        with pytest.raises(ValueError, match="whole suite"):
+            anchor_func("test", output_format="dict")
+
+    @pytest.mark.parametrize("kwargs", [{"target": ["tests/"]}, {"workflow_criterion": "c1"}])
+    def test_explicit_full_suite_and_criterion_preserve_scope(self, kwargs):
+        from odibi_anchor._dispatcher._session_tools import _auto_scope_tests
+
+        assert _auto_scope_tests(
+            kwargs, session_files_changed=set(), root="/project",
+            test_focus_fn=lambda *_a, **_k: pytest.fail("must not discover"),
+        ) == kwargs
 
     def test_session_diff_action(self, anchor_func, clean_session_state):
         result = anchor_func("session_diff", stat=True, output_format="dict")

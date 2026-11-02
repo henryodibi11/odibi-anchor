@@ -471,6 +471,10 @@ def prepare_portfolio_runtime(
             attach_repair_recovery(exc, config_path=document["path"], host_id=host_id)
         raise
     assert route is not None
+    from odibi_anchor.host_home import host_launcher
+
+    host_settings = document["portfolio"]["hosts"][host_id]
+    launcher = host_launcher(Path(host_settings.get("instruction_root") or target), host_settings["adapter"])
     return {
         "kind": "portfolio_runtime_preparation",
         "status": "ready",
@@ -488,11 +492,7 @@ def prepare_portfolio_runtime(
         "next_operation": {
             "operation": "bootstrap",
             "arguments": {
-                "script": str(
-                    Path(document["portfolio"]["hosts"][host_id].get("instruction_root") or target)
-                    / ".assistant"
-                    / "agent_bootstrap.py"
-                ),
+                "script": str(launcher),
                 "environment": environment,
             },
         },
@@ -623,7 +623,8 @@ def bootstrap_managed_project(
     )
     host = portfolio["hosts"][selected_host]
 
-    from odibi_anchor.host_setup import setup_host
+    from odibi_anchor.host_home import host_launcher
+    from odibi_anchor.host_setup import _setup_legacy_host, setup_host
 
     with phase("host_guidance") as guidance_phase:
         guidance_options: dict[str, Any] = {"adapter": host["adapter"]}
@@ -634,7 +635,11 @@ def bootstrap_managed_project(
             guidance_options["receipt_root"] = (
                 f"{host['local_state_root']}.guidance-{uid}-{identity}"
             )
-        guidance = setup_host(root, **guidance_options)
+        # Bootstrapping an existing legacy launcher verifies it; relocation is an
+        # explicit setup operation, not a surprise mutation halfway through startup.
+        installer = (_setup_legacy_host if host_launcher(root, host["adapter"]).parent.name == ".assistant"
+                     else setup_host)
+        guidance = installer(root, **guidance_options)
         guidance_phase["verification"] = guidance.get("verification", "content")
 
     def refuse_environment_conflicts(environment: Mapping[str, str]) -> None:
@@ -917,9 +922,12 @@ def _error_step(name: str, exc: BaseException, **facts: Any) -> dict[str, Any]:
 
 def _launcher_discovery(launcher_root: Path, config: Path, adapter: str) -> dict[str, Any]:
     """Replay the managed launcher's portfolio precedence read-only for one instruction root."""
+    from odibi_anchor.host_home import discover_home, host_launcher
     from odibi_anchor.host_setup import HostSetupError, read_host_binding
 
-    default = launcher_root / ".odibi-anchor" / "anchor.toml"
+    launcher = host_launcher(launcher_root, adapter)
+    default = (discover_home(launcher_root, adapter) / "anchor.toml" if launcher.parent.name != ".assistant"
+               else launcher_root / ".odibi-anchor" / "anchor.toml")
     nested = launcher_root.name == ".assistant"
     record = {
         "operation": "setup_host.record_portfolio",
@@ -976,10 +984,13 @@ def _launcher_discovery(launcher_root: Path, config: Path, adapter: str) -> dict
 
 def _guidance_step(launcher_root: Path, adapter: str) -> dict[str, Any]:
     """Classify host guidance with the read-only reconcile dry run."""
-    from odibi_anchor.host_setup import HostSetupError, setup_host
+    from odibi_anchor.host_home import host_launcher
+    from odibi_anchor.host_setup import HostSetupError, _setup_legacy_host, setup_host
 
     try:
-        plan = setup_host(launcher_root, adapter=adapter, reconcile=True, dry_run=True)
+        installer = (_setup_legacy_host if host_launcher(launcher_root, adapter).parent.name == ".assistant"
+                     else setup_host)
+        plan = installer(launcher_root, adapter=adapter, reconcile=True, dry_run=True)
     except (HostSetupError, OSError, ValueError) as exc:
         return _error_step("host_guidance", exc, instruction_root=launcher_root.as_posix())
     files = plan["files"]
@@ -1253,7 +1264,9 @@ def _fresh_compute_plan(*, config_path: str | os.PathLike[str], host_id: str, pr
     init_globals = {"ANCHOR_PROJECT_ID": project_id}
     if not discovery.get("selects_config"):
         init_globals["ANCHOR_PORTFOLIO_CONFIG"] = config.as_posix()
-    launcher = launcher_root / ".assistant" / "agent_bootstrap.py"
+    from odibi_anchor.host_home import host_launcher
+
+    launcher = host_launcher(launcher_root, adapter)
     plan["launch_inputs"] = {
         "launcher": launcher.as_posix(),
         "init_globals": init_globals,

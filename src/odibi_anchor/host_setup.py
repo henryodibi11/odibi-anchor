@@ -288,6 +288,11 @@ def read_host_binding(instruction_root: str | os.PathLike[str]) -> dict[str, Any
     """Read and strictly validate one local host binding sidecar; ``None`` when absent."""
     root = Path(os.fspath(instruction_root))
     path = root / _BINDING
+    pointer = root / ".assistant_instructions.md"
+    if pointer.is_file() and pointer.read_bytes().startswith(b"<!-- anchor-host-home: "):
+        from odibi_anchor.host_home import discover_home
+
+        path = discover_home(root, "amp") / _BINDING
     if not os.path.lexists(path):
         return None
     content = _regular_bytes(path, f"host binding {_BINDING}")
@@ -1436,6 +1441,30 @@ def _publish_binding(
 
 
 def setup_host(
+    target_root: str | os.PathLike[str], *, adapter: str,
+    home: str | os.PathLike[str] | None = None, rollback: bool = False,
+    portfolio_config: str | os.PathLike[str] | None = None, host_id: str | None = None,
+    reconcile: bool = False, dry_run: bool | None = None,
+    approve_replace_edited: bool = False, receipt_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Install or migrate host files under ``home`` (default: instruction-root/anchor).
+
+    ``ANCHOR_HOST_HOME`` selects a host installation, not the live ``ANCHOR_HOME``.
+    Interrupted migrations fail closed until an explicit rollback restores their bytes.
+    """
+    from odibi_anchor.host_home import rollback_home, setup_home
+
+    root = Path(target_root)
+    if rollback:
+        return rollback_home(root, adapter=adapter, home=home)
+    if not reconcile and (dry_run or approve_replace_edited):
+        raise ValueError("dry_run and approve_replace_edited apply only with reconcile=True")
+    return setup_home(root, adapter=adapter, home=home, portfolio_config=portfolio_config,
+        host_id=host_id, reconcile=reconcile, dry_run=dry_run,
+        approve_replace_edited=approve_replace_edited, receipt_root=receipt_root)
+
+
+def _setup_legacy_host(
     target_root: str | os.PathLike[str],
     *,
     adapter: str,

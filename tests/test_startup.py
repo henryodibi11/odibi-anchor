@@ -93,7 +93,7 @@ def test_bootstrap_managed_project_infers_host_and_returns_compact_packet(
         "restore": {"action": "not_applicable", "classification": "local_present"},
     }
     observed = {}
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda root, adapter: {
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda root, adapter: {
         "status": "unchanged", "verified_file_count": 92, "verified_skill_count": 18,
     })
     def fake_prepare(**kwargs):
@@ -160,7 +160,7 @@ def test_bootstrap_managed_project_refuses_implicit_creation(tmp_path, monkeypat
         }},
         "projects": {}, "personas": {},
     })["sha256"]
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda *_args, **_kwargs: {})
 
     with pytest.raises(RuntimeError, match="creation requires explicit user authorization"):
         bootstrap_managed_project(
@@ -190,7 +190,7 @@ def test_bootstrap_managed_project_refuses_stale_retention_environment(
         "projects": {"alpha": {"targets": {"local": str(target)}}},
         "personas": {},
     })
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda *_args, **_kwargs: {})
     monkeypatch.setenv("ANCHOR_RETENTION_DAYS", "1")
 
     with pytest.raises(RuntimeError, match=r"restart Python.*ANCHOR_RETENTION_DAYS"):
@@ -236,7 +236,7 @@ def test_bootstrap_managed_project_explicit_creation_checkpoints_state(
         },
         "target_root": str(target), "restore": {"action": "created"},
     }
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda *_args, **_kwargs: {
         "status": "installed", "verified_file_count": 1, "verified_skill_count": 1,
     })
     monkeypatch.setattr(startup_module, "prepare_portfolio_runtime", lambda **_kwargs: prepared)
@@ -280,7 +280,7 @@ def test_bootstrap_managed_project_conflict_precedes_creation_write(tmp_path, mo
         }},
         "projects": {}, "personas": {},
     })["sha256"]
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda *_args, **_kwargs: {})
     monkeypatch.setenv("ANCHOR_PROJECT_ID", "other-project")
 
     with pytest.raises(RuntimeError, match="restart Python before binding another project"):
@@ -1183,13 +1183,13 @@ def test_doctor_reports_copy_ready_databricks_dependency_remediation(tmp_path, m
         "minimum_version": "0.138.0",
         "installed_version": "0.137.0",
         "qualified": False,
-        "install_command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.0"',
+        "install_command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.1"',
         "restart_required_after_install": True,
     }
     assert result["status"] == "attention"
     assert result["next_operation"] == {
         "operation": "install_dependency",
-        "command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.0"',
+        "command": '%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.1"',
         "restart_python": True,
         "reason": "Databricks durability requires the qualified Workspace Files API SDK.",
     }
@@ -1725,7 +1725,7 @@ def test_managed_bootstrap_failure_keeps_error_and_attaches_timings(tmp_path, mo
     def failing_setup(root, adapter):
         raise failure
 
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", failing_setup)
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", failing_setup)
     _isolated_anchor_environment(monkeypatch)
 
     with pytest.raises(HostSetupError) as raised:
@@ -2121,7 +2121,7 @@ def test_managed_bootstrap_surfaces_route_target_conflict_with_portfolio_context
     old_target.mkdir(parents=True)
     new_target.mkdir(parents=True)
     _isolated_anchor_environment(monkeypatch)
-    monkeypatch.setattr("odibi_anchor.host_setup.setup_host", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("odibi_anchor.host_setup._setup_legacy_host", lambda *_args, **_kwargs: {})
     _portfolio_with_target(config, state, old_target, instruction)
     prepare_portfolio_runtime(config_path=config, host_id="local", project_id="alpha")
     descriptor = state / "workspace" / "projects" / "alpha" / "PROJECT.md"
