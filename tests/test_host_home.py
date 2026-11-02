@@ -196,9 +196,9 @@ def test_databricks_native_contract_is_inline_with_canonical_home(tmp_path, monk
     from tests.test_host_setup import FakeWorkspaceFiles, _fake_databricks_sdk
 
     legacy = importlib.import_module("odibi_anchor.host_setup")
-    root = Path("/Workspace/Users/hodibi@invenergy.com")
+    root = Path("/Workspace/Users/person@example.invalid")
     home = root / ('owner tools/Ancrage é "chosen"' if custom else "anchor")
-    workspace = FakeWorkspaceFiles("/Users/hodibi@invenergy.com")
+    workspace = FakeWorkspaceFiles("/Users/person@example.invalid")
     monkeypatch.setattr(legacy.importlib, "import_module", _fake_databricks_sdk(workspace))
     setup_host(root, adapter="databricks", home=home, receipt_root=tmp_path)
     api_root = str(root).removeprefix("/Workspace")
