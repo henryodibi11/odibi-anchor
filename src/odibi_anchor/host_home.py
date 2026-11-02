@@ -334,16 +334,26 @@ def setup_home(
     desired = {root / relative: value for relative, value in packaged.items()}
     desired[home / "agent_bootstrap.py"] = launcher
     desired[home / RECORD] = legacy._canonical_json({"version": 1, "instruction_root": str(root)})
+    home_marker = MARKER + json.dumps(str(home)) + " -->\n"
     pointer = (
-        MARKER + json.dumps(str(home)) + " -->\n"
-        f"Read and follow `{home}/instructions.md` before substantive work.\n"
+        home_marker + f"Read and follow `{home}/instructions.md` before substantive work.\n"
         f"Canonical bootstrap: `{home}/agent_bootstrap.py`.\n"
     ).encode()
     instructions = desired.pop(root / ".assistant_instructions.md")
-    desired[home / "instructions.md"] = instructions.replace(
-        b"<instruction-root>/.assistant/agent_bootstrap.py", str(home / "agent_bootstrap.py").encode()
+    rendered = instructions.replace(
+        b'"<instruction-root>/.assistant/agent_bootstrap.py"',
+        json.dumps(str(home / "agent_bootstrap.py"), ensure_ascii=False).encode(),
     ).replace(b"](.assistant/", f"]({root}/.assistant/".encode())
-    desired[root / ".assistant_instructions.md"] = pointer
+    desired[home / "instructions.md"] = rendered
+    # Genie ingests this native file but does not proactively fetch linked files.
+    # Keep the identity marker for discovery and the effective contract inline.
+    native = home_marker.encode() + rendered if adapter == "databricks" else pointer
+    if adapter == "databricks" and len(native.decode("utf-8")) > 20_000:
+        raise legacy.HostSetupError(
+            f"Databricks native instructions contain {len(native.decode('utf-8'))} characters "
+            "(limit 20000); shorten host paths or the contract before setup; nothing published"
+        )
+    desired[root / ".assistant_instructions.md"] = native
     config_path = home / "anchor.toml"
     legacy_config = root / ".odibi-anchor" / "anchor.toml"
     config = read(config_path)

@@ -1,5 +1,7 @@
 """Observable host layout, migration and crash recovery contracts."""
 
+import ast
+import hashlib
 import importlib
 import json
 import os
@@ -30,20 +32,22 @@ def current_host_modules():
 
 
 @pytest.mark.parametrize("custom", [False, True])
-def test_one_launcher_and_cwd_independent_discovery(tmp_path, monkeypatch, custom):
+@pytest.mark.parametrize("adapter", ["amp", "chatgpt", "claude"])
+def test_one_launcher_and_cwd_independent_discovery(tmp_path, monkeypatch, custom, adapter):
     root = tmp_path / "host"
     root.mkdir()
     home = tmp_path / "owner-chosen" if custom else root / "anchor"
-    first = setup_host(root, adapter="amp", home=home)
+    first = setup_host(root, adapter=adapter, home=home)
     monkeypatch.chdir(tmp_path)
-    second = setup_host(root, adapter="amp")
+    second = setup_host(root, adapter=adapter)
     assert first["host_home"] == str(home)
     assert second["status"] == "unchanged"
     assert list(root.rglob("agent_bootstrap.py")) == ([] if custom else [home / "agent_bootstrap.py"])
     assert (home / "agent_bootstrap.py").is_file()
     assert not (root / ".odibi-anchor-host-guidance.json").exists()
     assert "Canonical bootstrap" in (root / ".assistant_instructions.md").read_text()
-    assert (root / "AGENTS.md").is_file()
+    assert "mandatory agent execution contract" not in (root / ".assistant_instructions.md").read_text()
+    assert (root / ("CLAUDE.md" if adapter == "claude" else "AGENTS.md")).is_file()
 
 
 def test_legacy_migration_preserves_project_state_and_native_skills(tmp_path):
@@ -187,6 +191,102 @@ def test_databricks_receipt_never_hides_guidance_change(tmp_path, monkeypatch, c
     assert first["host_home"] == str(root / "anchor")
 
 
+@pytest.mark.parametrize("custom", [False, True])
+def test_databricks_native_contract_is_inline_with_canonical_home(tmp_path, monkeypatch, custom):
+    from tests.test_host_setup import FakeWorkspaceFiles, _fake_databricks_sdk
+
+    legacy = importlib.import_module("odibi_anchor.host_setup")
+    root = Path("/Workspace/Users/person@example.invalid")
+    home = root / ('owner tools/Ancrage é "chosen"' if custom else "anchor")
+    workspace = FakeWorkspaceFiles("/Users/person@example.invalid")
+    monkeypatch.setattr(legacy.importlib, "import_module", _fake_databricks_sdk(workspace))
+    setup_host(root, adapter="databricks", home=home, receipt_root=tmp_path)
+    api_root = str(root).removeprefix("/Workspace")
+    api_home = str(home).removeprefix("/Workspace")
+    native = workspace.files[api_root + "/.assistant_instructions.md"].decode()
+    marker, contract = native.split("\n", 1)
+    assert json.loads(marker.removeprefix(host_home.MARKER).removesuffix(" -->")) == str(home)
+    assert contract == workspace.files[api_home + "/instructions.md"].decode()
+    assert "mandatory agent execution contract" in contract
+    assert "<instruction-root>/.assistant/agent_bootstrap.py" not in contract
+    assert json.dumps(str(home / "agent_bootstrap.py"), ensure_ascii=False) in contract
+    example = ast.parse(contract.split("```python\n", 1)[1].split("```", 1)[0])
+    bootstrap_call = next(
+        node for node in ast.walk(example)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "run_path"
+    )
+    assert ast.literal_eval(bootstrap_call.args[0]) == str(home / "agent_bootstrap.py")
+    assert len(native) <= 20_000
+    assert host_home.host_launcher(root, adapter="databricks") == home / "agent_bootstrap.py"
+    assert setup_host(root, adapter="databricks", receipt_root=tmp_path)["status"] == "unchanged"
+
+
+@pytest.mark.parametrize("previous_layout", ["legacy", "0.4.1"])
+def test_databricks_inline_upgrade_plan_repeat_and_rollback(tmp_path, monkeypatch, previous_layout):
+    from tests.test_host_setup import FakeWorkspaceFiles, _fake_databricks_sdk
+
+    legacy = importlib.import_module("odibi_anchor.host_setup")
+    root = Path("/Workspace/Users/test@example.invalid")
+    home = root / "owner-selected-home"
+    workspace = FakeWorkspaceFiles("/Users/test@example.invalid")
+    monkeypatch.setattr(legacy.importlib, "import_module", _fake_databricks_sdk(workspace))
+    native = "/Users/test@example.invalid/.assistant_instructions.md"
+    if previous_layout == "legacy":
+        _setup_legacy_host(root, adapter="databricks")
+    else:
+        setup_host(root, adapter="databricks", home=home, receipt_root=tmp_path)
+        # Released 0.4.1's managed pointer and ownership hash, not owner drift.
+        pointer = (
+            host_home.MARKER + json.dumps(str(home)) + " -->\n"
+            f"Read and follow `{home}/instructions.md` before substantive work.\n"
+            f"Canonical bootstrap: `{home}/agent_bootstrap.py`.\n"
+        ).encode()
+        workspace.files[native] = pointer
+        manifest_path = str(home / "guidance.json").removeprefix("/Workspace")
+        manifest = json.loads(workspace.files[manifest_path])
+        manifest["files"][str(root / ".assistant_instructions.md")] = hashlib.sha256(pointer).hexdigest()
+        workspace.files[manifest_path] = json.dumps(manifest).encode()
+    before = dict(workspace.files)
+    plan = setup_host(root, adapter="databricks", home=home, reconcile=True, receipt_root=tmp_path)
+    assert plan["changed_files"]
+    assert workspace.files == before
+    setup_host(root, adapter="databricks", home=home, reconcile=True, dry_run=False, receipt_root=tmp_path)
+    assert "mandatory agent execution contract" in workspace.files[native].decode()
+    assert setup_host(root, adapter="databricks", receipt_root=tmp_path)["status"] == "unchanged"
+    assert setup_host(root, adapter="databricks", home=home, rollback=True)["status"] == "rolled_back"
+    # The single-use rollback receipt is consumed, not restored as another undo.
+    receipt_path = str(home / "last-migration.json").removeprefix("/Workspace")
+    restorable = {path: content for path, content in before.items() if path != receipt_path}
+    assert {path: workspace.files.get(path) for path in restorable} == restorable
+    assert not any(path.endswith(("pending.json", ".anchor-host-migration.json")) for path in workspace.files)
+
+
+@pytest.mark.parametrize("characters", [19_999, 20_000, 20_001])
+def test_databricks_native_character_limit_precedes_publication(tmp_path, monkeypatch, characters):
+    root = tmp_path / "host"
+    root.mkdir()
+    home = root / "anchor"
+    legacy = importlib.import_module("odibi_anchor.host_setup")
+    desired_files = legacy._desired_files
+    marker = host_home.MARKER + json.dumps(str(home)) + " -->\n"
+
+    def sized_contract(adapter):
+        files = desired_files(adapter)
+        # UTF-8 bytes exceed the character limit even for accepted cases.
+        files[".assistant_instructions.md"] = ("é" * (characters - len(marker))).encode()
+        return files
+
+    monkeypatch.setattr(legacy, "_desired_files", sized_contract)
+    if characters <= 20_000:
+        setup_host(root, adapter="databricks")
+        native = (root / ".assistant_instructions.md").read_text()
+        assert len(native) == characters
+    else:
+        with pytest.raises(HostSetupError, match=r"20001.*20000"):
+            setup_host(root, adapter="databricks", reconcile=True, dry_run=False)
+        assert list(root.iterdir()) == []
+
+
 def test_installed_candidate_migrates_then_bootstraps_from_unrelated_cwd(tmp_path):
     repository = Path(__file__).resolve().parents[1]
     wheels = tmp_path / "wheels"
@@ -243,6 +343,16 @@ def test_installed_candidate_migrates_then_bootstraps_from_unrelated_cwd(tmp_pat
         assert result["ROOT"] == str(target)
         assert Path(odibi_anchor.__file__).is_relative_to(base / "venv")
         assert result["BOOTSTRAP"]["state_home"] == str(state)
+        dbroot = base / "databricks"
+        dbroot.mkdir()
+        dbhome = dbroot / "chosen home"
+        setup_host(dbroot, adapter="databricks", home=dbhome)
+        native = (dbroot / ".assistant_instructions.md").read_text()
+        assert native.split("\n", 1)[1] == (dbhome / "instructions.md").read_text()
+        assert "mandatory agent execution contract" in native
+        assert str(dbhome / "agent_bootstrap.py") in native
+        assert len(native) <= 20000
+        assert setup_host(dbroot, adapter="databricks")["status"] == "unchanged"
         print("INSTALLED_HOST_HOME_OK")
     """
     result = subprocess.run(
