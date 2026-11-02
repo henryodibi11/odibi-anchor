@@ -2,6 +2,35 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-11-02
+
+### Added
+
+- Configurable host installation home, defaulting to `<instruction-root>/anchor`, selected
+  with `setup_host(home=...)`, `setup-host --home`, or `ANCHOR_HOST_HOME`. One canonical
+  managed launcher, portfolio, identity, guidance metadata and verified backups live there.
+  Native instruction/skill discovery entry points and project/runtime state ownership stay
+  intact. Migration detects conflicts, journals changes before publication and supports
+  explicit rollback of interrupted or most recent successful publication. See
+  `docs/guides/host-home.md` for the exact layout and recovery limits.
+
+### Fixed
+
+- Bare unscoped `test` refusal now includes copy-ready focused, criterion and intentional
+  full-suite calls; removed contradictory auto-scope advice (#66).
+- `anchor_execute` accepts typed first-argument keys (`command` for learning/workflow/memory,
+  `task` for task), and refuses conflicting representations before dispatch (#67).
+- Work-item review findings accept explicit `minor` severity: open minor notes in approving
+  reviews remain visible in show/approval packets without blocking plan approval. Missing
+  severity stays blocking; blocking verdicts and invalid severity still refuse (#69).
+
+### Verification boundary
+
+- #51 did not reproduce against the installed Linux candidate across explicit, target and
+  legacy-selector binding with target/CWD/environment precedence and two MCP clients. No
+  speculative startup-authority change is included; Windows/live-host qualification remains
+  separate. #31 and #45 inform bootstrap/migration regression checks, not new backlog scope.
+
 ## [0.4.0] - 2026-10-25
 
 Agents can use Anchor end to end: planning, implementation and delivery, with the owner needed

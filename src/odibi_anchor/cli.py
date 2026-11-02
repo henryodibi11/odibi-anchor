@@ -89,6 +89,8 @@ def _parser() -> argparse.ArgumentParser:
     setup = commands.add_parser("setup-host", help="idempotently install managed host guidance")
     setup.add_argument("adapter", choices=("amp", "chatgpt", "claude", "databricks"))
     setup.add_argument("--target", required=True, help="existing explicit host instruction root")
+    setup.add_argument("--home", help="absolute host installation home (default: <target>/anchor)")
+    setup.add_argument("--rollback", action="store_true", help="restore an interrupted host migration")
     setup.add_argument(
         "--portfolio", help="absolute portfolio path to record in the host binding sidecar"
     )
@@ -583,6 +585,10 @@ def main(argv: list[str] | None = None) -> int:
             from odibi_anchor.host_setup import setup_host
 
             options: dict[str, Any] = {}
+            if ns.home is not None:
+                options["home"] = ns.home
+            if ns.rollback:
+                options["rollback"] = True
             if ns.portfolio is not None:
                 options.update(portfolio_config=ns.portfolio, host_id=ns.host)
             if ns.reconcile:

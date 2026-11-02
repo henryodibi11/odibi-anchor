@@ -12,7 +12,7 @@ package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation
 ```bash
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\activate
-python -m pip install "odibi-anchor==0.4.0"
+python -m pip install "odibi-anchor==0.4.1"
 anchor help
 ```
 
@@ -28,6 +28,11 @@ Check routing before bootstrap, or install the packaged agent contract into a re
 anchor doctor
 anchor setup-host amp --target /absolute/path/to/repository
 ```
+
+Host installation defaults to `<target>/anchor`; choose an absolute name/location with
+`--home` (or `ANCHOR_HOST_HOME`). This is separate from runtime `ANCHOR_HOME`.
+See [host-home layout and migration](docs/guides/host-home.md) for ownership, dry runs,
+rollback, and the instruction/skill entry points that intentionally remain outside it.
 
 For source development, clone the repository, create a virtual environment, and run `python -m pip install -e '.[dev,mcp]'`.
 
@@ -64,7 +69,7 @@ The project must already be registered under `ANCHOR_HOME`. See [runtime rollout
 Install the pinned public release in a Databricks notebook:
 
 ```python
-%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.0"
+%pip install --no-cache-dir "odibi-anchor[databricks]==0.4.1"
 dbutils.library.restartPython()
 ```
 
@@ -83,7 +88,7 @@ user = spark.sql("SELECT current_user()").first()[0]
 instruction_root = f"/Workspace/Users/{user}"
 
 namespace = runpy.run_path(
-    f"{instruction_root}/.assistant/agent_bootstrap.py",
+    f"{instruction_root}/anchor/agent_bootstrap.py",
     init_globals={"ANCHOR_PROJECT_ID": "personal-work"},
 )
 anchor = namespace["anchor"]

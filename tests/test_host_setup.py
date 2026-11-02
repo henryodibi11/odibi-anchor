@@ -1,3 +1,7 @@
+"""Legacy publication/receipt regressions, also used to build migration fixtures.
+
+The current public layout is covered by test_host_home.py.
+"""
 from __future__ import annotations
 
 import io
@@ -13,7 +17,7 @@ import pytest
 
 import odibi_anchor.host_setup as module
 from odibi_anchor._bootstrap_phases import BootstrapPhaseTimeout, phase, recording
-from odibi_anchor.host_setup import HostSetupError, setup_host
+from odibi_anchor.host_setup import HostSetupError, _setup_legacy_host as setup_host
 
 ROOT = Path(__file__).resolve().parents[1]
 

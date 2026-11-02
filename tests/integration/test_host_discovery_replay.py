@@ -226,7 +226,7 @@ def test_host_guidance_drift_blocks_bootstrap_until_explicit_reconcile(replay):
     assert guidance["status"] == "blocked"
     assert guidance["next_operation"]["arguments"]["approve_replace_edited"] is True
 
-    setup_host = _module("odibi_anchor.host_setup").setup_host
+    setup_host = _module("odibi_anchor.host_setup")._setup_legacy_host
     reconciled = setup_host(
         replay.instruction_root, adapter="databricks", reconcile=True, dry_run=False,
         approve_replace_edited=True,
@@ -242,7 +242,7 @@ def test_launcher_finds_a_portfolio_outside_the_instruction_root_through_the_sid
     replay.config = replay.root / "home" / ".odibi-anchor" / "anchor.toml"
     replay.config.parent.mkdir(parents=True)
     replay.write_portfolio({"alpha": str(replay.target("alpha"))})
-    setup_host = _module("odibi_anchor.host_setup").setup_host
+    setup_host = _module("odibi_anchor.host_setup")._setup_legacy_host
     setup_host(replay.instruction_root, adapter="databricks")
     launcher = replay.instruction_root / ".assistant" / "agent_bootstrap.py"
     # An exact pin skips the package index; the launcher still verifies the installed version.

@@ -55,19 +55,37 @@ def test_cold_restore_warm_receipt_and_new_compute(replay, databricks, monkeypat
     }
     databricks.calls.clear()
     assert guidance()["verification"] == "content"
-    assert not any(method == "list" for _api, method, _path in databricks.calls)
+    assert not any(method == "list" for _api, method, _path in databricks.calls), [
+        path for _api, method, path in databricks.calls if method == "list"
+    ]
     replay.new_process()
     databricks.calls.clear()
     assert guidance()["verification"] == "content"
-    assert sum(method == "list" for _api, method, _path in databricks.calls) == 90
+    # The canonical anchor home adds one metadata directory to the 45 resource
+    # directories: seed with two scans, then validate a warm receipt with one.
+    assert sum(method == "list" for _api, method, _path in databricks.calls) == 92
     replay.new_process()
     databricks.calls.clear()
     warm = guidance()
     assert warm["verification"] == "metadata_receipt"
-    assert not any(api == "workspace" and method == "download"
-                   for api, method, _path in databricks.calls)
-    assert sum(method == "list" for _api, method, _path in databricks.calls) == 45
-    assert not any("receipt" in path for path in workspace.files)
+    # Recovery/configuration controls are always read before using an optional
+    # receipt. Guidance resource bodies must still be skipped on a warm boot.
+    control_files = {
+        ".anchor-host-migration.json", ".assistant_instructions.md",
+        ".odibi-anchor-host-guidance.json", ".odibi-anchor-host-binding.json",
+        ".odibi-anchor/anchor.toml", ".assistant/agent_bootstrap.py", "agent_bootstrap.py",
+        "anchor/pending.json", "anchor/guidance.json", "anchor/anchor.toml",
+        "anchor/.odibi-anchor-host-binding.json",
+    }
+    downloads = {
+        path.removeprefix(f"{workspace_root}/")
+        for api, method, path in databricks.calls if api == "workspace" and method == "download"
+    }
+    assert downloads <= control_files
+    assert sum(method == "list" for _api, method, _path in databricks.calls) == 46
+    # Durable migration receipts are expected in backups; the compute-local
+    # metadata cache must never be uploaded with them.
+    assert not any("host-guidance-receipts" in path for path in workspace.files)
     replay.new_compute()
     databricks.calls.clear()
     assert guidance()["verification"] == "content"

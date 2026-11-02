@@ -1976,6 +1976,36 @@ class TestTypedTools:
     """Typed tools give hosts real JSON types and dispatch exactly like anchor_execute."""
 
     @pytest.mark.parametrize(("tool", "first", "arguments", "action"), _TYPED_CALLS)
+    @pytest.mark.parametrize("options", [{}, {"response_version": 2},
+                                         {"response_version": 2, "telemetry_version": 1}])
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_generic_gateway_accepts_typed_positional_key(
+        self, monkeypatch, tool, first, arguments, action, options, nested,
+    ):
+        calls = TestStructuredArgs._capture(monkeypatch)
+        payload = {"kwargs": arguments} if nested else arguments
+        asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": action, "args": payload, **options,
+        }))
+        assert calls == [{"action": action, "args": (arguments[first],),
+                          "kwargs": {k: v for k, v in arguments.items() if k != first}}]
+
+    @pytest.mark.parametrize(("action", "key"), [("learning", "command"), ("workflow", "command"),
+                                                 ("memory", "command"), ("task", "task")])
+    @pytest.mark.parametrize("positional", [{"arg0": "original"}, {"args": ["original"]}])
+    @pytest.mark.parametrize("options", [{"response_version": 2},
+                                         {"response_version": 2, "telemetry_version": 1}])
+    def test_conflicting_alias_is_refused_before_dispatch(self, monkeypatch, action, key, positional, options):
+        calls = TestStructuredArgs._capture(monkeypatch)
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": action, "args": {key: "alias", **positional}, **options,
+        }))
+        output = json.loads(result.content[0].text)
+        assert output["ok"] is False
+        assert "arg0" in str(output["error"]) and key in str(output["error"])
+        assert calls == []
+
+    @pytest.mark.parametrize(("tool", "first", "arguments", "action"), _TYPED_CALLS)
     def test_typed_call_dispatches_like_anchor_execute(
         self, monkeypatch, tool, first, arguments, action,
     ):

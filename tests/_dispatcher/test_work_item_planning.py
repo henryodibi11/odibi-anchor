@@ -261,6 +261,76 @@ def test_missing_spec_is_a_readiness_problem(tmp_path, owner):
     assert owner["calls"] == []
 
 
+@pytest.mark.parametrize("status", ["approved", "pending"])
+def test_open_minor_findings_are_visible_without_blocking_approval(tmp_path, owner, status):
+    owner["response"] = APPROVED if status == "approved" else PENDING
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    finding = {"summary": "Consider a follow-up example", "status": "open", "severity": "minor"}
+    recorded = review(tmp_path, item_id, "problem", findings=[finding])
+    shown = call(tmp_path, "show", item_id)
+    assert shown["reviews"][0]["findings"] == [finding]
+    markdown = work_item_action(tmp_path, "show", item_id)
+    assert finding["summary"] in markdown and "minor" in markdown and "open" in markdown
+
+    result = call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct")
+
+    assert result["status"] == status
+    expected = [{"work_item_id": item_id, "review_id": recorded["review"]["review_id"],
+                 "angle": "problem", **finding}]
+    assert result["open_minor_findings"] == expected
+    assert owner["calls"][0]["subject"]["open_minor_findings"] == expected
+    assert finding["summary"] in owner["calls"][0]["prompt"]
+    rendered = work_item_module.render_work_item_result("request_plan_approval", result)
+    assert finding["summary"] in rendered and "minor" in rendered
+
+
+@pytest.mark.parametrize("severity", [None, "blocking"])
+def test_open_findings_default_to_blocking(tmp_path, owner, severity):
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    finding = {"summary": "Missing edge case", "status": "open"}
+    if severity is not None:
+        finding["severity"] = severity
+    review(tmp_path, item_id, "problem", findings=[finding])
+    with pytest.raises(ValueError, match="Missing edge case"):
+        call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct")
+    assert owner["calls"] == []
+
+
+@pytest.mark.parametrize("verdict", ["changes_requested", "reject"])
+def test_minor_findings_do_not_override_blocking_verdict(tmp_path, owner, verdict):
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    review(tmp_path, item_id, "problem", verdict=verdict,
+           findings=[{"summary": "Small note", "status": "open", "severity": "minor"}])
+    review(tmp_path, item_id, "workplan")
+    with pytest.raises(ValueError, match=f"verdict is {verdict}"):
+        call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct")
+    assert owner["calls"] == []
+
+
+def test_invalid_finding_severity_is_refused(tmp_path):
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    with pytest.raises(ValueError, match="severity must be blocking or minor"):
+        review(tmp_path, item_id, "problem",
+               findings=[{"summary": "Note", "status": "open", "severity": "trivial"}])
+
+
+def test_legacy_finding_without_severity_remains_blocking(tmp_path):
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    review(tmp_path, item_id, "problem", findings=[{"summary": "Legacy defect", "status": "open"}])
+    record = call(tmp_path, "show", item_id)["record"]
+    del record["reviews"][0]["findings"][0]["severity"]
+    problems = work_item_module._plan_readiness_problems(tmp_path, [(item_id, record)], "direct")
+    assert any("Legacy defect" in problem for problem in problems)
+
+
+def test_review_help_documents_severity_and_verdict_rules():
+    from odibi_anchor._dispatcher._dispatch_table import build_help_text
+
+    help_text = build_help_text("work_item", None)
+    for text in ("severity", "blocking (default)", "minor", "approving reviews", "changes_requested", "reject"):
+        assert text in help_text
+
+
 def test_planning_keys_are_optional_metadata_outside_material():
     planning = {"depends_on", "reviews", "plan_approvals"}
     assert planning <= work_item_module.OPTIONAL_META
