@@ -2,6 +2,35 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-11-03
+
+### Fixed
+
+- A candidate revised after implementation and review is recoverable without cancelling or
+  replanning (#74). Once its producer is closed, a fresh producer bound to the same workflow runs
+  `workflow implemented` to replace the candidate. The old measurements and review are
+  invalidated and listed in `superseded_candidates`. Scope is still measured from the original
+  plan admission, so out-of-plan changes stay refused. Qualification needs fresh measurements,
+  a fresh review and the new producer's gate-and-learning closure. While the old producer is
+  open, the refusal names it and offers `task_rebind`.
+- `status` no longer reports a pending `learn` obligation after `learning assess` closed the
+  task, including after `request_delivery_approval` (#73).
+- After a process restart, `orient` routes to `task_rebind` for the exact open task instead of
+  `new_session`, so an in-progress task is not orphaned (#74). In-process orientation already
+  kept the binding.
+- A workflow transition from the wrong task names the open task bound to that workflow and
+  offers `task_rebind`, or says no open task holds it. The `task_rebind` listing shows each
+  task's `workflow_id` (#70).
+- A diverged task baseline names the start branch and commit and the current branch and HEAD,
+  and says whether switching back to the start branch can restore the task (#70).
+
+### Verification boundary
+
+- Focused transition, refusal, recovery and restart tests cover git and Databricks Git Folder
+  candidates in-process. The pre-recapture refusal on Databricks reports the unacknowledged
+  write rather than "candidate changed". Live host sessions (MCP/OpenCode, Databricks) were
+  not exercised.
+
 ## [0.4.2] - 2026-11-02
 
 ### Fixed

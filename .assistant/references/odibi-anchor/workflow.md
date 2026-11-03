@@ -1137,6 +1137,15 @@ without the workflow binding. Do not downgrade a runtime that owns open v2 tasks
 resume with a workflow-aware version. This is a reader compatibility boundary,
 not filesystem sandboxing against arbitrary old binaries or direct tools.
 
+Revising an implemented candidate after review does not need a replan when the plan
+is unchanged. Close the producer with its review, gate and learning obligations; from
+a clean worktree accept a fresh producer with the same `workflow_id` and risk, make the
+revision, and run `workflow implemented`. It replaces the closed producer's candidate,
+keeps the old one in history and in `superseded_candidates`, drops its measurements and
+review, and still measures scope from the original plan admission. Remeasure every
+criterion, record a new review, close the new producer, then `qualify`. While the old
+producer is open, rebind it and run `implemented` there instead.
+
 Replanning invalidates the old accepted binding. Context and canonical handoff
 remain readable with `binding_status="stale_plan"` and
 `next_step="close_task_then_reenroll"`; they never upgrade the immutable task.

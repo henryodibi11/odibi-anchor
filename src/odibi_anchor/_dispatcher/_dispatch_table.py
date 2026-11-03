@@ -807,12 +807,15 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '"status": "open" | "resolved"}; [] records no findings. Any open finding fails the review.',
         'Writes require output_format="dict"; transitions require the observed expected_generation '
         'and a unique request_id. Exact retries return historical acknowledgements, not new '
-        'observations. Read status to refresh generation. Candidate changes require replan and '
-        'a fresh task binding, not evidence reuse.',
-        'Rework after review (avoids a dirty-worktree refusal): commit or keep nothing uncommitted; '
-        'replan from a task bound to the workflow and close that task; then, with a clean worktree, '
-        'open the fresh producer (same workflow_id and risk), accept_plan, register skills and the '
-        'spec, and only then edit, touched, preflight, test, review, commit and `implemented`.',
+        'observations. Read status to refresh generation. A changed candidate never reuses evidence.',
+        'Rework after review (avoids a dirty-worktree refusal): commit or keep nothing uncommitted and '
+        'close the producer (review, gate, learning assess). With a clean worktree open a fresh '
+        'producer with the same workflow_id and risk (no replan or accept_plan while the plan is '
+        'unchanged), edit, touched, preflight, test, review, then `implemented`: it replaces the '
+        'closed producer\'s candidate, drops its measurements and review (listed in '
+        'superseded_candidates) and still measures scope from plan admission. Remeasure each '
+        'criterion, record a new workflow `review`, close this producer, then `qualify`. A plan '
+        'change still needs replan. While the old producer is open, rebind it instead.',
         '`implemented` freezes the observed candidate; qualify requires exact measured criteria, '
         'workflow review and producer gate/learning closure. High risk requires a separate '
         'accepted read-only review task; reviewer_authentication=none, not authenticated independence.',

@@ -757,6 +757,52 @@ def _restore_state(record: dict[str, Any], session_state: Any) -> None:
     session_state.terminal_reason = None
 
 
+def _bound_workflow_id(record: dict[str, Any]) -> str:
+    return ((record.get("task") or {}).get("workflow_binding") or {}).get("workflow_id") or "none"
+
+
+def open_task_summaries(path: str | Path, *, session_state: Any, limit: int = 10) -> list[dict[str, Any]]:
+    """List exact-owner open tasks with their bound workflow, read-only and diagnostic only.
+
+    Grants no authority; any storage problem returns an empty list so the caller's own
+    refusal or guidance stands unchanged.
+    """
+    target = Path(path).expanduser()
+    if not target.is_file():
+        return []
+    try:
+        terminal = _terminal_task_ids(target)
+        connection = _connect(target, read_only=True)
+        try:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "accepted_task_records" not in tables:
+                return []
+            _verify_schema(connection)
+            relocations = load_relocations(connection)
+            rows = connection.execute(
+                "SELECT r.* FROM accepted_task_records r WHERE r.project_id IS ? AND r.target_root=? AND NOT EXISTS "
+                "(SELECT 1 FROM accepted_task_events e WHERE e.task_window_id=r.task_window_id AND e.event_type='closed') "
+                "ORDER BY r.accepted_at,r.task_window_id",
+                (session_state.active_project,
+                 _canonical_path(session_state.target_root or session_state.artifact_root)),
+            ).fetchall()
+            records = [_load_verified_record(row) for row in rows]
+        finally:
+            connection.close()
+        owner = _owner_identity(session_state)
+    except (KeyError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError):
+        return []
+    return [
+        {"task_window_id": record["identity"]["task_window_id"],
+         "workflow_id": _bound_workflow_id(record),
+         "execution_mode": record["task"].get("profile", {}).get("execution_mode", "unknown"),
+         "session": record["identity"].get("session_name") or record["identity"].get("session_id", "unknown"),
+         "goal": str(record["task"].get("goal") or "unspecified")[:120]}
+        for record in records
+        if record["identity"]["task_window_id"] not in terminal and _matches_owner(record, owner, relocations)
+    ][:limit]
+
+
 def rebind_latest_open_task(
     path: str | Path, *, session_state: Any, task_window_id: str | None = None,
 ) -> dict[str, Any]:
@@ -834,14 +880,16 @@ def rebind_latest_open_task(
                     "execution_mode", "unknown"
                 ),
                 "goal": str(item["task"].get("goal") or "unspecified")[:120],
+                "workflow_id": _bound_workflow_id(item),
                 "open_reason": "no terminal record or closure event",
             }
             for item in bounded
         ]
         context = "; ".join(
-            "id={id}, accepted_at={accepted}, session={session}, mode={mode}, goal={goal}".format(
-                id=item["task_window_id"], accepted=item["accepted_at"],
-                session=item["session"], mode=item["execution_mode"], goal=item["goal"],
+            "id={id}, accepted_at={accepted}, session={session}, mode={mode}, workflow={workflow}, "
+            "goal={goal}".format(
+                id=item["task_window_id"], accepted=item["accepted_at"], session=item["session"],
+                mode=item["execution_mode"], workflow=item["workflow_id"], goal=item["goal"],
             )
             for item in open_tasks
         )
@@ -908,7 +956,7 @@ def rebind_latest_open_task(
         task = identity["task_window_id"]
         raise attach_recovery(TaskAuthorityUnavailable(
             "accepted task authority could not be restored "
-            f"({type(exc).__name__}: {str(exc)[:200]}). If this orphan cannot be recovered, "
+            f"({type(exc).__name__}: {str(exc)[:800]}). If this orphan cannot be recovered, "
             f"close it as abandoned with anchor('task_rebind', task_window_id={task!r}, "
             "abandon=True, reason='...'); that grants no authority."
         ), error_code="task_authority_unrestorable", context={

@@ -60,6 +60,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         collect_review,
         criterion_problems,
         qualify_recorded,
+        task_closure_state,
         validate_producer_policy,
     )
 
@@ -144,7 +145,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             # its exact receipt remains readable through the immutable old task.
             state = prior if prior is not None else bound_workflow(path, session_state=session_state)
             if state is None or (workflow_id is not None and workflow_id != state["workflow_id"]):
-                raise WorkflowError("wrong_authority", "operation requires this exact accepted task workflow binding")
+                raise _wrong_binding(path, session_state=session_state, workflow_id=workflow_id)
             workflow_id = state["workflow_id"]
             if command in {"prepare_delivery", "prepare_revocation"}:
                 prepare = prepare_delivery if command == "prepare_delivery" else prepare_revocation
@@ -194,9 +195,34 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     )
                 elif command == "implemented":
                     _accepted_task(path, session_state, session_state.task_window_id, require_open=True)
-                    candidate = collect_candidate(path, session_state=session_state, workflow_id=workflow_id)
-                    if candidate["producer"] != session_state.task_window_id:
-                        raise WorkflowError("wrong_authority", "only the producing task can establish its candidate")
+                    prior_producer = (state.get("candidate") or {}).get("producer")
+                    recapture = prior_producer not in (None, session_state.task_window_id)
+                    closure = task_closure_state(path, prior_producer) if recapture else None
+                    if closure in {"open", "frozen"}:
+                        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+                        # A gated producer can no longer produce; only closing it frees the candidate.
+                        recovery = ("It has already gated, so it cannot produce again: rebind it, close it "
+                                    "with learning assess, then run implemented from this fresh producer."
+                                    if closure == "frozen" else
+                                    "Rebind it and run workflow implemented there, or close it (review, gate, "
+                                    "learning assess) and then run implemented from this fresh producer.")
+                        raise attach_recovery(WorkflowError(
+                            "wrong_authority",
+                            f"only the producing task can establish its candidate: producer {prior_producer} "
+                            f"is still open. {recovery}",
+                        ), error_code="workflow_candidate_producer_open", context={
+                            "workflow_id": workflow_id, "candidate_producer": prior_producer,
+                            "candidate_producer_state": closure,
+                        }, next_operations=[dispatcher_operation(
+                            "task_rebind", kwargs={"task_window_id": prior_producer},
+                            reason="rebind the open producer that owns the current candidate"
+                                   + (" to close it" if closure == "frozen" else ""),
+                        )])
+                    # A fresh producer replaces a closed producer's candidate: the domain drops every
+                    # measurement and review of the old candidate and the event chain keeps it.
+                    candidate = collect_candidate(path, session_state=session_state, workflow_id=workflow_id,
+                                                  recapture=recapture)
                     payload = {"candidate": candidate}
                 elif command == "review":
                     operation = "record_review"
@@ -238,6 +264,33 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     packet.pop("packet_sha256", None)
     packet = {**packet, "packet_sha256": digest(packet)}
     return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
+
+
+def _wrong_binding(path, *, session_state, workflow_id):
+    """Refuse an unbound transition and name the open task that holds the binding, if any."""
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+    from odibi_anchor.codebase._task_authority import open_task_summaries
+
+    message = "operation requires this exact accepted task workflow binding"
+    if workflow_id is None:
+        return WorkflowError("wrong_authority", message + "; pass the workflow_id this operation targets")
+    holders = [item for item in open_task_summaries(path, session_state=session_state)
+               if item["workflow_id"] == workflow_id]
+    if holders:
+        named = ", ".join(item["task_window_id"] for item in holders)
+        message += (f": workflow {workflow_id} is bound to open task {named}. Rebind it with "
+                    "anchor('task_rebind', task_window_id=...) and retry from that task.")
+    else:
+        message += (f": no open task is bound to workflow {workflow_id}. Accept a fresh task with "
+                    f"workflow_id={workflow_id!r} at the workflow's risk, then retry.")
+    return attach_recovery(WorkflowError("wrong_authority", message), error_code="workflow_binding_mismatch",
+                           context={"workflow_id": workflow_id,
+                                    "bound_open_tasks": [item["task_window_id"] for item in holders],
+                                    "current_task_window_id": getattr(session_state, "task_window_id", None)},
+                           next_operations=[dispatcher_operation(
+                               "task_rebind", kwargs={"task_window_id": item["task_window_id"]},
+                               reason="rebind the open task bound to this workflow",
+                           ) for item in holders])
 
 
 def refuse_learning_before_candidate(path, *, session_state, command):
