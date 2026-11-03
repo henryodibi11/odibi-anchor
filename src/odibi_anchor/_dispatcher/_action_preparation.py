@@ -337,6 +337,8 @@ def _render(result: Mapping[str, Any]) -> str:
         f"# Action preparation: {result['operation']}",
         "",
         f"**Status:** {result['status']}",
+        "Readiness covers inputs only; runtime admission has not been checked. "
+        "This is neither permission nor execution evidence.",
     ]
     for group in ("required_missing", "recommended_missing", "prefilled_verified", "not_applicable"):
         lines.extend(["", f"## {group}"])
@@ -425,7 +427,8 @@ def prepare_action(
             "args": args,
             "kwargs": kwargs,
             "copy_ready": _copy_ready(action, args, kwargs),
-            "reason": "all runtime-required fields are present",
+            "reason": "required inputs are present; runtime admission has not been checked",
+            "admission_checked": False,
         }
         status = "ready"
     result: dict[str, Any] = {
@@ -435,6 +438,8 @@ def prepare_action(
         "canonical_operation": canonical,
         "operation_family_count": len(CANONICAL_OPERATIONS),
         "status": status,
+        "readiness_scope": "inputs_only",
+        "admission_checked": False,
         "current_owner": {
             item["field"]: item["value"] for item in authority.values()
         },

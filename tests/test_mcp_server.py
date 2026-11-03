@@ -1939,6 +1939,7 @@ _TYPED_CALLS = [
         "command": "create", "request_id": "r1", "expected_generation": 0,
         "plan": {
             "schema_version": 1, "goal": "Fix median", "risk": "low",
+            "work_item": "WI-2026-0001",
             "execution_mode": "source_change", "scope": ["edit stats.py"], "exclusions": [],
             "criteria": [{"id": "c1", "expected": "passes", "method": "pytest",
                           "test_targets": ["tests/test_stats.py"], "expected_xfailed": 0}],

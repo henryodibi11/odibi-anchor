@@ -86,7 +86,7 @@ def test_artifact_bookkeeping_exceptions_remain_narrow():
     read_only = normalize_task_profile(execution_mode="read_only")
     for action in ("task", "new_session"):
         enforce_effects(action, ("artifact_write",), None)
-    for action in ("checkpoint", "learn", "skill_loaded", "log"):
+    for action in ("gate", "checkpoint", "learn", "skill_loaded", "log"):
         enforce_effects(action, ("artifact_write",), read_only)
         with pytest.raises(RuntimeError, match="active task profile"):
             enforce_effects(action, ("artifact_write",), None)
@@ -183,14 +183,19 @@ def test_every_real_mutating_selector_and_representative_reads():
         assert not any(should_emit_operating_protocol(action, (nonexistent,)) for action in selectors)
 
 
-def test_state_supported_verification_never_promotes_missing_evidence():
+@pytest.mark.parametrize("changed_files", [set(), {"module.py"}])
+def test_state_supported_verification_never_promotes_missing_evidence(monkeypatch, changed_files):
+    from odibi_anchor._utils import _session_state
+
+    monkeypatch.setattr(_session_state, "_SESSION_FILES_CHANGED", changed_files)
     profile = normalize_task_profile(execution_mode="source_change")
     protocol = build_operating_protocol(_state(profile), action="gate", session_timings=[])
     statuses = {row["id"]: row["status"] for row in protocol["verification_obligations"]}
     assert statuses == {
         "task_window_gate": "unknown", "linked_spec": "satisfied",
         "persisted_spec": "pending", "reviewed_spec": "unknown",
-        "preflight": "unknown", "test": "unknown", "review": "unknown",
+        "preflight": "unknown" if changed_files else "not_applicable",
+        "test": "unknown" if changed_files else "not_applicable", "review": "unknown",
     }
     evidenced = build_operating_protocol(
         _state(profile, spec_persisted=True, persisted_spec_name="SPEC.md",

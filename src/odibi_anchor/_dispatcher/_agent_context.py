@@ -294,9 +294,9 @@ def _prepared_operation(operation: str, reason: str) -> dict[str, Any]:
     }
 
 
-def _next_operation(protocol: Mapping[str, Any]) -> dict[str, Any]:
+def _next_operation(protocol: Mapping[str, Any], *, workflow: Mapping[str, Any] | None = None) -> dict[str, Any]:
     terminal = protocol.get("terminal_return", {})
-    if terminal.get("status") in {"blocked", "failed", "ready"}:
+    if terminal.get("status") in {"blocked", "failed"}:
         return {
             "status": "not_applicable",
             "kind": "terminal",
@@ -351,6 +351,26 @@ def _next_operation(protocol: Mapping[str, Any]) -> dict[str, Any]:
                 "copy_ready": f"anchor({json.dumps(action)}{', ' if arguments else ''}{arguments})",
                 "reason": f"required lifecycle obligation: {required[0].get('id')}",
             }
+    workflow = workflow or {}
+    workflow_next = workflow.get("next_operation") or {}
+    state = workflow.get("state") or {}
+    if workflow_next.get("kind") == "candidate_recovery":
+        return dict(workflow_next)
+    # Workflow progress outlives the producer task. Never hide qualification just
+    # because the task closed, and never replace semantic review with invented [] findings.
+    if (state.get("progress") == "implemented" and not workflow.get("recapture_required")
+            and workflow_next.get("kind") != "producer_closure"):
+        return dict(workflow_next)
+    if terminal.get("status") == "ready":
+        return dict(workflow_next) if workflow_next else {
+            "status": "not_applicable", "kind": "terminal", "reason": "task is closed",
+        }
+    if workflow.get("binding_status") == "stale_plan":
+        return dict(workflow_next)
+    if state.get("progress") == "draft" and workflow_next:
+        return dict(workflow_next)
+    if workflow.get("next_step") == "implement" and not protocol.get("implementation_registered"):
+        return dict(workflow_next)
     closure = protocol.get("task_closure") or {}
     if closure.get("execution_mode") == "read_only" and closure.get("complete_with") is None:
         # Recorded file changes keep a read-only task from closing as completed.
@@ -377,7 +397,25 @@ def _next_operation(protocol: Mapping[str, Any]) -> dict[str, Any]:
         ("review", "review"),
         ("task_window_gate", "gate"),
     ):
-        if verification.get(obligation) != "satisfied":
+        if verification.get(obligation) not in {"satisfied", "not_applicable"}:
+            if action == "gate" and workflow.get("next_step") == "implement":
+                return dict(workflow.get("capture_operation") or workflow_next)
+            if action == "test":
+                from odibi_anchor._recovery import dispatcher_operation
+
+                targets = list(dict.fromkeys(
+                    target for criterion in state.get("plan", {}).get("criteria", [])
+                    if criterion["method"] == "pytest" for target in criterion["test_targets"]
+                ))
+                if targets:
+                    return dispatcher_operation("test", kwargs={"target": targets, "output_format": "dict"},
+                                                reason="run the plan's explicit focused targets before candidate capture",
+                                                retry_safety="not_idempotent")
+                # A bare call is invalid when scope is absent and discovery may need
+                # judgment even for Python changes. Ask for an explicit focused target.
+                return {"status": "input_required", "kind": "focused_verification",
+                        "required_context": ["target or workflow_criterion"],
+                        "reason": "Choose applicable focused test targets; no full suite is implied."}
             return {
                 "status": "ready",
                 "kind": "dispatcher_call",
@@ -518,6 +556,10 @@ def build_agent_context(
                 result["workflow"] = {"status": "blocked", "code": exc.code, "reason": str(exc)}
                 result["status"] = "conflicting"
         result["task_window_completion_is_workflow_completion"] = False
+        next_operation = _next_operation(protocol, workflow=result.get("workflow"))
+        result["next_operation"] = next_operation
+        result["suggested_next_actions"] = [next_operation["copy_ready"]] if next_operation.get("copy_ready") else []
+        result["resource_pointers"] = _resource_pointers(protocol, next_operation)
     return render_agent_context(result) if output_format == "markdown" else result
 
 

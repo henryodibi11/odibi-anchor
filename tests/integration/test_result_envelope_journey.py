@@ -65,6 +65,12 @@ def test_agent_journey_sees_one_envelope_on_every_transport(journey, capsys):
     assert orient["state"]["project"] == "alpha"
     assert orient["next_operation"]["copy_ready"].startswith('anchor("new_session"')
 
+    prepared = anchor("prepare", operation="gate.qualify", inputs={}, output_format="dict")
+    assert prepared["status"] == "ready" and prepared["admission_checked"] is False
+    call = prepared["next_operation"]
+    with pytest.raises(RuntimeError, match="currently accepted task context"):
+        anchor(call["action"], *call["args"], **call["kwargs"])
+
     session = anchor("new_session", name="journey")
     assert session["status"] == "configured" and session["session_id"]
     assert session["envelope"]["effects"]["verified_readback"] is True

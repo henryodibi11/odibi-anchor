@@ -111,11 +111,14 @@ def test_poll_conflicts_and_lost_request_never_start_a_second_process(lifecycle,
         _finish(anchor, operation)
     assert changed.value.error_code == "test_files_changed_during_run"
     assert counter.read_text() == "run\n"
-    with pytest.raises(ValueError, match="no such running request; rerun") as lost:
+    with pytest.raises(ValueError, match="prior execution outcome is unknown") as lost:
         anchor("test", **{**operation["kwargs"], "request_id": "lost-runtime-request"})
     assert lost.value.error_code == "test_running_request_missing"
-    assert lost.value.context["executed"] is False
-    assert lost.value.next_operation["kwargs"].get("poll") is not True
+    assert vars(lost.value)["context"]["executed"] is False
+    assert vars(lost.value)["context"]["prior_execution_outcome"] == "unknown"
+    assert vars(lost.value)["next_operations"] == []
+    assert vars(lost.value)["envelope"]["retry_safety"] == "unknown"
+    assert vars(lost.value)["envelope"]["next_operation"] is None
     assert counter.read_text() == "run\n"
 
 
@@ -141,8 +144,16 @@ def test_dispatcher_restart_refuses_lost_inflight_request(lifecycle, tmp_path):
         fresh = lifecycle.restart()
         assert fresh("task_rebind", output_format="dict")["status"] == "rebound"
         fresh("orient", output_format="dict")
-        with pytest.raises(ValueError, match="no such running request; rerun"):
+        with pytest.raises(ValueError, match="prior execution outcome is unknown") as lost:
             _poll(fresh, first["next_operation"])
+        # A lost process-local handle cannot prove the original child stopped.
+        # Follow all executable recovery operations: there must be no new launch.
+        for operation in vars(lost.value)["next_operations"]:
+            _poll(fresh, operation)
+        assert vars(lost.value)["context"]["prior_execution_outcome"] == "unknown"
+        assert vars(lost.value)["envelope"]["next_operation"] is None
+        assert any(pending["process"].wait(0) is None
+                   for pending in old_tools._RETAINED_TEST_RESULTS.values() if "process" in pending)
         assert not counter.exists() or counter.read_text() == "run\n"
     finally:
         release.touch()

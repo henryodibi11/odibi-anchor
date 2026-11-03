@@ -142,10 +142,13 @@ def test_persist_rebind_and_repeat_are_integrity_checked_and_idempotent(tmp_path
         "required_skills": [{"skill": "writing-tests", "status": "required"}],
         "assurance": None,
     }
-    assert inspect_task_authority(db) == {
+    diagnostics = inspect_task_authority(db)
+    assert diagnostics["open_windows_scope"] == "runtime_database_all_routes"
+    assert "not the current actionable backlog" in diagnostics["open_windows_description"]
+    assert diagnostics.items() >= {
         "schema_status": "ready", "durable_windows": 1, "rebindings": 1, "closures": 0,
         "open_windows": 1, "terminal_without_closure": 0,
-    }
+    }.items()
 
 
 def test_repeat_persistence_is_idempotent(tmp_path):
@@ -157,6 +160,19 @@ def test_repeat_persistence_is_idempotent(tmp_path):
 
     assert second == first
     assert inspect_task_authority(db)["durable_windows"] == 1
+
+
+def test_open_window_count_keeps_database_wide_all_route_scope(tmp_path):
+    db = tmp_path / "memory.db"
+    original = state(tmp_path, project="alpha")
+    other = state(tmp_path, project="beta")
+    other.task_window_id = "ltw_other_route"
+    other.anchor_home = str(tmp_path / "historical-home")
+    for accepted in (original, other):
+        persist_accepted_task(db, session_state=accepted, task_stage={}, task_result=result())
+    diagnostics = inspect_task_authority(db)
+    assert diagnostics["open_windows"] == 2
+    assert diagnostics["open_windows_scope"] == "runtime_database_all_routes"
 
 
 def test_closed_or_wrong_identity_authority_is_unavailable(tmp_path):
@@ -480,10 +496,10 @@ def test_replacement_atomically_supersedes_prior_open_window(tmp_path):
 
     assert accepted["superseded_task_window_id"] == "ltw_durable"
     assert rebound["task_window_id"] == "ltw_replacement"
-    assert inspect_task_authority(db) == {
+    assert inspect_task_authority(db).items() >= {
         "schema_status": "ready", "durable_windows": 2, "rebindings": 1, "closures": 1,
         "open_windows": 1, "terminal_without_closure": 0,
-    }
+    }.items()
 
 
 class ApprovalTransport:

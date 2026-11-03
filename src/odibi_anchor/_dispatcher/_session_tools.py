@@ -469,8 +469,18 @@ def run_retained_test(request_id, *, task_window_id, arguments, scope_fingerprin
                 return response(retained, replayed=True)
         else:
             if poll:
-                raise invalid(f"test request_id {request_id!r}: no such running request; rerun",
-                              "test_running_request_missing")
+                # A missing process-local handle says nothing about the original child.
+                # Do not manufacture an executable rerun: it could duplicate live work.
+                error = attach_recovery(ValueError(
+                    f"test request_id {request_id!r}: request handle unavailable; prior execution "
+                    "outcome is unknown. Reconcile the original execution with its owning host "
+                    "before deciding whether a fresh run is safe. No test was started by this poll."
+                ), error_code="test_running_request_missing", context={
+                    "executed": False, "request_id": request_id,
+                    "prior_execution_outcome": "unknown", "reconciliation_required": True,
+                })
+                error.__dict__["retry_safety"] = "unknown"
+                raise error
             if len(_RETAINED_TEST_RESULTS) >= _MAX_RETAINED_TEST_RESULTS:
                 evict = next((k for k, v in _RETAINED_TEST_RESULTS.items()
                               if "result" in v or "error" in v), None)

@@ -1963,8 +1963,9 @@ def test_quick_reference_matches_startup_and_action_access_contracts():
         assert re.search(rf'anchor\("{action}"(?:[,\)])', quick)
     assert PRE_DELIVERY_SEQUENCE == (
         "preflight (for Python changes)", "test (for Python changes)",
-        "review", "gate",
+        "review", "workflow candidate and criteria (when bound)", "gate",
         "learning assess",
+        "workflow qualify (when bound)",
     )
     for nonexistent in ("handoff", "explore", "profile", "error"):
         assert f'anchor("{nonexistent}")' not in quick

@@ -1186,6 +1186,12 @@ def inspect_task_authority(path: str | Path) -> dict[str, Any]:
             "rebindings": sum(row["event_type"] == "rebound" for row in events),
             "closures": sum(row["event_type"] == "closed" for row in events),
             "open_windows": len(accepted_ids - closed_ids - terminal_ids),
+            "open_windows_scope": "runtime_database_all_routes",
+            "open_windows_description": (
+                "Database-wide durable open windows across all routes, not the current "
+                "actionable backlog. Historical home identity alone does not exclude a "
+                "legitimately restored task; rebind matching uses verified relocation evidence."
+            ),
             "terminal_without_closure": len((accepted_ids & terminal_ids) - closed_ids),
         }
     finally:

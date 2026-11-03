@@ -65,8 +65,12 @@ def test_all_canonical_operations_return_four_groups_and_executable_next_operati
     state, route = owner
     result = prepare_action(state, operation=operation, inputs=inputs, route_binding=route)
 
+    assert isinstance(result, dict)
     assert len(CANONICAL_OPERATIONS) == 8
     assert result["status"] == "ready"
+    assert result["readiness_scope"] == "inputs_only"
+    assert result["admission_checked"] is False
+    assert "admission has not been checked" in result["next_operation"]["reason"]
     assert result["next_operation"]["action"] == expected_action
     assert result["next_operation"]["copy_ready"].startswith("anchor(")
     assert set(result) >= {

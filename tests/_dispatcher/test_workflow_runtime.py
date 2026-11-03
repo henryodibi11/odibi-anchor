@@ -384,6 +384,7 @@ def test_exact_retry_returns_historical_receipt_without_recollecting(runtime, mo
     assert replay["state"] == implemented
     assert replay["replayed"] is True
     assert replay["observation_semantics"] == "historical acknowledgement"
+    assert replay["envelope"]["next_operation"]["copy_ready"] == "anchor('context', output_format='dict')"
     with pytest.raises(RuntimeError, match="conflicting public request"):
         anchor("workflow", "implemented", expected_generation=original_generation,
                request_id=f"implemented:{original_generation}", reason="changed request", output_format="dict")
@@ -579,7 +580,8 @@ def test_replanned_context_and_handoff_explain_recovery_without_upgrading_bindin
     assert packet["next_step"] == "close_task_then_reenroll"
     assert packet["state"] == revised
     assert packet["completed"] is False and packet["delivery_verified"] is False
-    assert packet["next_operation"]["args"] == ["status"]
+    assert packet["next_operation"]["status"] == "external_required"
+    assert "copy_ready" not in packet["next_operation"]
     assert packet["recovery"]["workflow_id"] == revised["workflow_id"]
     assert packet["recovery"]["rebind_upgrades_plan"] is False
     handoff = anchor("snapshot", mode="handoff", output_format="dict")
@@ -736,6 +738,64 @@ def test_checkpoint_closure_is_usable_without_inventing_another_gate(runtime):
     assert len(qualified["qualification"]["producer_terminal_record_sha256"]) == 64
 
 
+@pytest.mark.parametrize("runtime", ["artifact"], indirect=True)
+def test_returned_operations_capture_measure_and_qualify_without_gate_trap(runtime):
+    anchor, home, _, _ = runtime
+
+    def follow(operation):
+        return anchor(operation["action"], *operation["args"], **operation["kwargs"])
+
+    draft = anchor("context", output_format="dict")
+    assert draft["next_operation"]["args"] == ["accept_plan"]
+    follow(draft["next_operation"])
+    planned = anchor("workflow", output_format="dict")
+    assert planned["next_operation"]["status"] == "external_required"
+    assert "copy_ready" not in planned["next_operation"]  # no status self-loop or premature capture
+    assert anchor("context", output_format="dict")["next_operation"]["status"] == "external_required"
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_text("Result: 5\n")
+    anchor("touched", str(artifact), output_format="dict")
+    context = anchor("context", output_format="dict")
+    statuses = {row["id"]: row["status"] for row in anchor("status", output_format="dict")["operating_protocol"]["verification_obligations"]}
+    assert statuses["preflight"] == statuses["test"] == "not_applicable"
+    assert context["next_operation"].get("action") == "review", context["next_operation"]
+    review = follow(context["next_operation"])
+    assert "implemented" in review["envelope"]["next_operation"]["copy_ready"]
+    implemented = follow(anchor("context", output_format="dict")["next_operation"])
+    assert implemented["state"]["progress"] == "implemented"
+    measure = anchor("workflow", output_format="dict")["next_operation"]
+    assert measure["args"] == ["check_artifact"]
+    follow(measure)
+    pending_review = anchor("workflow", output_format="dict")["next_operation"]
+    assert pending_review["kind"] == "workflow_review" and "copy_ready" not in pending_review
+    # Work-item minor semantics never waive an unresolved workflow finding.
+    advance(anchor, "review", findings=[{"summary": "Wording follow-up", "status": "open", "severity": "minor"}])
+    assert anchor("workflow", output_format="dict")["state"]["review_result"]["status"] == "failed"
+    assert anchor("context", output_format="dict")["next_operation"]["kind"] == "workflow_review"
+    advance(anchor, "review", findings=[{"summary": "Wording follow-up", "status": "resolved"}])
+    gate = follow(anchor("context", output_format="dict")["next_operation"])
+    assert gate["envelope"]["effects"]["bookkeeping_only"] is True
+    assert gate["envelope"]["effects"]["changed"] is True
+    assert gate["envelope"]["effects"]["verified_readback"] is True
+    assert gate["envelope"]["effects"]["destination_mutation_performed"] is False
+    assert gate["envelope"]["retry_safety"] == "state_checked"
+    assert gate["envelope"]["undo"]["reason"] != "no state was changed"
+    prepare = follow(anchor("context", output_format="dict")["next_operation"])
+    assert prepare["status"] == "blocked"  # learning outcome is judgment, never fabricated
+    prepared = anchor("prepare", operation="learning.assess", inputs={"outcome": "nothing_reusable_learned"}, output_format="dict")
+    follow(prepared["next_operation"])
+    closed = anchor("context", output_format="dict")
+    assert closed["next_operation"]["args"] == ["qualify"]
+    qualified = follow(closed["next_operation"])
+    assert qualified["state"]["progress"] == "qualified"
+    assert qualified["state"]["completed"] is False
+    prepared_delivery = follow(anchor("context", output_format="dict")["next_operation"])
+    assert prepared_delivery["authority_granted"] is False
+    assert prepared_delivery["next_operation"]["status"] == "input_required"
+    assert prepared_delivery["envelope"]["next_operation"] is None
+
+
 def test_producer_gate_before_implemented_warns_with_exact_next_operation(runtime):
     anchor, home, _, _ = runtime
     planned = advance(anchor, "accept_plan")
@@ -747,6 +807,8 @@ def test_producer_gate_before_implemented_warns_with_exact_next_operation(runtim
     # Gating first freezes the producer; the gate used to say nothing, and the
     # failure surfaced only later as "gated or closed tasks cannot produce candidates".
     gate = anchor("gate", output_format="dict")
+    assert gate["envelope"]["outcome"] == "succeeded_with_warnings"
+    assert any(warning["code"] == "gate_risk" for warning in gate["envelope"]["warnings"])
     assert any(planned["workflow_id"] in risk and "no implemented candidate" in risk
                for risk in gate["risks"])
     assert gate["suggested_next_actions"][0].startswith(
@@ -1467,7 +1529,18 @@ def test_fresh_producer_recaptures_candidate_after_review_and_requalifies(source
     # Git reports the stale candidate; Databricks refuses the unacknowledged write first.
     with pytest.raises(RuntimeError, match=r"candidate changed since implementation|changed concurrently"):
         advance(anchor, "qualify")
-    second = advance(anchor, "implemented")
+    # Follow returned checks/capture rather than silently repairing a stale qualify suggestion.
+    for _ in range(4):
+        operation = anchor("context", output_format="dict")["next_operation"]
+        assert operation.get("action") in {"preflight", "test", "review", "workflow"}, operation
+        if operation["action"] == "workflow":
+            assert operation["args"] == ["implemented"]
+        result = anchor(operation["action"], *operation["args"], **operation["kwargs"])
+        if operation["action"] == "workflow":
+            break
+    else:
+        pytest.fail("returned operations never recaptured the revised candidate")
+    second = result["state"]
     # The new candidate drops every measurement and review of the old one; history names them.
     assert second["candidate"]["producer"] == _SESSION_STATE.task_window_id != first["candidate"]["producer"]
     assert second["candidate"]["baseline_task"] == first["candidate"]["producer"]

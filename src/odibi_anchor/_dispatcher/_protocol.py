@@ -18,8 +18,10 @@ PRE_DELIVERY_SEQUENCE: tuple[str, ...] = (
     "preflight (for Python changes)",
     "test (for Python changes)",
     "review",
+    "workflow candidate and criteria (when bound)",
     "gate",
     "learning assess",
+    "workflow qualify (when bound)",
 )
 
 
@@ -37,9 +39,13 @@ def protocol_invocation(step: str) -> str:
     if step == "preflight (for Python changes)":
         return 'anchor("preflight")  # required for Python changes'
     if step == "test (for Python changes)":
-        return 'anchor("test")  # required for Python changes'
+        return 'anchor("test", target=["<actual focused test path>"])  # choose real affected targets'
+    if step == "workflow candidate and criteria (when bound)":
+        return '# Bound producer: workflow implemented, exact criterion measurements, workflow review (high/full: close producer before separate review)'
     if step == "learning assess":
         return 'anchor("learning", "assess", outcome="...")'
+    if step == "workflow qualify (when bound)":
+        return '# Bound workflow: qualify after completed producer closure and required review; not delivery permission'
     return f'anchor("{step}")'
 
 

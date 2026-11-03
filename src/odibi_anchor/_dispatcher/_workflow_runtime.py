@@ -161,6 +161,12 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             if command in {"prepare_delivery", "prepare_revocation"}:
                 prepare = prepare_delivery if command == "prepare_delivery" else prepare_revocation
                 packet = prepare(path, session_state=session_state, workflow_id=workflow_id)
+                packet["next_operation"] = {
+                    "status": "input_required", "kind": "owner_approval",
+                    "required_context": ["exact owner approval"],
+                    "reason": "Preparation is not approval. Obtain the owner's exact decision using the returned approval contract; do not repeat preparation or infer consent.",
+                    "destination_mutation_authorized": False,
+                }
                 return packet if output_format == "dict" else "```json\n" + json.dumps(packet, indent=2) + "\n```"
             partial = None
             if prior is None and command == "verify_delivery":
