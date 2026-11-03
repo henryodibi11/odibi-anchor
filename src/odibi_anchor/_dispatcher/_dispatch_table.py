@@ -485,6 +485,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...")',
         'anchor("memory", "promotion", command="request_owner_activation", memory_id="...", provider="databricks_in_session")',
         'anchor("memory", "promotion", command="request_owner_confirmation", memory_id="...")',
+        'anchor("memory", "promotion", command="supersede", memory_id="...", replacement_id="...", reason={"why": "incomplete"}, provider="chat_in_session")',
         'anchor("memory", "recovery", action="inspect")',
         'anchor("memory", "recovery", action="declare_abandoned", selection_id="...", prior_task_window_id="...", reason={...}, evidence={...})',
         'anchor("memory", "recovery", action="recover", selection_id="...", prior_task_window_id="...", reason={...}, evidence={...})',
@@ -570,6 +571,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("learning", "capture", observation_type="reusable_practice", summary="...", signal_key="...")',
         'anchor("learning", "assess", outcome="observations_recorded", observation_ids=["lrn_..."])',
         'anchor("learning", "triage", decision="derive_lesson", actor_kind="human", source_item_ids=["lrn_..."], expected_source_versions={"lrn_...": 1}, ...)',
+        'anchor("learning", "triage", decision="dismiss", item_id="lrn_...", expected_version=1, actor_kind="human", actor_ref="owner", decision_source="chat", rationale="duplicate of lrn_...")',
         'anchor("learning", "safe_stop", status="blocked", reason="required evidence unavailable")',
     ],
     "save":         'anchor("save", entry_type="gotcha", content="Delta MERGE fails silently on null keys", tags=["delta", "merge"])',
@@ -976,8 +978,22 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'pending selections are irrelevant, use a single call with `all_pending=True` rather than '
         'looping.',
         '`triage`: cross-project widening is human-only. Follow the assessed observation\'s '
-        '`next_operation`, preserve its expected source version and evidence, and use '
-        '`derive_lesson` or `derive_watch`; never create memory through SQLite.',
+        '`next_operation`, preserve its expected source version and evidence; never create '
+        'memory through SQLite. Every decision requires `actor_kind="human"`, `actor_ref`, '
+        '`decision_source`, and a non-empty `rationale`.',
+        'Triage derive decisions (`derive_lesson`, `derive_watch`, `derive_improvement`) take '
+        '`source_item_ids`, `expected_source_versions`, `summary`, `evidence` and optional '
+        '`impact`, `applicability_scope`, `project_refs`, `work_package_refs`, '
+        '`environment_refs`, `provenance`. They create one linked lesson, watch item, or '
+        'improvement candidate and retire each open or deferred source observation with an '
+        'event citing the derived item, so it leaves the open queue; `source_transitions` '
+        'reports the new source versions. An exact replay returns `deduped=True`.',
+        'Triage status decisions take one `item_id` with its `expected_version` and create no '
+        'item: `dismiss` records "do not promote" for an open or deferred observation (for '
+        'example a duplicate) as status `rejected`; `defer` and `reopen` park and restore an '
+        'item; `reject` and `retire` close any item and withdraw its semantic projection. '
+        'Evidence, lineage, and event history are kept. An unsupported decision or field is '
+        'refused with `context.problems` naming the field and the allowed values.',
         '`safe_stop`: after the learning assessment has closed, terminate an accepted task with '
         'keyword-only `status` (`blocked` or `failed`) and a non-empty `reason`; optional '
         '`unavailable_evidence` is a list of strings. A successful gate cannot be safe-stopped.',
@@ -1007,7 +1023,7 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`superseded`) and a non-empty JSON-object `evidence`.',
         '`diagnostics`: inspect lifecycle counts and rates within the active project.',
         '`promotion`: use `command="inspect|evaluate|verify|attest|request_owner_activation|'
-        'request_owner_confirmation|withdraw|quarantine"`. On Databricks, explicitly set '
+        'request_owner_confirmation|withdraw|quarantine|retire|supersede"`. On Databricks, explicitly set '
         '`provider="databricks_in_session"` to choose the lower-assurance two-step challenge '
         'even when Slack is configured; omitted `provider` preserves the default provider order. '
         'On any host, `provider="chat_in_session"` runs the same two-step challenge for a reply '
@@ -1016,6 +1032,15 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         '`anchor("reject", "<memory_id>")`; `withdraw` and `quarantine` only reverse an existing '
         'promotion event. A Databricks approval result includes the exact second call under '
         '`next_operation.copy_ready`, mapping `approval_response` to `in_session_approval`.',
+        'To correct or retire inaccurate guidance, including a legacy active or confirmed memory '
+        'with no promotion history, ask the owner: `command="retire"` with `memory_id` and a '
+        'non-empty JSON-object `reason` sets status `retired`; `command="supersede"` also takes '
+        '`replacement_id`, a retrievable memory in the same project, and sets status '
+        '`superseded` with `superseded_by` linking the replacement. Both use the same owner '
+        'challenge and `provider`/`in_session_approval` flow as owner promotion, record an '
+        'immutable owner receipt (listed by `inspect` under `owner_retirements`), append a '
+        'safety withdrawal event when promotion history exists, and stop the memory from being '
+        'selected into new tasks. A replay after success returns `status="existing"`.',
         '`project="all"` means relevance-ranked eligibility across managed projects, not '
         'unconditional injection into every task. Owner promotion of such shared memories is '
         'bound to the boot-verified portfolio work authority.',

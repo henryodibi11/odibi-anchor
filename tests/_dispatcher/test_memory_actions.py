@@ -1573,3 +1573,210 @@ def test_seed_reconciliation_rejects_a_squatted_replacement_id(tmp_path):
         ).fetchone()[0] == "candidate"
     finally:
         connection.close()
+
+
+def _promotion(tmp_path, db, state, **payload) -> dict:
+    result = memory_action(
+        tmp_path, ("promotion",), {**payload, "db_path": str(db)},
+        session_state=state, query_fn=None, render_fn=None,
+    )
+    assert isinstance(result, dict)
+    return result
+
+
+def _owner_approved(tmp_path, db, state, **payload):
+    """Prepare and complete one chat in-session owner challenge through the dispatcher."""
+    prepared = _promotion(tmp_path, db, state, provider="chat_in_session", **payload)
+    assert prepared["status"] == "approval_required" and prepared["write_performed"] is False
+    return prepared, _promotion(tmp_path, db, state, **prepared["next_operation"]["kwargs"])
+
+
+def _retrieved_ids(tmp_path, db, task_window_id):
+    state = _state(tmp_path)
+    state.task_window_id = task_window_id
+    context = build_task_memory_context(
+        tmp_path, ("Review widget deployment guidance",), {"goal": "widget deployment"},
+        session_state=state, task_stage={"repository_scope": []}, db_path=str(db),
+    )
+    return {item["memory_id"] for item in context["selections"]}
+
+
+def _legacy_confirmed(tmp_path, db, content="Widget deployment guidance: never plan a rollback."):
+    """A confirmed memory written before promotion history existed."""
+    memory = append_memory(
+        tmp_path, entry_type="gotcha", content=content, tags=["deployment"],
+        project="project:test", db_path=str(db),
+    )
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE memories SET status='confirmed' WHERE id=?", (memory["id"],))
+    return memory
+
+
+@pytest.mark.parametrize("command", ["retire", "supersede"])
+def test_owner_retires_or_supersedes_legacy_confirmed_memory(tmp_path, monkeypatch, command):
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+    db = tmp_path / "memory.db"
+    legacy = _legacy_confirmed(tmp_path, db)
+    replacement = append_memory(
+        tmp_path, entry_type="gotcha", tags=["deployment"], project="project:test",
+        content="Widget deployment guidance: rehearse a tested rollback before release.",
+        db_path=str(db),
+    )
+    state = _state(tmp_path)
+    assert legacy["id"] in _retrieved_ids(tmp_path, db, "ltw_before")
+    # The pre-existing safety withdrawal cannot lower it and points at the owner path.
+    with pytest.raises(RuntimeError, match="no effective promotion event authority") as refused:
+        _promotion(tmp_path, db, state, command="quarantine", memory_id=legacy["id"])
+    assert vars(refused.value)["error_code"] == "memory_legacy_owner_retirement_required"
+    operations = vars(refused.value)["next_operations"]
+    assert [op["kwargs"]["command"] for op in operations] == ["retire", "supersede"]
+
+    payload = {"command": command, "memory_id": legacy["id"], "reason": {"why": "incomplete"}}
+    if command == "supersede":
+        payload["replacement_id"] = replacement["id"]
+    prepared = _promotion(tmp_path, db, state, provider="chat_in_session", **payload)
+    # A wrong owner reply grants nothing and writes nothing.
+    with pytest.raises(Exception, match="does not match"):
+        _promotion(tmp_path, db, state, **{
+            **prepared["next_operation"]["kwargs"], "in_session_approval": "APPROVE " + "0" * 64,
+        })
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT status FROM memories WHERE id=?", (legacy["id"],),
+        ).fetchone()[0] == "confirmed"
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='memory_owner_retirements'",
+        ).fetchone() is None
+
+    recorded = _promotion(tmp_path, db, state, **prepared["next_operation"]["kwargs"])
+    target = "retired" if command == "retire" else "superseded"
+    expected_link = replacement["id"] if command == "supersede" else None
+    assert (recorded["status"], recorded["target_status"], recorded["event"]) == ("recorded", target, None)
+    receipt = recorded["receipt"]
+    assert receipt["prior_status"] == "confirmed" and receipt["replacement_memory_id"] == expected_link
+    assert receipt["subject"]["authority"] == "legacy_without_promotion_history"
+    assert receipt["subject"]["reason"] == {"why": "incomplete"}
+    assert receipt["owner_user_id"] == "single-user-chat-session"
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT status,superseded_by FROM memories WHERE id=?", (legacy["id"],),
+        ).fetchone() == (target, expected_link)
+        for statement in (
+            "UPDATE memory_owner_retirements SET payload_json='{}'",
+            "DELETE FROM memory_owner_retirements",
+        ):
+            with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+                connection.execute(statement)
+
+    replay = _promotion(tmp_path, db, state, **prepared["next_operation"]["kwargs"])
+    assert (replay["status"], replay["write_performed"], replay["reason_matches"]) == (
+        "existing", False, True,
+    )
+    assert replay["receipt"] == receipt
+    other_reason = _promotion(tmp_path, db, state, **{
+        **prepared["next_operation"]["kwargs"], "reason": {"why": "something else"},
+    })
+    assert (other_reason["status"], other_reason["reason_matches"]) == ("existing", False)
+    retrieved = _retrieved_ids(tmp_path, db, "ltw_after")
+    assert legacy["id"] not in retrieved
+    if command == "supersede":
+        assert replacement["id"] in retrieved
+    inspected = _promotion(tmp_path, db, state, command="inspect", memory_id=legacy["id"])
+    assert [r["receipt_id"] for r in inspected["owner_retirements"]] == [receipt["receipt_id"]]
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT count(*) FROM memory_owner_retirements").fetchone()[0] == 1
+
+
+def test_owner_supersede_of_promotion_backed_memory_keeps_authority_chain(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+    db = tmp_path / "memory.db"
+    state = _state(tmp_path)
+    old = append_memory(
+        tmp_path, entry_type="gotcha", tags=["deployment"], project="project:test",
+        content="Widget deployment guidance: a smoke test is enough.", db_path=str(db),
+    )
+    new = append_memory(
+        tmp_path, entry_type="gotcha", tags=["deployment"], project="project:test",
+        content="Widget deployment guidance: smoke test and rehearse rollback.", db_path=str(db),
+    )
+    for command in ("request_owner_activation", "request_owner_confirmation"):
+        _owner_approved(tmp_path, db, state, command=command, memory_id=old["id"])
+    assert old["id"] in _retrieved_ids(tmp_path, db, "ltw_before")
+    _prepared, recorded = _owner_approved(
+        tmp_path, db, state, command="supersede", memory_id=old["id"],
+        replacement_id=new["id"], reason={"why": "missing rollback step"},
+    )
+    assert recorded["receipt"]["subject"]["authority"] == "promotion_event"
+    assert recorded["receipt"]["prior_status"] == "confirmed"
+    assert recorded["event"]["event_type"] == "withdrawal"
+    assert recorded["event"]["prior_event_id"] == recorded["receipt"]["prior_event_id"]
+    inspected = _promotion(tmp_path, db, state, command="inspect", memory_id=old["id"])
+    assert [e["event_type"] for e in inspected["events"]] == ["withdrawal", "confirmation", "activation"]
+    assert inspected["counts"]["effective_confirmed"] == 0
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT status,superseded_by FROM memories WHERE id=?", (old["id"],),
+        ).fetchone() == ("superseded", new["id"])
+    assert old["id"] not in _retrieved_ids(tmp_path, db, "ltw_after")
+    assert new["id"] in _retrieved_ids(tmp_path, db, "ltw_after_2")
+
+
+def test_owner_retire_after_withdrawal_keeps_promotion_inspection_consistent(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+    db = tmp_path / "memory.db"
+    state = _state(tmp_path)
+    memory = append_memory(
+        tmp_path, entry_type="gotcha", content="Widget deployment guidance: skip review.",
+        project="project:test", db_path=str(db),
+    )
+    _owner_approved(tmp_path, db, state, command="request_owner_activation", memory_id=memory["id"])
+    withdrawn = _promotion(tmp_path, db, state, command="withdraw", memory_id=memory["id"])
+    _prepared, recorded = _owner_approved(
+        tmp_path, db, state, command="retire", memory_id=memory["id"], reason={"why": "wrong"},
+    )
+    assert recorded["receipt"]["subject"]["authority"] == "unpromoted_candidate"
+    assert recorded["receipt"]["prior_event_id"] == withdrawn["event"]["event_id"]
+    inspected = _promotion(tmp_path, db, state, command="inspect")
+    assert inspected["counts"]["event_types"] == {"activation": 1, "withdrawal": 1}
+    assert [r["memory_id"] for r in inspected["owner_retirements"]] == [memory["id"]]
+
+
+@pytest.mark.parametrize(
+    ("payload", "error", "match"),
+    [
+        ({"command": "supersede"}, ValueError, "requires replacement_id"),
+        ({"command": "supersede", "replacement_id": "SELF"}, ValueError, "cannot supersede itself"),
+        ({"command": "supersede", "replacement_id": "OTHER"}, ValueError, "same project"),
+        ({"command": "supersede", "replacement_id": "RETIRED"}, ValueError, "eligible lifecycle"),
+        ({"command": "retire", "replacement_id": "SELF"}, ValueError, "only valid with command='supersede'"),
+        ({"command": "retire", "reason": "not an object"}, ValueError, "reason must be"),
+        ({"command": "retire", "reason": {}}, ValueError, "reason must be"),
+        ({"command": "retire", "memory_id": "RETIRED"}, ValueError, "requires a retrievable"),
+        ({"command": "retire", "memory_id": "OTHER"}, ValueError, "different project"),
+        ({"command": "quarantine", "reason": {"why": "x"}}, ValueError, "only valid for memory promotion retire"),
+    ],
+)
+def test_owner_retirement_refusals_write_nothing(tmp_path, monkeypatch, payload, error, match):
+    monkeypatch.setenv("ANCHOR_HUMAN_INPUT_STATE_PATH", str(tmp_path / "human-input.db"))
+    db = tmp_path / "memory.db"
+    legacy = _legacy_confirmed(tmp_path, db)
+    other = append_memory(tmp_path, entry_type="gotcha", content="Other project guidance.",
+                          project="private:other", db_path=str(db))
+    retired = append_memory(tmp_path, entry_type="gotcha", content="Retired guidance.",
+                            project="project:test", db_path=str(db))
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE memories SET status='retired' WHERE id=?", (retired["id"],))
+        before = connection.execute("SELECT id,status,superseded_by FROM memories ORDER BY id").fetchall()
+    aliases = {"SELF": legacy["id"], "OTHER": other["id"], "RETIRED": retired["id"]}
+    request = {"memory_id": legacy["id"], "reason": {"why": "inaccurate"}, **payload}
+    request = {key: aliases.get(value, value) if isinstance(value, str) else value
+               for key, value in request.items()}
+    with pytest.raises(error, match=match):
+        _promotion(tmp_path, db, _state(tmp_path), provider="chat_in_session", **request)
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT id,status,superseded_by FROM memories ORDER BY id"
+        ).fetchall() == before
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='memory_owner_retirements'",
+        ).fetchone() is None

@@ -87,7 +87,9 @@ def test_gate_and_assess_report_pending_owner_decisions(runtime):
         assert pending["observations"]["total"] >= 1
         assert observation["summary"] == "The fixture needed an owner decision"
         assert observation["recurrence_count"] == 1 and observation["attention_due"] is False
-        assert [o["decision"] for o in observation["options"]] == ["derive_lesson", "defer", "reject"]
+        assert [o["decision"] for o in observation["options"]] == [
+            "derive_lesson", "defer", "dismiss", "reject",
+        ]
         for option in observation["options"]:
             assert option["action"] == "learning" and option["args"] == ["triage"]
             assert option["kwargs"]["actor_kind"] == "human" and option["requires_owner"] is True
@@ -105,11 +107,18 @@ def test_gate_and_assess_report_pending_owner_decisions(runtime):
     anchor("task", "Record the owner's lesson decision", goal="Record owner decision on lessons",
            mode="retrospective", risk="low", rigor="direct", acceptance_criteria=["Decision recorded"],
            output_format="dict")
-    defer = next(o for o in observation["options"] if o["decision"] == "defer")
-    owner = {"actor_ref": "owner", "decision_source": "fixture-review", "rationale": "Later"}
-    anchor(defer["action"], *defer["args"], **{**defer["kwargs"], **owner}, output_format="dict")
+    before_total = gated["pending_owner_decisions"]["observations"]["total"]
+    dismiss = next(o for o in observation["options"] if o["decision"] == "dismiss")
+    owner = {"actor_ref": "owner", "decision_source": "fixture-review", "rationale": "Duplicate"}
+    anchor(dismiss["action"], *dismiss["args"], **{**dismiss["kwargs"], **owner}, output_format="dict")
     after = _gate(anchor)["pending_owner_decisions"]
     assert observation_id not in [i["id"] for i in after["observations"]["items"]]
+    assert after["observations"]["total"] == before_total - 1
+    shown = anchor("learning", "show", item_id=observation_id, include_history=True,
+                   output_format="dict")["item"]
+    assert shown["status"] == "rejected" and shown["evidence_refs"]
+    assert [e["event_type"] for e in shown["events"]] == ["captured", "rejected"]
+    assert shown["events"][-1]["rationale"] == "Duplicate"
 
 
 def test_broken_learning_store_degrades_without_failing_the_gate(runtime, monkeypatch):

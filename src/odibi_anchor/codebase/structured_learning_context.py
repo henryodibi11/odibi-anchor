@@ -1015,6 +1015,15 @@ def close_learning_obligation_legacy(
         c.close()
 
 
+# An observation still counts as an occurrence of its signal after triage retired
+# it into a derived item; only rejection or retirement without lineage removes it.
+_OCCURRENCE = (
+    "(status NOT IN ('rejected','retired') OR (status='retired' AND EXISTS ("
+    "SELECT 1 FROM learning_item_links occurrence_link "
+    "WHERE occurrence_link.source_item_id=learning_items.item_id)))"
+)
+
+
 def _read(command: str, payload: dict[str, Any]) -> dict:
     p = _db_path()
     if not p.exists():
@@ -1070,7 +1079,7 @@ def _read(command: str, payload: dict[str, Any]) -> dict:
         unknown = set(payload) - {"kind", "status", "applicability_project"}
         if unknown:
             raise ValueError(f"invalid {command} payload")
-        where = ["status NOT IN ('rejected','retired')"]
+        where = [_OCCURRENCE if command == "insights" else "status NOT IN ('rejected','retired')"]
         params: list[str] = []
         kind = payload.get("kind")
         if kind is not None:
@@ -1101,7 +1110,8 @@ def _read(command: str, payload: dict[str, Any]) -> dict:
         counts = {
             r[0]: r[1]
             for r in c.execute(
-                "SELECT recurrence_key,count(*) FROM learning_items WHERE kind='observation' AND status NOT IN ('rejected','retired') GROUP BY recurrence_key"
+                "SELECT recurrence_key,count(*) FROM learning_items WHERE kind='observation' AND "
+                + _OCCURRENCE + " GROUP BY recurrence_key"
             )
         }
         for r in rows:
@@ -1606,7 +1616,7 @@ def _capture(payload: dict[str, Any]) -> dict:
             if old["payload_sha256"] != ph:
                 raise ValueError("learning idempotency conflict")
             count = c.execute(
-                "SELECT count(*) FROM learning_items WHERE recurrence_key=? AND status NOT IN ('rejected','retired')",
+                "SELECT count(*) FROM learning_items WHERE recurrence_key=? AND " + _OCCURRENCE,
                 (recurrence,),
             ).fetchone()[0]
             c.commit()
@@ -1665,7 +1675,7 @@ def _capture(payload: dict[str, Any]) -> dict:
             (_uid("lte_"), item, "dispatcher", now),
         )
         count = c.execute(
-            "SELECT count(*) FROM learning_items WHERE recurrence_key=? AND status NOT IN ('rejected','retired')",
+            "SELECT count(*) FROM learning_items WHERE recurrence_key=? AND " + _OCCURRENCE,
             (recurrence,),
         ).fetchone()[0]
         result_item = dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item,)).fetchone())
@@ -1837,8 +1847,35 @@ def _assess(payload: dict[str, Any]) -> dict:
         c.close()
 
 
+_DERIVE_DECISIONS = ("derive_lesson", "derive_watch", "derive_improvement")
+_STATUS_DECISIONS = ("dismiss", "defer", "reopen", "reject", "retire")
+
+
+def _triage_refusal(message: str, problems: list[dict[str, str]]) -> ValueError:
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    return attach_recovery(
+        ValueError(message),
+        error_code="learning_triage_invalid",
+        context={
+            "problems": problems,
+            "allowed_decisions": [*_DERIVE_DECISIONS, *_STATUS_DECISIONS],
+        },
+        next_operations=[dispatcher_operation(
+            "help", "learning", reason="inspect the triage decision contract",
+        )],
+    )
+
+
 def _triage(payload: dict[str, Any]) -> dict[str, Any]:
     decision = payload.get("decision")
+    decisions = ", ".join((*_DERIVE_DECISIONS, *_STATUS_DECISIONS))
+    if decision not in (*_DERIVE_DECISIONS, *_STATUS_DECISIONS):
+        raise _triage_refusal(
+            f"invalid triage decision: decision must be one of: {decisions}",
+            [{"field": "decision", "problem": f"decision must be one of: {decisions}",
+              "fix": "choose a supported decision; dismiss records 'do not promote' for an observation"}],
+        )
     actor = payload.get("actor_kind")
     actor_ref = _ident(payload.get("actor_ref"), "actor_ref", 128)
     decision_source = _ident(payload.get("decision_source"), "decision_source")
@@ -1859,9 +1896,19 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
         "provenance",
     }
     status_keys = common | {"item_id", "expected_version"}
-    expected_keys = derive_keys if decision in {"derive_lesson", "derive_watch", "derive_improvement"} else status_keys
-    if set(payload) - expected_keys:
-        raise ValueError("invalid triage payload")
+    expected_keys = derive_keys if decision in _DERIVE_DECISIONS else status_keys
+    unsupported = sorted(set(payload) - expected_keys)
+    if unsupported:
+        fix = (
+            f"{decision} accepts only: {', '.join(sorted(expected_keys))}"
+            + ("" if decision in _DERIVE_DECISIONS else
+               "; status decisions name one item with item_id and expected_version")
+        )
+        raise _triage_refusal(
+            f"invalid triage payload: unsupported fields for decision {decision}: {', '.join(unsupported)}",
+            [{"field": field, "problem": f"not accepted by decision {decision}", "fix": fix}
+             for field in unsupported],
+        )
     path = _db_path()
     if not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError("learning schema is not initialized")
@@ -1944,23 +1991,32 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
                 if old["payload_sha256"] != payload_hash:
                     raise ValueError("learning idempotency conflict")
                 c.commit()
-                return {"item": dict(old), "deduped": True}
+                return {"item": dict(old), "deduped": True, "source_transitions": []}
             allowed = {
                 "lesson": {"observation"},
                 "watch_item": {"observation"},
                 "improvement_candidate": {"observation", "lesson"},
             }[kind]
+            sources = {}
             for source_id in source_ids:
                 row = c.execute(
                     "SELECT kind,status,version FROM learning_items WHERE item_id=?", (source_id,)
                 ).fetchone()
+                # An observation retired by an earlier derivation remains citable
+                # lineage; explicit rejection or retirement without lineage does not.
+                triaged = row is not None and row[1] == "retired" and row[0] == "observation" and (
+                    c.execute(
+                        "SELECT 1 FROM learning_item_links WHERE source_item_id=?", (source_id,)
+                    ).fetchone() is not None
+                )
                 if (
                     not row
                     or row[0] not in allowed
-                    or row[1] in {"rejected", "retired"}
+                    or (row[1] in {"rejected", "retired"} and not triaged)
                     or row[2] != versions[source_id]
                 ):
                     raise ValueError("source item version/status conflict")
+                sources[source_id] = row
             item_id, now = _uid("lrn_"), _now()
             c.execute(
                 "INSERT INTO learning_items(item_id,kind,status,summary,decision_key,payload_sha256,impact,applicability_scope,project_refs,work_package_refs,environment_refs,provenance,created_at,updated_at) VALUES(?,?,'active',?,?,?,?,?,?,?,?,?,?,?)",
@@ -2000,13 +2056,36 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
                 "INSERT INTO learning_events VALUES(?,?,'derived',NULL,'active','human',?,?,?,1,?)",
                 (_uid("lte_"), item_id, actor_ref, decision_source, rationale, now),
             )
+            # A triaged observation leaves the open queue: it is retired with an
+            # event citing the derived item, so its lineage and evidence remain.
+            transitions = []
+            for source_id, row in sources.items():
+                if row["kind"] != "observation" or row["status"] not in {"open", "deferred"}:
+                    continue
+                updated = c.execute(
+                    "UPDATE learning_items SET status='retired',version=version+1,updated_at=? "
+                    "WHERE item_id=? AND version=?",
+                    (now, source_id, row["version"]),
+                )
+                if updated.rowcount != 1:
+                    raise ValueError("source item version/status conflict")
+                c.execute(
+                    "INSERT INTO learning_events VALUES(?,?,'retired',?,'retired','human',?,?,?,?,?)",
+                    (
+                        _uid("lte_"), source_id, row["status"], actor_ref, decision_source,
+                        f"triaged by {decision} into {item_id}", row["version"] + 1, now,
+                    ),
+                )
+                transitions.append({
+                    "item_id": source_id, "from_status": row["status"],
+                    "to_status": "retired", "version": row["version"] + 1,
+                })
             c.commit()
             return {
                 "item": dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item_id,)).fetchone()),
                 "deduped": False,
+                "source_transitions": transitions,
             }
-        if decision not in {"defer", "reopen", "reject", "retire"}:
-            raise ValueError("invalid triage decision")
         item_id = _ident(payload.get("item_id"), "item_id")
         expected = payload.get("expected_version")
         if type(expected) is not int or expected < 1:
@@ -2014,16 +2093,40 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
         row = c.execute("SELECT kind,status,version FROM learning_items WHERE item_id=?", (item_id,)).fetchone()
         if not row:
             raise ValueError("learning item not found")
+        if decision == "dismiss" and row["kind"] != "observation":
+            raise _triage_refusal(
+                "dismiss applies only to observations",
+                [{"field": "item_id", "problem": f"{item_id} is a {row['kind']}, not an observation",
+                  "fix": "use reject or retire for a derived item"}],
+            )
+        event_type = {
+            "defer": "deferred", "reopen": "reopened", "reject": "rejected",
+            "dismiss": "rejected", "retire": "retired",
+        }[decision]
+        if row["version"] == expected + 1:
+            # An exact replay of the decision that produced this version is
+            # answered from history instead of being refused as a conflict.
+            latest = c.execute(
+                "SELECT event_type,actor_ref,decision_source,rationale FROM learning_events "
+                "WHERE item_id=? AND item_version=?", (item_id, expected + 1),
+            ).fetchone()
+            if latest is not None and tuple(latest) == (event_type, actor_ref, decision_source, rationale):
+                c.commit()
+                return {
+                    "item": dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item_id,)).fetchone()),
+                    "deduped": True,
+                }
         if row["version"] != expected:
             raise ValueError("learning version conflict")
         current = row[1]
-        next_status = {"defer": "deferred", "reject": "rejected", "retire": "retired"}.get(decision) or (
-            "open" if row[0] == "observation" else "active"
-        )
+        next_status = {
+            "defer": "deferred", "reject": "rejected", "dismiss": "rejected", "retire": "retired",
+        }.get(decision) or ("open" if row[0] == "observation" else "active")
         valid = (
             (decision == "defer" and current in {"open", "active"})
             or (decision == "reopen" and current == "deferred")
             or (decision in {"reject", "retire"} and current in {"open", "active", "deferred"})
+            or (decision == "dismiss" and current in {"open", "deferred"})
         )
         if not valid:
             raise ValueError("invalid status transition")
@@ -2034,7 +2137,6 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if updated.rowcount != 1:
             raise ValueError("learning version conflict")
-        event_type = {"defer": "deferred", "reopen": "reopened", "reject": "rejected", "retire": "retired"}[decision]
         c.execute(
             "INSERT INTO learning_events VALUES(?,?,?,?,?,'human',?,?,?,?,?)",
             (
@@ -2050,7 +2152,7 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
                 now,
             ),
         )
-        if decision in {"reject", "retire"}:
+        if decision in {"reject", "dismiss", "retire"}:
             projection_table = c.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_projections'"
             ).fetchone()
@@ -2072,7 +2174,10 @@ def _triage(payload: dict[str, Any]) -> dict[str, Any]:
                     final_status=next_status,
                 )
         c.commit()
-        return {"item": dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item_id,)).fetchone())}
+        return {
+            "item": dict(c.execute("SELECT * FROM learning_items WHERE item_id=?", (item_id,)).fetchone()),
+            "deduped": False,
+        }
     except Exception:
         c.rollback()
         raise
@@ -2230,8 +2335,13 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "next_operation": {
                     "operation": "learning.triage",
-                    "decision_options": ["derive_lesson", "derive_watch"],
+                    "decision_options": ["derive_lesson", "derive_watch", "dismiss"],
                     "required_owner_fields": ["actor_ref", "decision_source", "rationale"],
+                    "dismiss_arguments": {
+                        "decision": "dismiss",
+                        "item_id": item_id,
+                        "expected_version": hydrated["version"],
+                    },
                     "suggested_arguments": {
                         "source_item_ids": [item_id],
                         "expected_source_versions": {item_id: hydrated["version"]},
@@ -2253,8 +2363,8 @@ def _project_assessed_observations(result: dict[str, Any]) -> dict[str, Any]:
         project = project_refs[0] if scope == "project_local" else "all"
         with sqlite3.connect(path) as recurrence_connection:
             recurrence_count = recurrence_connection.execute(
-                "SELECT count(*) FROM learning_items WHERE recurrence_key=? "
-                "AND status NOT IN ('rejected','retired')", (hydrated["recurrence_key"],),
+                "SELECT count(*) FROM learning_items WHERE recurrence_key=? AND " + _OCCURRENCE,
+                (hydrated["recurrence_key"],),
             ).fetchone()[0]
         related_files = sorted({
             evidence["reference"].split("#L", 1)[0]
