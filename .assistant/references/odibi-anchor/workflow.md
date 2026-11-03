@@ -1089,6 +1089,30 @@ on a fresh source or substantive artifact task, then accept the plan before edit
 project still requires separate owner approval. This migration does not authorize
 plain non-Git source edits or any external delivery action.
 
+For a source workflow linked to a work item, `accept_plan` requires that item's current
+`request_plan_approval` record. Source workflow creation copies the planning task's
+`work_item` into `plan.work_item`; an explicitly supplied link must agree. A producer's
+task link also counts (including older workflows). Replans retain the link; a different
+item or execution mode needs a separate workflow. Standalone workflows with no declared
+item remain supported; Anchor does not infer a link from agent prose.
+
+Admission retains the existing approval ID, work-item fingerprint/dependencies, approved
+plan hash, specification digest and original assurance. It creates no second approval.
+Source writes, candidate collection, measurement, review, qualification and delivery
+preparation recheck it. Changed material/dependencies/spec bytes, a blocking review, or
+insufficient approval rigor refuse progress. A replacement approval is not silently
+substituted: preserve the work, refresh the item's reviews and owner approval, replan,
+close the old task where its binding changed, bind a fresh producer at a clean authorized
+boundary, and accept again. Exact retries are historical receipts, not fresh checks.
+Approvals recorded before specification digests were retained need renewed approval with
+`spec=...` when the item links a specification. Closing an unchanged item as completed
+does not invalidate an already-admitted approval; cancellation does.
+
+The work-item approval is approval of that exact managed plan/item, not owner approval
+of every later workflow packet. Semantic agreement of workflow scope/criteria with the
+approved item/spec remains a review responsibility. `check_plan` checks structural
+readiness only; it neither contacts the owner nor certifies current approval.
+
 Artifact workflow creation records the exact planned `artifact_paths` as absent
 or existing regular files (digest, size and modification metadata). Acceptance
 compares that retained pre-plan observation before admitting implementation.
@@ -1098,6 +1122,24 @@ Replaying creation never refreshes a baseline. Historical drafts/candidates that
 lack admission evidence cannot be qualified by observing their current bytes.
 Preserve them and recover at a safe boundary; do not rewrite immutable history.
 These are bounded filesystem observations, not locks or an OS sandbox.
+
+On takeover before a candidate, `replan` refuses changed artifact outputs left under a
+prior admission unless the caller explicitly adopts the exact observation. Inspect the
+refusal's `context.adoption`, then retry the returned operation with
+`artifact_adoption_sha256`. Its digest binds prior admission/baseline, new task, new plan
+and exact output observations; any intervening change requires a new observation.
+The event retains this adoption and reason, without deleting bytes or claiming that the
+new producer authored them. Adoption grants no passing evidence: all candidate checks,
+review, gate and delivery approval are still owed.
+
+Pytest criterion targets are relative repository paths/node IDs, never external paths
+or pytest options, and must resolve inside the target root at execution. Measurements
+retain exact candidate/plan and interpreter/environment identity, with before/after
+checks. This is not host-attested execution: arbitrary test/command code can consult
+external resources, imports, plugins or services; a zero exit code proves only the
+planned invocation's observed exit. Review findings remain agent judgment with
+`reviewer_authentication=none`. Chat owner approvals retain their lower-assurance
+assertion label; host hooks and authenticated owner-message capture remain adapters.
 
 Destination byte readback and reconciliation are separate proofs. A plan must
 declare `reconciliation={"requirements": [...]}` before verified completion.
@@ -1238,9 +1280,10 @@ exact calls for each ending:
   refused); the workflow stays active and a fresh producer bound to it can take over. A source
   producer must first restore its own uncommitted edits (register each restore with `touched`),
   or stay open for `task_rebind`, because
-  a stopped task's edits cannot be adopted. Artifact bytes it wrote stay in place and are measured
-  in any later candidate. For an artifact-only plan the stopped producer had accepted, the new
-  producer runs `workflow replan` with the unchanged plan and a reason, then `accept_plan`.
+  a stopped task's edits cannot be adopted. Artifact bytes it wrote stay in place. For an
+  artifact-only plan the stopped producer had accepted, the new producer runs `workflow replan`
+  with the unchanged plan and a reason, explicitly adopts any changed outputs using the returned
+  `artifact_adoption_sha256`, then runs `accept_plan`. Later candidates still need fresh evidence.
 
 Closing a producer, reviewer or delivery task never completes or cancels its workflow; the next
 stage runs in a fresh task bound to the same `workflow_id`. On resume, `orient` lists this owner's

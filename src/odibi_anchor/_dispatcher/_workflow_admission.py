@@ -6,10 +6,11 @@ Fresh substantive writes require enrollment; historical task authority stays imm
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Collection
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow
 
@@ -92,6 +93,87 @@ def workflow_owner(session_state: Any) -> dict[str, str]:
     if not all(isinstance(value, str) and value.strip() for value in result.values()):
         raise WorkflowError("unavailable", "workflow requires explicit project and trust domain")
     return result
+
+
+def linked_plan(plan, *, linked_work_item=None, prior=None):
+    """Keep a source workflow's declared work item across producers and replans."""
+    if not isinstance(plan, dict):
+        return plan
+    prior = prior or {}
+    retained = (prior.get("plan", {}).get("work_item")
+                or (prior.get("admission") or {}).get("work_item_plan_approval", {}).get("work_item_id"))
+    if plan.get("execution_mode") != "source_change":
+        if retained:
+            raise WorkflowError("wrong_mode", "linked source workflow cannot change execution mode; create a separate workflow")
+        return plan
+    links = {value for value in (retained, linked_work_item, plan.get("work_item")) if value is not None}
+    if len(links) > 1:
+        raise WorkflowError("wrong_authority", "source workflow cannot replace its linked work item; create a separate workflow")
+    return {**plan, "work_item": links.pop()} if links else plan
+
+
+def work_item_plan_approval(state, *, session_state, linked_work_item=None, accepting=False):
+    """Reuse an existing owner decision; never authenticate review prose or invent approval."""
+    from odibi_anchor._dispatcher._spec import spec_path
+    from odibi_anchor._dispatcher._work_item import _plan_readiness_problems, work_item_action
+    from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+    if state["plan"]["execution_mode"] != "source_change":
+        return None
+    admission = state.get("admission") or {}
+    retained = admission.get("work_item_plan_approval")
+    plan = linked_plan(state["plan"], linked_work_item=linked_work_item, prior=state)
+    item_id = plan.get("work_item")
+    if item_id is None:
+        return None  # Legitimate standalone workflows keep their existing contract.
+    root = Path(session_state.artifact_root)
+    shown = cast(dict[str, Any], work_item_action(root, "show", item_id, output_format="dict"))
+    item = shown["record"]
+    current = [approval for approval in shown["plan_approvals"] if not approval["stale"]]
+    if retained and not accepting:
+        current = [approval for approval in current if approval["approval_id"] == retained["approval_id"]]
+    problems = []
+    chosen = None
+    for approval in reversed(current):
+        # Dependencies may be in the approved group, so this checks review freshness only;
+        # dependency ordering was checked when the owner approved the group.
+        problems = _plan_readiness_problems(root, [(item_id, {**item, "depends_on": []})], approval["rigor"],
+                                            allow_completed=not accepting)
+        ranks = {"direct": 0, "compact": 1, "full": 2}
+        if ranks[approval["rigor"]] < ranks[state["plan"].get("rigor", "direct")]:
+            problems.append("plan approval rigor is lower than workflow rigor")
+        spec = approval.get("spec")
+        if item.get("specification") and (
+            not spec or spec_path(root / "specs", spec["name"]) != spec_path(root / "specs", item["specification"])
+        ):
+            problems.append("linked specification has no exact approved digest; request plan approval with spec")
+        if spec:
+            file = spec_path(root / "specs", spec["name"])
+            if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != spec["sha256"]:
+                problems.append("approved specification changed or is unavailable")
+        if not problems:
+            chosen = approval
+            break
+    if chosen is None:
+        raise attach_recovery(WorkflowError(
+            "plan_approval_required", f"{item_id} requires current plan approval: "
+            + ("; ".join(problems) if problems else "approval missing or stale")
+            + ". Preserve work; update/review the exact work item, request_plan_approval, then workflow replan "
+            "and accept_plan. Approval never comes from agent prose.",
+        ), error_code="workflow_plan_approval_required", context={
+            "work_item_id": item_id, "fingerprint": shown["fingerprint"],
+            "retained_approval": retained, "problems": problems,
+            "plan_approval": shown["plan_approval"],
+        }, next_operations=[dispatcher_operation(
+            "work_item", "show", item_id, kwargs={"output_format": "dict"},
+            reason="inspect the current item, reviews and approvals before recovery",
+        )])
+    proof = {"work_item_id": item_id, **{key: chosen.get(key) for key in (
+        "approval_id", "fingerprint", "depends_on", "plan_sha256", "authority_ref", "assurance", "spec",
+    )}}
+    if not accepting and retained != proof:
+        raise WorkflowError("stale_plan", "linked work item approval changed; workflow replan and accept_plan are required")
+    return proof
 
 
 def bind_workflow(path: str | Path, *, session_state: Any,
@@ -188,6 +270,8 @@ def enforce_workflow_admission(path: str | Path, *, session_state: Any,
     if (state["status"] != "active" or state["phase"] != "implement_and_qualify"
             or state["progress"] not in {"planned", "implemented"}):
         raise WorkflowError("plan_required", "implementation requires an accepted active plan; delivery freezes the candidate")
+    work_item_plan_approval(state, session_state=session_state,
+                            linked_work_item=getattr(session_state, "linked_work_item", None))
     if "data_write" in effects:
         raise WorkflowError("unavailable", "data effects require a supported exact-resource collector; arbitrary SQL is not a bounded target")
     if "source_write" in effects:

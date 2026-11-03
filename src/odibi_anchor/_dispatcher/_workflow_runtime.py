@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 
-from odibi_anchor._dispatcher._workflow_admission import bound_workflow, workflow_owner, workflow_packet
+from odibi_anchor._dispatcher._workflow_admission import (
+    bound_workflow,
+    linked_plan,
+    work_item_plan_approval,
+    workflow_owner,
+    workflow_packet,
+)
 from odibi_anchor.codebase._workflow import (
     WorkflowError,
     acceptance_check,
@@ -28,7 +34,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     request_id=None, expected_generation=None, plan=None, findings=None,
                     reason=None, blocker_kind=None, resolution=None, criterion_id=None,
                     timeout_minutes=None, provider=None, in_session_approval=None,
-                    wait_seconds=None, output_format="dict"):
+                    wait_seconds=None, artifact_adoption_sha256=None, output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
     check_plan reports every problem accept_plan would refuse, storing nothing.
@@ -70,6 +76,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         raise ValueError("workflow output_format must be dict or markdown")
     if command in WRITE_COMMANDS and output_format != "dict":
         raise ValueError("workflow writes require dict output for durability checkpointing")
+    if artifact_adoption_sha256 is not None and command != "replan":
+        raise ValueError("artifact_adoption_sha256 applies only to replan")
     owner_options = {"timeout_minutes": timeout_minutes, "provider": provider,
                      "in_session_approval": in_session_approval, "wait_seconds": wait_seconds}
     for name, value in owner_options.items():
@@ -93,6 +101,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                       "blocker_kind": blocker_kind, "resolution": resolution}
     if criterion_id is not None:
         public_request["criterion_id"] = criterion_id
+    if artifact_adoption_sha256 is not None:
+        public_request["artifact_adoption_sha256"] = artifact_adoption_sha256
     # The default stays out of the replay key so existing receipts and retries match.
     if timeout_minutes not in (None, DEFAULT_APPROVAL_TIMEOUT_MINUTES):
         public_request["timeout_minutes"] = timeout_minutes
@@ -118,6 +128,7 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         if command == "create":
             if workflow_id is not None or expected_generation is not None:
                 raise ValueError("create accepts plan and request_id, not existing workflow authority")
+            plan = linked_plan(plan, linked_work_item=accepted["task"].get("linked_work_item"))
             state = create_workflow(
                 path, owner=workflow_owner(session_state), request_id=request_id, plan=plan,
                 artifact_baseline=collect_artifact_baseline(plan, session_state=session_state),
@@ -186,8 +197,14 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         require_acceptable(state["plan"], DESTINATION_KEYS)
                     record = _accepted_task(path, session_state, session_state.task_window_id, require_open=True)
                     validate_producer_policy(state["plan"], session_state.active_task_profile)
+                    approval = work_item_plan_approval(
+                        state, session_state=session_state,
+                        linked_work_item=record["task"].get("linked_work_item"), accepting=True,
+                    )
                     payload = {"baseline": collect_plan_baseline(path, session_state=session_state, record=record),
                                "authority_ref": "accepted_task:" + session_state.task_window_id}
+                    if approval is not None:
+                        payload["work_item_plan_approval"] = approval
                 elif command == "check_artifact":
                     operation = "record_check"
                     payload = collect_artifact_measurement(
@@ -238,11 +255,40 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                         )
                         expected_generation = state["generation"]
                 elif command == "replan":
+                    plan = linked_plan(plan, linked_work_item=accepted["task"].get("linked_work_item"), prior=state)
                     require_acceptable(plan, DESTINATION_KEYS, stored=False, criterion_problems=criterion_problems)
                     if state["progress"] == "draft" and state["plan"]["execution_mode"] == "artifact_only":
                         check_artifact_baseline(state, session_state=session_state, path=path)
+                    baseline = collect_artifact_baseline(plan, session_state=session_state)
                     payload = {"plan": plan, "reason": reason,
-                               "artifact_baseline": collect_artifact_baseline(plan, session_state=session_state)}
+                               "artifact_baseline": baseline}
+                    if (state["plan"]["execution_mode"] == "artifact_only" and state["candidate"] is None
+                            and state.get("admission") and baseline
+                            and state["admission"]["authority_ref"] != "accepted_task:" + session_state.task_window_id):
+                        original = state["artifact_baseline"]["files"]
+                        carried = {name: value for name, value in baseline["files"].items()
+                                   if value != original.get(name)}
+                        if carried:
+                            from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+                            adoption = {"prior_admission_sha256": digest(state["admission"]),
+                                        "prior_baseline_sha256": digest(state["artifact_baseline"]),
+                                        "adopted_by_task": session_state.task_window_id,
+                                        "files": carried, "plan_sha256": digest(plan)}
+                            token = digest(adoption)
+                            if artifact_adoption_sha256 != token:
+                                raise attach_recovery(WorkflowError(
+                                    "artifact_adoption_required", "replan requires explicit artifact adoption of "
+                                    "the prior producer's output bytes; preserve them and inspect the files before retrying",
+                                ), error_code="artifact_adoption_required", context={
+                                    "artifact_adoption_sha256": token, "adoption": adoption,
+                                }, next_operations=[dispatcher_operation(
+                                    "workflow", "replan", kwargs={"plan": plan, "reason": reason,
+                                        "expected_generation": expected_generation, "request_id": request_id,
+                                        "artifact_adoption_sha256": token, "output_format": "dict"},
+                                    reason="explicitly adopt these exact bytes for fresh measurement and review",
+                                )])
+                            payload["artifact_adoption"] = {**adoption, "reason": reason}
                 elif command == "resume":
                     payload = {"resolution": resolution}
                 elif command == "block":
@@ -405,10 +451,13 @@ def measured_test(path, *, session_state, runner, criterion_id, args, kwargs):
 
 def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
     """Suspend after capturing admission, candidate and environment; resume in the caller."""
+    from pathlib import Path
+
     from odibi_anchor._dispatcher._session_tools import _format_test_result
     from odibi_anchor._dispatcher._workflow_evidence import (
         collect_candidate,
         collect_test_measurement,
+        criterion_problems,
         runtime_environment,
     )
     from odibi_anchor._recovery import attach_recovery, dispatcher_operation
@@ -449,6 +498,10 @@ def measured_test_steps(path, *, session_state, criterion_id, args, kwargs):
     if output_format != "dict":
         raise rejected(ValueError("workflow measurements require dict output for durability checkpointing"),
                        *exact)
+    root = Path(session_state.target_root).resolve()
+    if (criterion_problems({**state["plan"], "criteria": criteria})
+            or any(not (root / target.split("::", 1)[0]).resolve().is_relative_to(root) for target in targets)):
+        raise rejected(WorkflowError("out_of_scope", "pytest test_targets must resolve under the target root"))
     before = collect_candidate(path, session_state=session_state, workflow_id=state["workflow_id"])
     name = criteria[0].get("environment")
     try:

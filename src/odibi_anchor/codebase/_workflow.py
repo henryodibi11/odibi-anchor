@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
@@ -109,6 +110,10 @@ def _plan(value: Any, *, ready: bool = False) -> dict[str, Any]:
         raise ValueError("invalid plan execution_mode")
     if "rigor" in plan and plan["rigor"] not in {"direct", "compact", "full"}:
         raise ValueError("plan.rigor must be direct, compact or full (omit it for the default)")
+    if "work_item" in plan and (
+        not isinstance(plan["work_item"], str) or re.fullmatch(r"WI-\d{4}-\d{4}", plan["work_item"]) is None
+    ):
+        raise ValueError("plan.work_item must match WI-YYYY-NNNN")
     # Drafts may omit fields, but a present list field must already have its accepted
     # shape; otherwise the error surfaces only later at accept_plan.
     for key in ("scope", "exclusions", "constraints", "risks", "stop_conditions",
@@ -341,6 +346,7 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
                       approval=None, delivery=None, verification=None, blocker=None,
                       measurements={}, review_result=None)
         result["artifact_baseline"] = payload.get("artifact_baseline")
+        result["artifact_adoption"] = payload.get("artifact_adoption")
         return result
     if operation == "resume":
         if state["status"] != "blocked":

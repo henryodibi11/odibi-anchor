@@ -842,13 +842,19 @@ def source_runtime(tmp_path, monkeypatch, request):
     monkeypatch.setenv("ANCHOR_MEMORY_DB", str(home / "memory.db"))
     project_action(home, "create", name="alpha", target=target, output_format="dict")
     provider = SimulatedDatabricksProvider() if kind == "databricks" else None
+    linked = {}
+    if kind == "linked":
+        from tests._dispatcher.test_work_item_planning import call
+
+        item = call(home / "workspace/projects/alpha", "create", title="Correct constant", outcome="VALUE equals 2")
+        linked = {"work_item": item["work_item_id"]}
     anchor, _, _ = init(root=str(target), project="alpha", repository_provider=provider, output_format="dict")
     anchor("orient", output_format="dict")
     anchor("new_session", name="plan_source", inline=True, output_format="dict")
     anchor("task", "Plan constant correction", goal="Make VALUE equal 2", mode="analysis",
            risk="low", rigor="direct", trust_domain="personal", in_scope=["source.py"],
            constraints=["Do not edit source before plan acceptance"],
-           acceptance_criteria=["A bounded plan exists"], output_format="dict")
+           acceptance_criteria=["A bounded plan exists"], output_format="dict", **linked)
     anchor("skill_loaded", "code-comprehension", output_format="dict")
     plan = {"schema_version": 1, "goal": "Make VALUE equal 2", "risk": "low",
             "execution_mode": "source_change", "scope": ["source.py"], "source_paths": ["source.py"],
@@ -864,8 +870,150 @@ def source_runtime(tmp_path, monkeypatch, request):
     anchor("task", "Implement constant correction", goal="Make VALUE equal 2", mode="implementation",
            risk="low", rigor="direct", trust_domain="personal", in_scope=["source.py"],
            constraints=["Only source.py may change"], acceptance_criteria=["VALUE equals 2"],
-           workflow_id=draft["workflow_id"], output_format="dict", **kwargs)
+           workflow_id=draft["workflow_id"], output_format="dict", **kwargs, **linked)
     return anchor, target, git
+
+
+@pytest.mark.parametrize("source_runtime", ["linked"], indirect=True)
+def test_linked_source_requires_current_plan_approval_and_recovery(source_runtime, monkeypatch):
+    from tests._dispatcher.test_work_item_planning import APPROVED, call, review
+
+    anchor, target, _ = source_runtime
+    root = target.parent / "home/workspace/projects/alpha"
+    item_id = call(root, "list")["work_items"][0]["work_item_id"]
+    before = anchor("workflow", output_format="dict")["state"]
+    with pytest.raises(RuntimeError, match="current plan approval"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"] == before
+    monkeypatch.setattr("odibi_anchor.owner_approval.request_owner_approval", lambda **kw: dict(APPROVED))
+    review(root, item_id, "problem")
+    approved = call(root, "request_plan_approval", work_items=[item_id], rigor="direct")
+    planned = advance(anchor, "accept_plan")
+    assert planned["admission"]["work_item_plan_approval"]["approval_id"] == approved["plan_approvals"][0]["approval_id"]
+    call(root, "update", item_id, scope="changed after acceptance")
+    with pytest.raises(RuntimeError, match="current plan approval"):
+        advance(anchor, "implemented")
+    # Re-approval alone must not silently replace the workflow's accepted approval.
+    review(root, item_id, "problem")
+    call(root, "request_plan_approval", work_items=[item_id], rigor="direct")
+    with pytest.raises(RuntimeError, match="replan"):
+        advance(anchor, "implemented")
+    advance(anchor, "replan", plan=planned["plan"], reason="Accept revised work item")
+    rebound = advance(anchor, "accept_plan")
+    assert rebound["admission"]["work_item_plan_approval"]["fingerprint"] == call(root, "show", item_id)["fingerprint"]
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    advance(anchor, "implemented")
+    measured = anchor("test", target=["test_source.py"], workflow_criterion="constant", output_format="dict")
+    assert measured["workflow_measurement"]["status"] == "satisfied"
+    reviewed = advance(anchor, "review", findings=[])
+    assert reviewed["review_result"]["reviewer_authentication"] == "none"
+    call(root, "update", item_id, scope="changed after measurement and review")
+    with pytest.raises(RuntimeError, match="current plan approval"):
+        advance(anchor, "qualify")
+
+
+@pytest.mark.parametrize("source_runtime", ["linked"], indirect=True)
+@pytest.mark.parametrize("change", ["spec", "review", "dependency", "rigor"])
+def test_linked_approval_freshness_is_rechecked(source_runtime, monkeypatch, change):
+    from odibi_anchor._dispatcher._spec import spec_action
+    from tests._dispatcher.test_work_item_planning import APPROVED, call, review
+
+    anchor, target, _ = source_runtime
+    root = target.parent / "home/workspace/projects/alpha"
+    item_id = call(root, "list")["work_items"][0]["work_item_id"]
+    spec_action(root, "create", name="PLAN", content="# Approved plan\n", specs_dir=root / "specs", output_format="dict")
+    call(root, "update", item_id, specification="plan")
+    review(root, item_id, "problem")
+    monkeypatch.setattr("odibi_anchor.owner_approval.request_owner_approval", lambda **kw: dict(APPROVED))
+    approved = call(root, "request_plan_approval", work_items=[item_id], rigor="direct", spec="PLAN")
+    assert approved["plan_approvals"][0]["spec"]["name"] == "PLAN"
+    planned = advance(anchor, "accept_plan")
+    if change == "spec":
+        (root / "specs/PLAN_SPEC.md").write_text("# Unapproved revision\n")
+    elif change == "review":
+        review(root, item_id, "adversarial", verdict="reject")
+    elif change == "dependency":
+        dependency = call(root, "create", title="New prerequisite", outcome="O")["work_item_id"]
+        call(root, "update", item_id, depends_on=[dependency])
+    else:
+        # Stop the unmodified producer before changing its binding, then replan and reenroll.
+        anchor("learning", "safe_stop", status="blocked", reason="Rebind higher rigor plan", output_format="dict")
+        advance(anchor, "replan", plan={**planned["plan"], "rigor": "full"}, reason="Higher assurance needed")
+        _fresh_producer(anchor, planned["workflow_id"])
+    with pytest.raises(RuntimeError, match="current plan approval"):
+        advance(anchor, "accept_plan" if change == "rigor" else "implemented")
+
+
+@pytest.mark.parametrize("source_runtime", ["linked"], indirect=True)
+def test_link_cannot_be_dropped_or_replaced_during_replan(source_runtime):
+    anchor, _, _ = source_runtime
+    before = anchor("workflow", output_format="dict")["state"]
+    assert before["plan"]["work_item"].startswith("WI-")
+    with pytest.raises(RuntimeError, match="replace its linked work item"):
+        advance(anchor, "replan", plan={**before["plan"], "work_item": "WI-2000-9999"}, reason="Replace link")
+    without_link = {key: value for key, value in before["plan"].items() if key != "work_item"}
+    replanned = advance(anchor, "replan", plan=without_link, reason="Same plan, omitted redundant link")
+    assert replanned["plan"]["work_item"] == before["plan"]["work_item"]
+
+
+def test_stopped_artifact_bytes_need_explicit_adoption(runtime):
+    from odibi_anchor.codebase._workflow import digest
+
+    anchor, home, _, draft = runtime
+    advance(anchor, "accept_plan")
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    artifact.write_text("Result: 5\n")
+    anchor("touched", str(artifact), output_format="dict")
+    anchor("learning", "safe_stop", status="blocked", reason="Interrupted", output_format="dict")
+    _producer_task(anchor, draft["workflow_id"])
+    before = anchor("workflow", output_format="dict")["state"]
+    with pytest.raises(RuntimeError, match="explicit artifact adoption") as refused:
+        advance(anchor, "replan", plan=before["plan"], reason="Continue stopped output")
+    assert anchor("workflow", output_format="dict")["state"] == before
+    assert artifact.read_text() == "Result: 5\n"
+    token = getattr(refused.value, "context", {})["artifact_adoption_sha256"]
+    assert token.startswith("sha256:")
+    artifact.write_text("Changed after adoption prompt\n")
+    with pytest.raises(RuntimeError, match="explicit artifact adoption"):
+        advance(anchor, "replan", plan=before["plan"], reason="Continue", artifact_adoption_sha256=token)
+    artifact.write_text("Result: 5\n")
+    with pytest.raises(RuntimeError) as refreshed:
+        advance(anchor, "replan", plan=before["plan"], reason="Continue")
+    replanned = advance(anchor, "replan", plan=before["plan"], reason="Adopt stopped output for fresh verification",
+                        artifact_adoption_sha256=getattr(refreshed.value, "context", {})["artifact_adoption_sha256"])
+    adoption = replanned["artifact_adoption"]
+    assert adoption["prior_admission_sha256"] == digest(before["admission"])
+    assert adoption["files"]["notebooks/report.md"]["sha256"] == hashlib.sha256(b"Result: 5\n").hexdigest()
+    advance(anchor, "accept_plan")
+    candidate = advance(anchor, "implemented")
+    assert candidate["measurements"] == {} and candidate["review_result"] is None
+    assert candidate["candidate"]["snapshot"]["notebooks/report.md"]["size"] == 10
+
+
+def test_pytest_plan_cannot_use_another_repository_as_proof(source_runtime, tmp_path):
+    anchor, _, _ = source_runtime
+    foreign = tmp_path / "different-repository/test_green.py"
+    foreign.parent.mkdir()
+    foreign.write_text("def test_green():\n    assert True\n")
+    plan = anchor("workflow", output_format="dict")["state"]["plan"]
+    for target in (str(foreign), "../different-repository/test_green.py", "--pyargs"):
+        criterion = {**plan["criteria"][0], "test_targets": [target]}
+        checked = anchor("workflow", "check_plan", plan={**plan, "criteria": [criterion]}, output_format="dict")
+        assert checked["ready"] is False, target
+        assert "relative" in " ".join(checked["problems"])
+
+
+def test_pytest_target_symlink_cannot_escape_candidate_root(runtime, tmp_path):
+    anchor, _, target, _ = runtime
+    foreign = tmp_path / "foreign.py"
+    foreign.write_text("def test_green():\n    assert True\n")
+    implement(runtime)
+    (target / "test_report.py").unlink()
+    (target / "test_report.py").symlink_to(foreign)
+    with pytest.raises(RuntimeError, match="test_targets must resolve under the target root"):
+        anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
 
 
 def test_public_git_candidate_requires_qualification_approval_and_exact_remote_readback(source_runtime, monkeypatch):
@@ -1508,7 +1656,10 @@ def test_producer_stops_before_candidate_and_a_fresh_producer_takes_over(runtime
         # returns the unchanged plan to draft, then accepts it under its own authority.
         with pytest.raises(RuntimeError, match="pre-plan artifact admission"):
             advance(anchor, "implemented")
-        replanned = advance(anchor, "replan", plan=after["plan"], reason="producer stopped before implementing")
+        with pytest.raises(RuntimeError, match="explicit artifact adoption") as adoption:
+            advance(anchor, "replan", plan=after["plan"], reason="producer stopped before implementing")
+        replanned = advance(anchor, "replan", plan=after["plan"], reason="producer stopped before implementing",
+                            artifact_adoption_sha256=getattr(adoption.value, "context", {})["artifact_adoption_sha256"])
         assert replanned["progress"] == "draft" and replanned["plan_sha256"] == after["plan_sha256"]
     advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
