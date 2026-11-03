@@ -405,7 +405,7 @@ _FIXED_INVOCATIONS: dict[str, InvocationSemantics] = {
     "evolve": InvocationSemantics("read", "task_required"),
     "export_md": InvocationSemantics("read", "task_required"),
     "frame": InvocationSemantics("read", "context_collection"),
-    "gate": InvocationSemantics("read", "task_required"),
+    "gate": InvocationSemantics("artifact_write", "task_required"),
     "help": InvocationSemantics("orient", "safe_orientation"),
     "impact": InvocationSemantics("read", "task_required"),
     "import_md": InvocationSemantics("artifact_write", "task_required"),
@@ -644,7 +644,7 @@ def resolve_effects(
 
 
 _PRE_PROFILE_BOOKKEEPING = frozenset({"task", "task_adoption", "task_rebind", "new_session"})
-_ACTIVE_PROFILE_BOOKKEEPING = frozenset({"checkpoint", "learn", "skill_loaded", "log"})
+_ACTIVE_PROFILE_BOOKKEEPING = frozenset({"gate", "checkpoint", "learn", "skill_loaded", "log"})
 
 
 def task_profile_effect_compatible(effect: ActionEffect, profile: Any | None) -> bool:

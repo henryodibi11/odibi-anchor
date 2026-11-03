@@ -76,6 +76,8 @@ class WorkflowPlan(TypedDict):
     schema_version: Literal[1]
     goal: str
     risk: Literal["low", "medium", "high"]
+    work_item: NotRequired[Annotated[str, Field(
+        description="Exact linked work-item ID; preserve this structural approval binding.")]]
     execution_mode: Literal["read_only", "artifact_only", "source_change", "data_change"]
     rigor: NotRequired[Annotated[Literal["direct", "compact", "full"], Field(
         description="full requires an independent review at qualify; replan cannot lower it.")]]

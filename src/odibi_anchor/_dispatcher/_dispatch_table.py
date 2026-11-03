@@ -820,7 +820,8 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'High risk: after measuring, close the producer with gate and learning first, then accept '
         'the separate read-only review task, record the workflow `review`, and `qualify`.',
         'Workflow `review` findings: an explicit array of objects {"summary": "<nonempty text>", '
-        '"status": "open" | "resolved"}; [] records no findings. Any open finding fails the review.',
+        '"status": "open" | "resolved"}; [] records no findings. Any open finding fails the review, '
+        'even if labelled minor. Nonblocking minor findings apply only to approving work-item reviews.',
         'Writes require output_format="dict"; transitions require the observed expected_generation '
         'and a unique request_id. Exact retries return historical acknowledgements, not new '
         'observations. Read status to refresh generation. A changed candidate never reuses evidence.',
@@ -890,6 +891,10 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'registrations and the spec link, each only where the current bytes equal the bytes '
         'recorded by this task. Anything not restored is listed with a reason and a copy-ready '
         'operation in `required_next_operations`. Restoration never grants authority.',
+        '`diagnostics.open_windows` is a database-wide durable-open total across all routes, '
+        'not the current actionable backlog; see open_windows_scope/open_windows_description. '
+        'Different historical home identity alone does not exclude a legitimately restored task: '
+        'exact-owner matching uses verified relocation evidence. Do not rebind merely to count tasks.',
         '`abandon=True` with `task_window_id` and a non-empty `reason` closes an exact-owner open '
         'task whose authority can no longer be restored (for example after its base was '
         'rewritten) and records it as `abandoned`. It needs no owner approval, restores nothing, '
@@ -904,8 +909,9 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'The wait can change between polls; test arguments and file bytes cannot. Without '
         'wait_seconds, test remains synchronous. A request_id is generated if omitted.',
         '`poll=True` only observes an existing request. After dispatcher restart or result eviction, '
-        'it refuses with "no such running request; rerun" and an explicit rerun call; it never '
-        'silently starts another process. In-flight duplicates never start another run. '
+        'the prior execution outcome is unknown. No rerun operation is supplied: reconcile the '
+        'original execution with its owning host before considering a fresh run. A missing handle '
+        'does not prove the original process stopped. In-flight duplicates never start another run. '
         'Keep the dispatcher alive and poll to completion; process-local results are not durable. '
         'The existing per-test and 600-second suite limits still apply.',
         '`request_id` (string, at most 128 characters) retains the completed result in this '

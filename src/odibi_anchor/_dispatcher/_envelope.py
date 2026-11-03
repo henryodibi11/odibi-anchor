@@ -33,7 +33,7 @@ _TEXT_LIMIT = 300
 _MAX_WARNINGS = 8
 _MAX_OBLIGATIONS = 8
 _IDEMPOTENT_ACTIONS = frozenset({"touched", "skill_loaded"})
-_STATE_CHECKED_ACTIONS = frozenset({"workflow"})
+_STATE_CHECKED_ACTIONS = frozenset({"workflow", "gate"})
 _REPLAY_MARKERS = ("replayed", "deduped", "idempotent_replay")
 _NEW_SESSION_RESETS = (
     "in_process_task_policy", "session_file_ledger", "skills_loaded",
@@ -230,17 +230,19 @@ def _next_from_message(action: str, message: str) -> dict[str, Any] | None:
     })
 
 
-def _next_operation(result: Any, protocol: Mapping[str, Any]) -> dict[str, Any] | None:
+def _next_operation(result: Any, protocol: Mapping[str, Any], *, workflow=None) -> dict[str, Any] | None:
     if isinstance(result, Mapping):
         for source in (result.get("next_operation"),
                        (result.get("agent_context") or {}).get("next_operation")
                        if isinstance(result.get("agent_context"), Mapping) else None):
+            if isinstance(source, Mapping) and source.get("status") in {"external_required", "input_required", "not_applicable"}:
+                return None
             prepared = _next_from(source)
             if prepared is not None:
                 return prepared
     from odibi_anchor._dispatcher._agent_context import _next_operation as derive
 
-    return _next_from(derive(protocol))
+    return _next_from(derive(protocol, workflow=workflow))
 
 
 # ── Warnings, outcome, effects, undo ─────────────────────────────────────────
@@ -260,6 +262,9 @@ def _warnings(action: str, result: Any, degraded: Sequence[Mapping[str, Any]]) -
             warnings.extend(
                 {"code": "result_warning", "message": _text(item)} for item in result["warnings"][:3]
             )
+        if action == "gate":
+            warnings.extend({"code": "gate_risk", "message": _text(item)}
+                            for item in result.get("risks", [])[:3])
         unavailable = result.get("unavailable_evidence")
         samples = result.get("samples")
         if not unavailable and isinstance(samples, Mapping):
@@ -338,6 +343,8 @@ def _undo(action: str, selector: str | None, mutating: bool, before: Mapping[str
                 "or anchor('learning', 'safe_stop', ...)",
         "workflow": "workflow transitions are append-only; recover with block, replan or cancel "
                     "at the current expected_generation",
+        "gate": "retained gate evidence and learning obligations are not undone; close the "
+                "obligation before further work; no destination mutation was authorized",
     }
     return {
         "status": "irreversible", "copy_ready": None,
@@ -376,6 +383,16 @@ def _readback(action: str, args: Sequence[Any], result: Any, before: Mapping[str
         authority_window = authority.get("task_window_id") if isinstance(authority, Mapping) else None
         return {"method": "runtime_task_authority",
                 "observed": bool(window) and window == result.get("task_window_id") == authority_window}
+    if action == "gate" and context.get("memory_db"):
+        from odibi_anchor.codebase.structured_learning_context import active_learning_obligation
+
+        retained = active_learning_obligation(
+            project_id=session_state.active_project,
+            task_window_id=session_state.task_window_id,
+        )
+        return {"method": "durable_learning_obligation",
+                "observed": bool(retained) and retained.get("obligation_id")
+                == getattr(session_state, "learning_obligation_id", None)}
     if action == "workflow" and isinstance(result.get("state"), Mapping) and context.get("memory_db"):
         from odibi_anchor._dispatcher._workflow_admission import workflow_owner
         from odibi_anchor.codebase._workflow import read_workflow
@@ -436,6 +453,10 @@ def build_envelope(
                          "message": _text(f"{type(exc).__name__}: {exc}"), "fallback_used": True})
     outcome = _result_outcome(action, result, warnings)
     failed = outcome in {"blocked", "failed"}
+    # Gate retains bookkeeping, not product source/data or destination mutations.
+    bookkeeping = action == "gate" and not failed and bool(
+        getattr(session_state, "learning_obligation_id", None)
+    )
     mutating = is_mutating(effects)
     effects_block = None
     if mutating:
@@ -451,9 +472,24 @@ def build_envelope(
             action, result, effects, failed=failed, readback=readback,
             invalidated=[] if failed else _invalidated(action, result, before, session_state),
         )
+        if bookkeeping:
+            effects_block.update(bookkeeping_only=True, destination_mutation_performed=False)
     obligations = _obligations(protocol)
     try:
-        next_operation = _next_operation(result, protocol)
+        if isinstance(result, Mapping) and result.get("replayed") is True:
+            from odibi_anchor._recovery import dispatcher_operation
+
+            next_operation = _next_from(dispatcher_operation(
+                "context", kwargs={"output_format": "dict"},
+                reason="historical acknowledgement only; read fresh context before further work",
+            ))
+        else:
+            workflow = None
+            if context.get("memory_db") and getattr(session_state, "workflow_binding", None):
+                from odibi_anchor._dispatcher._workflow_admission import workflow_packet
+
+                workflow = workflow_packet(context["memory_db"], session_state=session_state)
+            next_operation = _next_operation(result, protocol, workflow=workflow)
     except Exception:
         next_operation = None
     return {
@@ -461,7 +497,7 @@ def build_envelope(
         "outcome": outcome,
         "state": _state(action, result, session_state, protocol, obligations),
         "effects": effects_block,
-        "retry_safety": "state_checked" if (action == "test" and kwargs.get("request_id"))
+        "retry_safety": "state_checked" if bookkeeping or (action == "test" and kwargs.get("request_id"))
         or outcome == "running" else retry_safety_for(action, effects),
         "warnings": warnings[:_MAX_WARNINGS],
         "obligations": obligations[:_MAX_OBLIGATIONS],
@@ -495,13 +531,17 @@ def build_failure_envelope(
         next_operation = _next_from_message(action, message)
     mutating = is_mutating(effects)
     error_code = getattr(exc, "error_code", None)
+    unknown_execution = error_code == "test_running_request_missing"
+    if unknown_execution:
+        warnings.append({"code": "prior_execution_outcome_unknown",
+                         "message": "The poll started nothing; the original execution may still be running."})
     return {
         **_shell(action, _selector(action, args, kwargs)),
         "outcome": "blocked" if blocked else "failed",
         "state": _state(action, None, session_state, protocol, obligations),
         "effects": _effects_block(action, None, effects, failed=True, readback=None, invalidated=[])
         if mutating else None,
-        "retry_safety": retry_safety_for(action, effects),
+        "retry_safety": "unknown" if unknown_execution else retry_safety_for(action, effects),
         "warnings": warnings[:_MAX_WARNINGS],
         "obligations": obligations[:_MAX_OBLIGATIONS],
         "next_operation": next_operation,

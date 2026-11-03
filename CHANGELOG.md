@@ -2,6 +2,26 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.7] - 2026-11-03
+
+### Fixed
+
+- A lost asynchronous test handle reports an unknown prior outcome and requires host
+  reconciliation, never an automatic rerun of potentially live work.
+- Returned workflow operations capture the producer candidate before gate/learning, select
+  exact pending criteria and review, then expose qualification after producer closure.
+  External implementation and semantic review remain explicit agent duties; suggestions
+  never grant approval. Checks are scoped to applicable registered changes or planned criteria,
+  not an implicit full test suite. Native guidance distinguishes blocking workflow findings
+  from nonblocking minor work-item findings.
+- Typed MCP workflow plans preserve their optional work-item binding. Generic translations
+  must retain positional arguments, named arguments, generations and request identities.
+- Gate envelopes report retained bookkeeping and learning obligations, warnings and durable
+  readback without implying destination mutation or delivery authority.
+- Preparation labels readiness as input-only, not admission or execution. The compatible
+  `diagnostics.open_windows` total is explicitly database-wide across all routes and historical
+  windows, not a current actionable backlog; restored authority is not excluded by home alone.
+
 ## [0.4.6] - 2026-11-03
 
 ### Fixed

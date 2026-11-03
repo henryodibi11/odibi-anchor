@@ -351,8 +351,33 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
         next_step = {"draft": "accept_plan", "planned": "implement",
                      "implemented": "qualify", "qualified": "request_delivery_authority",
                      "approved_for_delivery": "deliver", "delivered": "verify_delivery"}[state["progress"]]
+    recapture_required = False
+    recovery_reason = None
+    if next_step == "qualify":
+        from odibi_anchor._dispatcher._workflow_evidence import collect_candidate, task_closure_state
+
+        producer = state["candidate"]["producer"]
+        reviewer = "review_candidate_sha256" in session_state.workflow_binding
+        current_closure = task_closure_state(path, session_state.task_window_id)
+        try:
+            recapture_required = not reviewer and producer != session_state.task_window_id and current_closure == "open"
+            if not recapture_required:
+                recapture_required = collect_candidate(path, session_state=session_state,
+                    workflow_id=state["workflow_id"]) != state["candidate"]
+            if recapture_required:
+                if (not reviewer and current_closure == "open"
+                        and (producer == session_state.task_window_id
+                             or task_closure_state(path, producer) == "closed")):
+                    next_step = "implement"
+                else:
+                    next_step = "recover_candidate"
+                    recovery_reason = "Candidate changed; preserve bytes and close/rebind the exact producer before recapture. Reviewer authority never permits producing a replacement."
+        except (WorkflowError, OSError) as exc:
+            next_step = "recover_candidate"
+            recovery_reason = f"Candidate freshness unavailable; resolve before further work: {exc}"
     packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
-              "binding": session_state.workflow_binding, "state": state, "next_step": next_step}
+              "binding": session_state.workflow_binding, "state": state, "next_step": next_step,
+              "recapture_required": recapture_required}
     if stale_plan:
         packet.update(status="recovery_required", binding_status="stale_plan",
                       completed=False, delivery_verified=False,
@@ -365,25 +390,76 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
                               "Dirty source requires existing exact ownership recovery, never a fresh baseline bypass.",
                           ],
                       })
+    from odibi_anchor._recovery import dispatcher_operation
+
     command = {"accept_plan": "accept_plan", "request_delivery_authority": "prepare_delivery",
                "reconcile_delivery": "verify_delivery", "verify_delivery": "verify_delivery"}.get(next_step)
-    if command is None:
-        command = "status"
-    kwargs = {"workflow_id": state["workflow_id"], "output_format": "dict"}
-    if command not in {"status", "prepare_delivery"}:
-        kwargs.update(expected_generation=state["generation"],
-                      request_id=f"{state['workflow_id']}:{state['generation']}:{command}")
-    packet["next_operation"] = {
-        "action": "workflow", "args": [command], "kwargs": kwargs,
-        "copy_ready": f"anchor('workflow', {command!r}, **{kwargs!r})",
-        "reason": "Inspect retained obligations before acting" if command == "status" else next_step,
-        "destination_mutation_authorized": False,
-    }
+    kwargs: dict[str, Any] = {"workflow_id": state["workflow_id"], "output_format": "dict"}
     packet["pending_criteria"] = [
         criterion["id"] for criterion in state["plan"].get("criteria", [])
-        if state.get("measurements", {}).get(criterion["id"], {}).get("status") != "satisfied"
+        if criterion["method"] != "review"
+        and state.get("measurements", {}).get(criterion["id"], {}).get("status") != "satisfied"
     ]
-    packet["review_required"] = state["progress"] == "implemented" and not state.get("review_result")
+    packet["review_required"] = state["progress"] == "implemented" and (
+        state.get("review_result") or {}
+    ).get("status") != "satisfied"
+    operation: dict[str, Any] = {"status": "external_required", "kind": "workflow_work",
+                                 "reason": next_step, "destination_mutation_authorized": False}
+    if recovery_reason:
+        operation.update(kind="candidate_recovery", reason=recovery_reason)
+    elif next_step == "implement":
+        operation["reason"] = (
+            "Perform the accepted scoped implementation and applicable focused checks, then "
+            "capture workflow implemented before gate or learning; suggestions grant no authority."
+        )
+        packet["capture_operation"] = dispatcher_operation(
+            "workflow", "implemented", kwargs={**kwargs, "expected_generation": state["generation"],
+                "request_id": f"{state['workflow_id']}:{state['generation']}:implemented"},
+            reason="capture the completed implementation before gate or learning", retry_safety="state_checked",
+        )
+    elif next_step == "qualify":
+        if packet["pending_criteria"]:
+            criterion = next(c for c in state["plan"]["criteria"] if c["id"] == packet["pending_criteria"][0])
+            if criterion["method"] in {"pytest", "command"}:
+                options: dict[str, Any] = {"workflow_criterion": criterion["id"], "output_format": "dict"}
+                if criterion["method"] == "pytest":
+                    options["target"] = criterion["test_targets"]
+                operation = dispatcher_operation("test", kwargs=options,
+                    reason="measure the accepted criterion against this candidate", retry_safety="not_idempotent")
+            else:
+                command = "check_artifact"
+                kwargs["criterion_id"] = criterion["id"]
+        elif packet["review_required"]:
+            operation.update(kind="workflow_review", required_context=["findings"], reason=(
+                "Supply truthful findings to workflow review at the current generation; all open "
+                "workflow findings block qualification, including minor findings. Full rigor needs "
+                "a separate accepted reviewer task. Do not fabricate an empty findings list."
+            ))
+            if (state["plan"].get("risk") == "high" or state["plan"].get("rigor") == "full"):
+                from odibi_anchor._dispatcher._workflow_evidence import task_closure_state
+
+                if task_closure_state(path, state["candidate"]["producer"]) != "closed":
+                    operation.update(kind="producer_closure", required_context=[], reason=(
+                        "Close the producer with applicable review, gate and learning first; then "
+                        "accept a separate read-only reviewer bound to this exact candidate."
+                    ))
+        else:
+            from odibi_anchor._dispatcher._workflow_evidence import task_closure_state
+
+            if task_closure_state(path, state["candidate"]["producer"]) == "closed":
+                command = "qualify"
+            else:
+                operation.update(kind="producer_closure", reason=(
+                    "Complete the producer's applicable review, gate and learning closure before qualify; "
+                    "task closure is not workflow or delivery completion."
+                ))
+    if command is not None:
+        if command != "prepare_delivery":
+            kwargs.update(expected_generation=state["generation"],
+                          request_id=f"{state['workflow_id']}:{state['generation']}:{command}")
+        operation = dispatcher_operation("workflow", command, kwargs=kwargs,
+                                         reason=next_step, retry_safety="state_checked")
+    packet["next_operation"] = {**operation, "destination_mutation_authorized": False}
     # Canonical round-trip both bounds the packet and detaches mutable runtime state.
     packet = json.loads(canonical(packet))
     return {**packet, "packet_sha256": digest(packet)}

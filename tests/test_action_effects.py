@@ -136,7 +136,7 @@ def test_fixed_builtin_effect_sets_match_independent_contract_table():
             "task", "checkpoint", "save", "reject", "snapshot",
             "save_snap", "archive", "import_md", "db_migrate", "register_tool",
             "touched", "skill_loaded", "log", "new_session", "incident_snapshot",
-            "task_rebind",
+            "task_rebind", "gate",
         },
         "external_mutation": {"sync"},
         "orient": {"orient", "help", "quick"},

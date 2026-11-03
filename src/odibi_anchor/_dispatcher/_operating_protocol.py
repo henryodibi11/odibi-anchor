@@ -140,7 +140,7 @@ def build_operating_protocol(
             # Surface the Spec requirement at acceptance, before any edit is blocked.
             required.append({"id": "required_spec", "satisfy_with": {
                 "route": "spec",
-                "sequence": ["spec create (or link an existing spec)", "spec execute", "spec review"],
+                "sequence": ["spec create (or link an existing spec)", "spec review", "spec execute"],
                 "minimum_review_rating": "good",
                 "blocks": ["source_write", "artifact_write", "data_write"],
             }})
@@ -172,10 +172,14 @@ def build_operating_protocol(
                 ) else "pending" if getattr(session_state, "spec_review_rating", None)
                 else "unknown"},
             ])
-        verification.extend(
-            {"id": name, "status": _latest_action_status(window, name)}
-            for name in ("preflight", "test", "review")
-        )
+        from odibi_anchor._utils._session_state import _SESSION_FILES_CHANGED
+
+        python_changes = any(str(path).endswith(".py") for path in _SESSION_FILES_CHANGED)
+        for name in ("preflight", "test", "review"):
+            status = _latest_action_status(window, name)
+            if name in {"preflight", "test"} and status == "unknown" and not python_changes:
+                status = "not_applicable"
+            verification.append({"id": name, "status": status})
     if learning_due or closed_learning:
         verification.append({
             "id": "learning_closure", "status": "pending" if learning_due else "satisfied",
@@ -203,6 +207,9 @@ def build_operating_protocol(
             "runtime_prohibited": ["external_mutation"],
         },
         "verification_obligations": verification[:20],
+        "implementation_registered": _files_changed() or bool(
+            getattr(session_state, "managed_artifact_ledger", ())
+        ),
         "terminal_return": terminal, "rebootstrap_required": stale,
         "task_closure": _task_closure(
             session_state, profile, terminal=terminal, required=required,
@@ -239,6 +246,16 @@ def _task_closure(
                 "closed_as": "completed" if terminal["status"] == "ready" else terminal["status"]}
     read_only = profile.execution_mode == "read_only"
     remaining = [str(row.get("id")) for row in required]
+    if not read_only and not active_learning and _producer_before_candidate(session_state):
+        return {
+            **base, "state": "open", "remaining": [*remaining, "implemented_candidate", "task_window_gate", "learning_closure"],
+            "complete_with": None,
+            "completion_prerequisite": "Implement the accepted scope, capture the candidate, measure "
+                                       "criteria and retain required workflow review before gate; "
+                                       "high/full rigor closes the producer before separate review.",
+            "stop_with": [_SAFE_STOP],
+            "resume_with": f"anchor('task_rebind', task_window_id={window!r})",
+        }
     if read_only and _files_changed():
         # Assessment closes a read-only task as completed only when nothing changed
         # (_persist_terminal_task_if_ready), so recorded changes leave only a truthful stop.
@@ -260,9 +277,6 @@ def _task_closure(
         # assessment closes it as completed, so no truthful stop call is offered.
         stop_with = None if active_learning else [_SAFE_STOP]
     elif closed_learning and not active_learning:
-        stop_with = [_SAFE_STOP]
-    elif not active_learning and _producer_before_candidate(session_state):
-        # assess is refused here (it would freeze the producer), so the stop is direct.
         stop_with = [_SAFE_STOP]
     else:
         stop_with = [_ASSESS, _SAFE_STOP]
@@ -369,7 +383,8 @@ def render_operating_protocol(protocol: Mapping[str, Any], *, concise: bool = Fa
         lines.append(
             f"**Task:** `{closure['task_window_id']}` is open; remaining: "
             + ", ".join(f"`{x}`" for x in closure["remaining"])
-            + "; complete with " + " then ".join(f"`{x}`" for x in closure["complete_with"])
+            + "; complete with " + (" then ".join(f"`{x}`" for x in closure["complete_with"])
+                                    if closure["complete_with"] else str(closure.get("completion_prerequisite", "no completed closure is available")))
             + (" or stop with " + " then ".join(f"`{x}`" for x in closure["stop_with"])
                if closure["stop_with"] else "")
             + f"; resume later with `{closure['resume_with']}`"

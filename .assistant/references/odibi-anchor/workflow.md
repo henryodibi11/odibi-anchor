@@ -1141,6 +1141,37 @@ planned invocation's observed exit. Review findings remain agent judgment with
 `reviewer_authentication=none`. Chat owner approvals retain their lower-assurance
 assertion label; host hooks and authenticated owner-message capture remain adapters.
 
+Producer sequence: implement and register paths, applicable focused checks and ordinary review,
+then `workflow implemented` with current generation/new request ID before gate or learning.
+Measure every criterion: pytest uses exact `workflow_criterion` and planned targets; command
+uses `test(workflow_criterion=...)` without a target; hashes use `workflow check_artifact`.
+Retain truthful workflow review: every open finding blocks, including minor findings. Only
+approving work-item reviews allow nonblocking open minors. High-risk/full-rigor native review
+instead requires closing the producer with gate/learning before a separate accepted read-only
+reviewer bound to the exact candidate. Host exact-tree code review, when required, still comes
+before producer gate and does not supply native reviewer-task authority. After producer closure
+and required review, qualify; task closed/qualified is not delivery approved/executed/verified.
+Observe as work proceeds, but do not capture/assess learning before candidate capture. Assess
+genuine observation IDs as `observations_recorded`, or `nothing_reusable_learned`. If gate is
+unavailable, assess then `learning safe_stop`; before candidate capture use direct `safe_stop`
+instead. A stop never passes a gate. Gate retains evidence/learning, not destination authority.
+Exact callable behavior may use machine-verifiable memory; cross-project lessons go in learning,
+project runs in managed evidence, defects in Problems/Work Items. Reconcile statuses truthfully.
+
+Returned operations use `{action, args: [positional...], kwargs: {...}}`. Preserve the
+positional and named arguments, generations, request IDs and exact bindings through typed
+or generic transports; use generic MCP for fields a host's typed schema cannot express.
+Never strip a binding to make a typed call validate. `prepare` status `ready` is input-only
+readiness (`admission_checked=false`), not evidence that the call will be admitted or run.
+A missing async-test request handle leaves the original execution outcome unknown; reconcile
+it with the owning host before considering a new run, rather than duplicating possibly live work.
+
+Successful `task_rebind` diagnostics include `open_windows`, a compatibility-preserved total
+across the entire runtime database (`open_windows_scope=runtime_database_all_routes`). It is
+not the current actionable backlog. Do not rebind just to obtain counts. Matching uses the
+current route and verified relocation evidence; a historical home path alone does not exclude
+a restored task. No task closure or ownership rewrite is needed to correct this label.
+
 Destination byte readback and reconciliation are separate proofs. A plan must
 declare `reconciliation={"requirements": [...]}` before verified completion.
 Supported obligations are `{"id": "docs", "method": "qualification_criterion",

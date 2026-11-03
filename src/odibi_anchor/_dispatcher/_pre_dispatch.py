@@ -440,7 +440,7 @@ def run_pre_dispatch_enforcement(
             # A required spec blocks consequential work, not creation/linking of
             # task/problem/spec artifacts or universally permitted bookkeeping.
             spec_exempt = action in {
-                "task", "problem", "spec", "work_item", "new_session", "checkpoint",
+                "task", "problem", "spec", "work_item", "new_session", "checkpoint", "gate",
                 "skill_loaded", "log", "status", "help", "skills", "project",
             }
             has_spec = bool(
