@@ -73,7 +73,13 @@ def _context(state, *, view="compact", binding=None, timings=()):
     )
 
 
-def test_compact_context_is_deterministic_json_safe_and_route_bound():
+@pytest.mark.parametrize("changed_files,expected_action", [
+    (set(), "review"), ({"src/module.py"}, "preflight"),
+])
+def test_compact_context_is_deterministic_json_safe_and_route_bound(monkeypatch, changed_files, expected_action):
+    from odibi_anchor._utils import _session_state
+
+    monkeypatch.setattr(_session_state, "_SESSION_FILES_CHANGED", changed_files)
     state = _state(normalize_task_profile(execution_mode="source_change"))
     first = _context(state, binding=_binding())
     second = _context(state, binding=_binding())
@@ -91,7 +97,7 @@ def test_compact_context_is_deterministic_json_safe_and_route_bound():
         "capabilities",
         "policy",
     ]
-    assert first["next_operation"]["copy_ready"] == 'anchor("preflight")'
+    assert first["next_operation"]["copy_ready"] == f'anchor("{expected_action}")'
 
 
 def test_full_context_projects_safe_baseline_and_ledger_metadata_only():
