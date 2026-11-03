@@ -2,6 +2,56 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] - 2026-11-03
+
+### Added
+
+- `learning triage` accepts `decision="dismiss"` for an open or deferred observation, for
+  example a duplicate (#72). It takes one `item_id` with its `expected_version`, records the
+  owner's rationale as a `rejected` event, keeps the observation's evidence and history, and
+  creates no lesson or watch item. The owner decision list and the assess `next_operation`
+  offer it.
+- `memory promotion` accepts owner-approved `command="retire"` and `command="supersede"`
+  (#71). They correct inaccurate guidance, including legacy active or confirmed memories that
+  have no promotion history. `retire` sets status `retired`; `supersede` also takes
+  `replacement_id`, a retrievable memory in the same project, and sets status `superseded`
+  with `superseded_by` linking the replacement. Both use the existing owner challenge
+  (`provider`, `in_session_approval`) and a non-empty JSON-object `reason`. Each records an
+  immutable receipt in a new additive `memory_owner_retirements` table, created on first use
+  and listed by `inspect` under `owner_retirements`. A promotion-backed memory also gets its
+  safety withdrawal event. A replay after success returns `status="existing"`, with
+  `reason_matches` saying whether the replayed reason is the recorded one. The memory is no
+  longer selected into new tasks.
+
+### Fixed
+
+- A derive decision (`derive_lesson`, `derive_watch`, `derive_improvement`) now retires each
+  open or deferred source observation with an event that cites the derived item, so triage
+  shrinks the open queue and its counts (#72). Lineage is unchanged, a triage-retired
+  observation can still be cited by a later derivation at its new version (reported in
+  `source_transitions`), and an exact replay is still deduplicated. Recurrence counts,
+  `attention_due` and `insights` still count a triage-retired observation as an occurrence of
+  its signal; only rejection, or retirement without derivation lineage, removes it.
+- Triage refusals name the offending field and list the allowed decisions in
+  `context.problems`, instead of a bare `invalid triage payload` (#72). An exact replay of a
+  status decision returns `deduped=True` instead of a version conflict. Help documents every
+  decision, its fields, and what it creates.
+- Lowering a legacy active or confirmed memory through `withdraw`, `quarantine`, or a
+  `suspect`/`superseded` disposition is still refused, but the refusal now offers the
+  owner-approved `retire` and `supersede` operations (#71).
+- `memory promotion inspect` no longer reports divergence for a memory whose latest promotion
+  event is a safety withdrawal and whose status is a terminal correction such as `retired`,
+  `superseded`, or `rejected`.
+
+### Verification boundary
+
+- Focused store and dispatcher tests cover valid, refused, and unauthorized operations, legacy
+  and promotion-backed memories, selection exclusion, replay, and immutability; affected
+  installed-wheel tests pass. A store created by 0.4.3 was operated by this build and then
+  read again by 0.4.3 as a one-off check. The owner challenge was exercised with the chat
+  in-session provider; Slack, Windows, and Databricks share the same challenge helpers and
+  were not exercised live. No existing store was migrated or cleaned.
+
 ## [0.4.3] - 2026-11-03
 
 ### Fixed

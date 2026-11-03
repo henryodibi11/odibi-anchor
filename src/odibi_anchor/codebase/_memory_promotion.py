@@ -924,6 +924,115 @@ def _owner_boundary(
     return "all", trust_domain, authority_id
 
 
+def _owner_channel(provider: str | None, in_session_approval: str | None) -> tuple[bool, Any]:
+    """Return whether to prepare an in-session challenge, else the selected provider."""
+    from odibi_anchor.human_input_owner import (
+        databricks_in_session_preparation_available,
+        select_owner_approval_provider,
+    )
+    from odibi_anchor.owner_approval import CHAT_IN_SESSION
+
+    # Chat in-session runs the same two-step challenge as Databricks, on any host.
+    prepare_in_session = in_session_approval is None and (
+        provider == CHAT_IN_SESSION
+        or databricks_in_session_preparation_available(provider=provider)
+    )
+    selected_provider = None if prepare_in_session else select_owner_approval_provider(
+        provider=provider, in_session_approval=in_session_approval,
+    )
+    return prepare_in_session, selected_provider
+
+
+def _prepared_owner_approval(
+    *, provider: str | None, challenge: str, request_message: str, kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe the exact second call that completes an in-session owner challenge."""
+    from odibi_anchor._recovery import dispatcher_operation
+    from odibi_anchor.owner_approval import ASSURANCE_BY_TRANSPORT, CHAT_IN_SESSION, DATABRICKS_IN_SESSION
+
+    in_session_provider = CHAT_IN_SESSION if provider == CHAT_IN_SESSION else DATABRICKS_IN_SESSION
+    expected_response = f"APPROVE {challenge}"
+    next_operation = dispatcher_operation(
+        "memory", "promotion",
+        kwargs={
+            **kwargs,
+            "provider": in_session_provider,
+            "in_session_approval": expected_response,
+        },
+        reason="complete the prepared in-session owner approval",
+        requires_owner=True,
+        retry_safety="single_use_challenge",
+    )
+    return {
+        "status": "approval_required",
+        "challenge_sha256": challenge,
+        "approval_response": expected_response,
+        "approval_prompt": request_message,
+        "provider": in_session_provider,
+        "owner_assurance": ASSURANCE_BY_TRANSPORT[
+            "chat-in-session-owner-assertion" if provider == CHAT_IN_SESSION
+            else "databricks-in-session-owner-assertion"
+        ],
+        "warning": (
+            "No owner identity was authenticated and no authority was granted. The owner must "
+            "personally send the exact approval_response in this "
+            f"{'chat' if provider == CHAT_IN_SESSION else 'Genie Code'} session before "
+            f"the command is rerun with provider='{in_session_provider}' and "
+            "in_session_approval."
+        ),
+        "next_operation": next_operation,
+        "available_operations": [next_operation],
+        "write_performed": False,
+    }
+
+
+def _owner_reply(
+    selected_provider: Any, *, request_message: str, expected_response: str,
+    timeout_minutes: float, operation: str,
+) -> Any:
+    """Deliver one owner challenge and require the exact reply from the expected owner."""
+    from odibi_anchor.human_input import request_human_input_record
+
+    request = request_human_input_record(
+        request_message,
+        timeout_minutes=timeout_minutes,
+        transport=selected_provider.transport,
+        operation=operation,
+    )
+    if (
+        request.response != expected_response
+        or request.response_user_id != selected_provider.expected_owner_id
+        or request.transport != selected_provider.transport.name
+        or not request.response_message_id
+        or not request.request_id
+        or not request.transport
+    ):
+        raise ValueError("owner promotion response text, identity, or provider differs")
+    return request
+
+
+def _owner_evidence(request: Any) -> dict[str, Any]:
+    """Return the owner identity and request digests retained in an owner receipt."""
+    return {
+        "owner": {
+            "user_id": request.response_user_id,
+            "transport": request.transport,
+            "transport_ref_sha256": hashlib.sha256(
+                (request.transport_ref or "").encode("utf-8")
+            ).hexdigest(),
+        },
+        "request": {
+            "request_id": request.request_id,
+            "message_sha256": hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
+            "response_sha256": hashlib.sha256(request.response.encode("utf-8")).hexdigest(),
+            "response_message_id": request.response_message_id,
+            "created_at": request.created_at,
+            "delivered_at": request.delivered_at,
+            "responded_at": request.responded_at,
+        },
+    }
+
+
 def request_owner_promotion(
     path: str | Path, *, memory_id: str, project_id: str, transition: str,
     timeout_minutes: float = 60, provider: str | None = None,
@@ -937,25 +1046,7 @@ def request_owner_promotion(
         raise ValueError("project_id must be a non-empty string")
     if transition not in {"activation", "confirmation"}:
         raise ValueError("owner promotion transition must be activation or confirmation")
-    from odibi_anchor.human_input_owner import (
-        databricks_in_session_preparation_available,
-        select_owner_approval_provider,
-    )
-    from odibi_anchor.owner_approval import ASSURANCE_BY_TRANSPORT, CHAT_IN_SESSION, DATABRICKS_IN_SESSION
-
-    # Chat in-session runs the same two-step challenge as Databricks, on any host.
-    prepare_in_session = in_session_approval is None and (
-        provider == CHAT_IN_SESSION
-        or databricks_in_session_preparation_available(provider=provider)
-    )
-    in_session_provider = CHAT_IN_SESSION if provider == CHAT_IN_SESSION else DATABRICKS_IN_SESSION
-    in_session_assurance = ASSURANCE_BY_TRANSPORT[
-        "chat-in-session-owner-assertion" if provider == CHAT_IN_SESSION
-        else "databricks-in-session-owner-assertion"
-    ]
-    selected_provider = None if prepare_in_session else select_owner_approval_provider(
-        provider=provider, in_session_approval=in_session_approval,
-    )
+    prepare_in_session, selected_provider = _owner_channel(provider, in_session_approval)
     initialize_schema(path)
     memory_project_id, owner_trust_domain, owner_authority_id = _owner_boundary(
         path, memory_id=memory_id, active_project_id=project_id,
@@ -986,61 +1077,21 @@ def request_owner_promotion(
         f"Claim: {subject['content']}\n\nReply exactly: {expected_response}"
     )
     if prepare_in_session:
-        from odibi_anchor._recovery import dispatcher_operation
-
-        next_operation = dispatcher_operation(
-            "memory", "promotion",
-            kwargs={
-                "command": f"request_owner_{transition}",
-                "memory_id": memory_id,
-                "provider": in_session_provider,
-                "in_session_approval": expected_response,
-            },
-            reason="complete the prepared in-session owner approval",
-            requires_owner=True,
-            retry_safety="single_use_challenge",
-        )
         return {
             "kind": "memory_human_authority",
-            "status": "approval_required",
             "transition": transition,
             "target_status": subject["target_status"],
-            "challenge_sha256": challenge,
-            "approval_response": expected_response,
-            "approval_prompt": request_message,
-            "provider": in_session_provider,
-            "owner_assurance": in_session_assurance,
-            "warning": (
-                "No owner identity was authenticated and no authority was granted. The owner must "
-                "personally send the exact approval_response in this "
-                f"{'chat' if provider == CHAT_IN_SESSION else 'Genie Code'} session before "
-                f"the command is rerun with provider='{in_session_provider}' and "
-                "in_session_approval."
+            **_prepared_owner_approval(
+                provider=provider, challenge=challenge, request_message=request_message,
+                kwargs={"command": f"request_owner_{transition}", "memory_id": memory_id},
             ),
-            "next_operation": next_operation,
-            "available_operations": [next_operation],
-            "write_performed": False,
         }
     assert selected_provider is not None
-    from odibi_anchor.human_input import request_human_input_record
-
-    request = request_human_input_record(
-        request_message,
-        timeout_minutes=timeout_minutes,
-        transport=selected_provider.transport,
+    request = _owner_reply(
+        selected_provider, request_message=request_message,
+        expected_response=expected_response, timeout_minutes=timeout_minutes,
         operation=f"memory_{transition}",
     )
-    response = request.response
-    if (
-        response != expected_response
-        or request.response_user_id != selected_provider.expected_owner_id
-        or request.transport != selected_provider.transport.name
-        or not request.response_message_id
-        or not request.request_id
-        or not request.transport
-    ):
-        raise ValueError("owner promotion response text, identity, or provider differs")
-    assert response is not None
     created_at = _now()
     receipt_identity = {
         "challenge_sha256": challenge,
@@ -1067,22 +1118,7 @@ def request_owner_promotion(
         "owner_assurance": selected_provider.assurance,
         "request_id": request.request_id,
         "response_message_id": request.response_message_id,
-        "owner": {
-            "user_id": request.response_user_id,
-            "transport": request.transport,
-            "transport_ref_sha256": hashlib.sha256(
-                (request.transport_ref or "").encode("utf-8")
-            ).hexdigest(),
-        },
-        "request": {
-            "request_id": request.request_id,
-            "message_sha256": hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
-            "response_sha256": hashlib.sha256(response.encode("utf-8")).hexdigest(),
-            "response_message_id": request.response_message_id,
-            "created_at": request.created_at,
-            "delivered_at": request.delivered_at,
-            "responded_at": request.responded_at,
-        },
+        **_owner_evidence(request),
         "created_at": created_at,
     }
     if memory_project_id == "all":
@@ -1151,6 +1187,337 @@ def request_owner_promotion(
     }
 
 
+# Owner-approved retirement and supersession.  This additive immutable ledger is
+# created on first use and exactly verified afterwards; it sits outside the
+# versioned promotion schema, so stores without it keep their exact bytes.
+_OWNER_RETIREMENT_TABLE = "memory_owner_retirements"
+_OWNER_RETIREMENT_DDL = (
+    "CREATE TABLE memory_owner_retirements (receipt_id TEXT PRIMARY KEY,memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE RESTRICT,claim_sha256 TEXT NOT NULL CHECK(length(claim_sha256)=64),project_id TEXT NOT NULL,trust_domain TEXT NOT NULL,prior_status TEXT NOT NULL CHECK(prior_status IN ('candidate','active','confirmed')),target_status TEXT NOT NULL CHECK(target_status IN ('retired','superseded')),replacement_memory_id TEXT REFERENCES memories(id) ON DELETE RESTRICT,prior_event_id TEXT REFERENCES memory_promotion_events(event_id) ON DELETE RESTRICT,challenge_sha256 TEXT NOT NULL UNIQUE CHECK(length(challenge_sha256)=64),owner_user_id TEXT NOT NULL,transport TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,response_message_id TEXT NOT NULL UNIQUE,payload_json TEXT NOT NULL,created_at TEXT NOT NULL,CHECK((target_status='superseded' AND replacement_memory_id IS NOT NULL AND replacement_memory_id!=memory_id) OR (target_status='retired' AND replacement_memory_id IS NULL)))",
+    "CREATE INDEX idx_memory_owner_retirements_memory ON memory_owner_retirements(memory_id,created_at,receipt_id)",
+    "CREATE TRIGGER memory_owner_retirements_no_update BEFORE UPDATE ON memory_owner_retirements BEGIN SELECT RAISE(ABORT,'memory owner retirements are immutable'); END",
+    "CREATE TRIGGER memory_owner_retirements_no_delete BEFORE DELETE ON memory_owner_retirements BEGIN SELECT RAISE(ABORT,'memory owner retirements are immutable'); END",
+)
+OWNER_RETIREMENT_COMMANDS = {"retire": "retired", "supersede": "superseded"}
+
+
+def _ensure_owner_retirement_schema(connection: sqlite3.Connection, *, create: bool) -> bool:
+    """Create or exactly verify the owner retirement ledger; report whether it exists."""
+    def objects() -> list[tuple[str, str]]:
+        return [tuple(row) for row in connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE tbl_name=? AND sql IS NOT NULL ORDER BY name",
+            (_OWNER_RETIREMENT_TABLE,),
+        )]
+
+    actual = objects()
+    if not actual:
+        if not create:
+            return False
+        for statement in _OWNER_RETIREMENT_DDL:
+            connection.execute(statement)
+        actual = objects()
+    names = (
+        _OWNER_RETIREMENT_TABLE, "idx_memory_owner_retirements_memory",
+        "memory_owner_retirements_no_update", "memory_owner_retirements_no_delete",
+    )
+    if actual != sorted(zip(names, _OWNER_RETIREMENT_DDL, strict=True)):
+        raise RuntimeError("memory owner retirement schema mismatch")
+    return True
+
+
+def _verified_retirement_receipt(row: sqlite3.Row) -> dict[str, Any]:
+    payload = json.loads(row["payload_json"])
+    if row["payload_json"] != _json(payload):
+        raise RuntimeError("memory owner retirement receipt is not canonical JSON")
+    columns = (
+        "receipt_id", "memory_id", "claim_sha256", "project_id", "trust_domain", "prior_status",
+        "target_status", "replacement_memory_id", "prior_event_id", "challenge_sha256",
+        "owner_user_id", "transport", "request_id", "response_message_id", "created_at",
+    )
+    subject = payload.get("subject")
+    if (
+        payload.get("format") != "odibi-anchor-memory-owner-retirement-receipt-v1"
+        or any(payload.get(column) != row[column] for column in columns)
+        or not isinstance(subject, dict)
+        or row["challenge_sha256"] != _sha256(subject)
+        or any(subject.get(key) != row[key] for key in (
+            "memory_id", "claim_sha256", "project_id", "trust_domain", "target_status",
+            "replacement_memory_id", "prior_event_id",
+        ))
+        or subject.get("current_status") != row["prior_status"]
+        or row["receipt_id"] != "mor_" + _sha256({
+            "challenge_sha256": row["challenge_sha256"], "request_id": row["request_id"],
+            "response_message_id": row["response_message_id"],
+        })
+    ):
+        raise RuntimeError("memory owner retirement receipt identity mismatch")
+    return payload
+
+
+def _retirement_subject(
+    connection: sqlite3.Connection, *, memory_id: str, project_id: str, command: str,
+    replacement_id: str | None, reason: dict[str, Any], trust_domain: str,
+    authority_id: str | None, active_project_id: str,
+) -> dict[str, Any]:
+    memory = connection.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+    if memory is None or memory["project"] != project_id:
+        raise ValueError("memory belongs to a different project/trust boundary")
+    if memory["status"] not in {"candidate", "active", "confirmed"}:
+        raise ValueError(
+            "owner retirement requires a retrievable (candidate, active, or confirmed) memory"
+        )
+    claim_sha256 = _sha256(_claim(memory))
+    latest = _latest_event(connection, memory_id)
+    promoted = memory["status"] in {"active", "confirmed"}
+    if latest is not None and latest["event_type"] in {"activation", "confirmation"}:
+        if not promoted or latest["claim_sha256"] != claim_sha256:
+            raise RuntimeError("memory lifecycle projection diverged from promotion authority")
+        authority = "promotion_event"
+    elif promoted:
+        if latest is not None:
+            raise RuntimeError("memory lifecycle projection diverged from promotion authority")
+        authority = "legacy_without_promotion_history"
+    else:
+        authority = "unpromoted_candidate"
+    subject: dict[str, Any] = {
+        "format": "odibi-anchor-memory-owner-retirement-subject-v1",
+        "memory_id": memory_id,
+        "claim_sha256": claim_sha256,
+        "project_id": project_id,
+        "trust_domain": trust_domain,
+        "memory_type": memory["type"],
+        "content": memory["content"],
+        "source": memory["source"],
+        "current_status": memory["status"],
+        "authority": authority,
+        "prior_event_id": latest["event_id"] if latest is not None else None,
+        "command": command,
+        "target_status": OWNER_RETIREMENT_COMMANDS[command],
+        "replacement_memory_id": replacement_id,
+        "reason": reason,
+        "policy_version": POLICY_VERSION,
+        "policy_sha256": POLICY_SHA256,
+    }
+    if replacement_id is not None:
+        replacement = connection.execute(
+            "SELECT * FROM memories WHERE id=?", (replacement_id,),
+        ).fetchone()
+        if replacement is None:
+            raise ValueError("replacement memory does not exist")
+        if replacement_id == memory_id:
+            raise ValueError("a memory cannot supersede itself")
+        if replacement["project"] != memory["project"]:
+            raise ValueError("replacement memory must share the same project/trust domain")
+        if replacement["status"] not in {"candidate", "active", "confirmed"}:
+            raise ValueError("replacement memory is not in an eligible lifecycle state")
+        subject["replacement_claim_sha256"] = _sha256(_claim(replacement))
+        subject["replacement_status"] = replacement["status"]
+        subject["replacement_content"] = replacement["content"]
+    if project_id == "all":
+        subject["authority_id"] = authority_id
+        subject["active_project_id"] = active_project_id
+    return subject
+
+
+def _existing_retirement(
+    connection: sqlite3.Connection, *, memory_id: str, project_id: str, command: str,
+    replacement_id: str | None, reason: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not _ensure_owner_retirement_schema(connection, create=False):
+        return None
+    memory = connection.execute(
+        "SELECT project,status,superseded_by FROM memories WHERE id=?", (memory_id,),
+    ).fetchone()
+    target_status = OWNER_RETIREMENT_COMMANDS[command]
+    if (
+        memory is None or memory["project"] != project_id
+        or memory["status"] != target_status or memory["superseded_by"] != replacement_id
+    ):
+        return None
+    row = connection.execute(
+        "SELECT * FROM memory_owner_retirements WHERE memory_id=? AND target_status=? "
+        "AND replacement_memory_id IS ? ORDER BY created_at DESC,receipt_id DESC LIMIT 1",
+        (memory_id, target_status, replacement_id),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = _verified_retirement_receipt(row)
+    return {
+        "kind": "memory_owner_retirement", "status": "existing", "command": command,
+        "target_status": target_status, "receipt": receipt,
+        # A different reason is not recorded; the retained receipt is the authority.
+        "reason_matches": receipt["subject"]["reason"] == reason,
+        "write_performed": False,
+    }
+
+
+def request_owner_retirement(
+    path: str | Path, *, memory_id: str, project_id: str, command: str,
+    reason: Any, replacement_id: str | None = None,
+    timeout_minutes: float = 60, provider: str | None = None,
+    in_session_approval: str | None = None,
+    authority_id: str | None = None, trust_domain: str | None = None,
+) -> dict[str, Any]:
+    """Retire or supersede one retrievable memory under an exact owner approval.
+
+    This is the only public path that lowers a legacy active or confirmed memory
+    that has no promotion history.  Promotion-backed memories also receive the
+    safety withdrawal event that keeps their authority chain consistent.
+    """
+    if not isinstance(memory_id, str) or not memory_id.strip():
+        raise ValueError("memory_id must be a non-empty string")
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise ValueError("project_id must be a non-empty string")
+    if command not in OWNER_RETIREMENT_COMMANDS:
+        raise ValueError("owner retirement command must be retire or supersede")
+    if command == "supersede" and (not isinstance(replacement_id, str) or not replacement_id.strip()):
+        raise ValueError("supersede requires replacement_id naming the corrected memory")
+    if command == "retire" and replacement_id is not None:
+        raise ValueError("replacement_id is only valid with command='supersede'")
+    if not isinstance(reason, dict) or not reason:
+        raise ValueError("reason must be a non-empty JSON object")
+    reason = json.loads(_json(reason))
+    prepare_in_session, selected_provider = _owner_channel(provider, in_session_approval)
+    initialize_schema(path)
+    memory_project_id, owner_trust_domain, owner_authority_id = _owner_boundary(
+        path, memory_id=memory_id, active_project_id=project_id,
+        authority_id=authority_id, trust_domain=trust_domain,
+    )
+
+    def subject_for(connection: sqlite3.Connection) -> dict[str, Any]:
+        return _retirement_subject(
+            connection, memory_id=memory_id, project_id=memory_project_id, command=command,
+            replacement_id=replacement_id, reason=reason, trust_domain=owner_trust_domain,
+            authority_id=owner_authority_id, active_project_id=project_id,
+        )
+
+    with _connection(path, read_only=True) as connection:
+        _verify_schema(connection)
+        existing = _existing_retirement(
+            connection, memory_id=memory_id, project_id=memory_project_id,
+            command=command, replacement_id=replacement_id, reason=reason,
+        )
+        if existing is not None:
+            return existing
+        subject = subject_for(connection)
+    challenge = _sha256(subject)
+    expected_response = f"APPROVE {challenge}"
+    replacement_text = (
+        f"\nReplacement ({replacement_id}): {subject['replacement_content']}"
+        if replacement_id is not None else ""
+    )
+    request_message = (
+        "Odibi Anchor memory retirement request. Review the exact claim, its replacement, and "
+        f"the reason below.\n\nScope: {memory_project_id}\nCommand: {command}\n"
+        f"Current status: {subject['current_status']} ({subject['authority']})\n"
+        f"Type: {subject['memory_type']}\nSource: {subject['source']}\n"
+        f"Claim: {subject['content']}{replacement_text}\nReason: {_json(reason)}\n\n"
+        f"Reply exactly: {expected_response}"
+    )
+    result_base = {
+        "kind": "memory_owner_retirement", "command": command,
+        "target_status": subject["target_status"],
+    }
+    if prepare_in_session:
+        kwargs: dict[str, Any] = {"command": command, "memory_id": memory_id}
+        if replacement_id is not None:
+            kwargs["replacement_id"] = replacement_id
+        kwargs["reason"] = reason
+        return {**result_base, **_prepared_owner_approval(
+            provider=provider, challenge=challenge, request_message=request_message, kwargs=kwargs,
+        )}
+    assert selected_provider is not None
+    request = _owner_reply(
+        selected_provider, request_message=request_message,
+        expected_response=expected_response, timeout_minutes=timeout_minutes,
+        operation=f"memory_{command}",
+    )
+    created_at = _now()
+    receipt_id = "mor_" + _sha256({
+        "challenge_sha256": challenge, "request_id": request.request_id,
+        "response_message_id": request.response_message_id,
+    })
+    receipt = {
+        "format": "odibi-anchor-memory-owner-retirement-receipt-v1",
+        "receipt_id": receipt_id,
+        "memory_id": memory_id,
+        "claim_sha256": subject["claim_sha256"],
+        "project_id": memory_project_id,
+        "trust_domain": owner_trust_domain,
+        "prior_status": subject["current_status"],
+        "target_status": subject["target_status"],
+        "replacement_memory_id": replacement_id,
+        "prior_event_id": subject["prior_event_id"],
+        "challenge_sha256": challenge,
+        "subject": subject,
+        "owner_user_id": request.response_user_id,
+        "transport": request.transport,
+        "owner_assurance": selected_provider.assurance,
+        "request_id": request.request_id,
+        "response_message_id": request.response_message_id,
+        **_owner_evidence(request),
+        "created_at": created_at,
+    }
+    with _connection(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            _verify_schema(connection)
+            if subject_for(connection) != subject:
+                raise ValueError("memory claim or lifecycle changed after owner approval")
+            _ensure_owner_retirement_schema(connection, create=True)
+            connection.execute(
+                "INSERT INTO memory_owner_retirements VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    receipt_id, memory_id, subject["claim_sha256"], memory_project_id,
+                    owner_trust_domain, subject["current_status"], subject["target_status"],
+                    replacement_id, subject["prior_event_id"], challenge,
+                    request.response_user_id, request.transport, request.request_id,
+                    request.response_message_id, _json(receipt), created_at,
+                ),
+            )
+            event = None
+            if subject["authority"] == "promotion_event":
+                event, _created = withdraw_memory_in_transaction(
+                    connection, memory_id=memory_id, project_id=memory_project_id,
+                    final_status=subject["target_status"], superseded_by=replacement_id,
+                )
+            elif connection.execute(
+                "UPDATE memories SET status=?,superseded_by=? WHERE id=? AND status=?",
+                (subject["target_status"], replacement_id, memory_id, subject["current_status"]),
+            ).rowcount != 1:
+                raise RuntimeError("owner retirement lifecycle projection failed")
+            persisted = connection.execute(
+                "SELECT * FROM memory_owner_retirements WHERE receipt_id=?", (receipt_id,),
+            ).fetchone()
+            if persisted is None or _verified_retirement_receipt(persisted) != receipt:
+                raise RuntimeError("owner retirement receipt was not persisted exactly")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    return {
+        **result_base, "status": "recorded", "receipt": receipt, "event": event,
+        "write_performed": True,
+    }
+
+
+def inspect_owner_retirements(
+    connection: sqlite3.Connection, *, project_id: str, memory_id: str | None, limit: int,
+) -> list[dict[str, Any]]:
+    """Return verified owner retirement receipts within one project boundary."""
+    if not _ensure_owner_retirement_schema(connection, create=False):
+        return []
+    where, params = "project_id=?", [project_id]
+    if memory_id is not None:
+        where += " AND (memory_id=? OR replacement_memory_id=?)"
+        params += [memory_id, memory_id]
+    return [
+        _verified_retirement_receipt(row) for row in connection.execute(
+            f"SELECT * FROM memory_owner_retirements WHERE {where} "
+            "ORDER BY created_at DESC,receipt_id DESC LIMIT ?", [*params, limit],
+        )
+    ]
+
+
 def withdraw_memory_in_transaction(
     connection: sqlite3.Connection, *, memory_id: str, project_id: str,
     final_status: str, superseded_by: str | None = None,
@@ -1170,7 +1537,32 @@ def withdraw_memory_in_transaction(
         _verify_schema(connection)
         latest = _latest_event(connection, memory_id)
     if memory["status"] in {"active", "confirmed"}:
-        if latest is None or latest["event_type"] not in {"activation", "confirmation"}:
+        if latest is None:
+            from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+            # A legacy promoted memory has no authority chain to withdraw; lowering
+            # it is an owner decision recorded in the owner retirement ledger.
+            raise attach_recovery(
+                RuntimeError("promoted memory has no effective promotion event authority"),
+                error_code="memory_legacy_owner_retirement_required",
+                context={"memory_id": memory_id, "status": memory["status"]},
+                next_operations=[
+                    dispatcher_operation(
+                        "memory", "promotion",
+                        kwargs={"command": "retire", "memory_id": memory_id, "reason": {}},
+                        reason="ask the owner to retire this legacy memory; fill reason",
+                        requires_owner=True, retry_safety="state_checked",
+                    ),
+                    dispatcher_operation(
+                        "memory", "promotion",
+                        kwargs={"command": "supersede", "memory_id": memory_id,
+                                "replacement_id": "", "reason": {}},
+                        reason="ask the owner to supersede it with a corrected memory",
+                        requires_owner=True, retry_safety="state_checked",
+                    ),
+                ],
+            )
+        if latest["event_type"] not in {"activation", "confirmation"}:
             raise RuntimeError("promoted memory has no effective promotion event authority")
         claim_sha256 = _sha256(_claim(memory))
         if latest["claim_sha256"] != claim_sha256:
@@ -1790,6 +2182,12 @@ def inspect_shadow_promotion(
                 row["event_type"] in {"activation", "confirmation"}
                 and row["status"] in safe_terminal
             )
+            # After a withdrawal, a correction may record a more specific
+            # terminal state such as retired or superseded.
+            and not (
+                row["event_type"] == "withdrawal"
+                and row["status"] in safe_terminal
+            )
             for row in effective_rows
         ):
             raise RuntimeError("memory promotion event authority diverged from lifecycle projection")
@@ -1830,4 +2228,7 @@ def inspect_shadow_promotion(
             "decisions": decisions,
             "events": events,
             "effective_active_memory_ids": effective_active_memory_ids,
+            "owner_retirements": inspect_owner_retirements(
+                connection, project_id=project_id, memory_id=memory_id, limit=limit,
+            ),
         }

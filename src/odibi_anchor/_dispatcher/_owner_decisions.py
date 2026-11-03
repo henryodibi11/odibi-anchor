@@ -68,7 +68,9 @@ def _observations(connection: sqlite3.Connection, project: str | None, limit: in
     total = connection.execute(f"SELECT count(*) FROM learning_items i WHERE {scope}", (project,)).fetchone()[0]
     rows = connection.execute(
         "SELECT i.*, (SELECT count(*) FROM learning_items r WHERE r.kind='observation' "
-        "AND r.status NOT IN ('rejected','retired') AND r.recurrence_key=i.recurrence_key) AS recurrence_count "
+        "AND (r.status NOT IN ('rejected','retired') OR (r.status='retired' AND EXISTS ("
+        "SELECT 1 FROM learning_item_links l WHERE l.source_item_id=r.item_id))) "
+        "AND r.recurrence_key=i.recurrence_key) AS recurrence_count "
         f"FROM learning_items i WHERE {scope} "
         "ORDER BY (recurrence_count>=3 OR i.impact IN ('high','critical')) DESC, i.created_at DESC, i.item_id DESC "
         "LIMIT ?",
@@ -104,6 +106,8 @@ def _observation_entry(row: sqlite3.Row, evidence: list[dict[str, Any]]) -> dict
     options = [
         ("derive_lesson", "make this observation a lesson", derive),
         ("defer", "decide later", {"decision": "defer", **status_change}),
+        ("dismiss", "dismiss this observation without promoting it, for example a duplicate",
+         {"decision": "dismiss", **status_change}),
         ("reject", "reject this observation", {"decision": "reject", **status_change}),
     ]
     return {

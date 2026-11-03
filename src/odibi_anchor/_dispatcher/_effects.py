@@ -170,7 +170,7 @@ def _memory(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> InvocationSeman
     if selector == "promotion":
         command = str(kwargs.get("command", "inspect")).strip().lower()
         if command in {
-            "evaluate", "verify", "attest", "withdraw", "quarantine",
+            "evaluate", "verify", "attest", "withdraw", "quarantine", "retire", "supersede",
             "request_owner_activation", "request_owner_confirmation",
         }:
             return InvocationSemantics("artifact_write", "task_required")

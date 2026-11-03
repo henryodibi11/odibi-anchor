@@ -160,7 +160,9 @@ pass `memory_limit=1..20` to override the default five bounded selections; each 
 selection still creates a disposition obligation.
 
 Structured `learning triage` is the human-attested consolidation boundary. Publishing an
-active lesson/watch projects one idempotent semantic candidate with lineage. Retrieval,
+active lesson/watch projects one idempotent semantic candidate with lineage and retires its
+source observations out of the open queue; `dismiss` closes a duplicate or unwanted
+observation without deriving anything. Retrieval,
 recurrence, application, evaluation, successful execution, and their counters never promote
 memory.
 
@@ -169,7 +171,9 @@ requested result limit. Immutable selections, applications, and evaluations supp
 evidence; legacy mutable counters do not grant authority. `memory_tags`, `memory_stats`, and
 memory diagnostics require the active project/trust scope. Corrections to active or confirmed
 memories atomically append an authority withdrawal before terminalization; reactivation needs a
-new governed owner decision. Gate-time typed verification includes a fair bounded project-local
+new governed owner decision. Inaccurate guidance, including legacy confirmed memories without
+promotion history, is retired or superseded only by owner-approved `memory promotion`
+`retire`/`supersede`. Gate-time typed verification includes a fair bounded project-local
 sweep, so eligible structured-learning claims can progress without first winning retrieval.
 Legacy counters are deprecated non-authoritative compatibility fields: `use_count`,
 `surface_count`, `applied_count`, and `sessions_seen`. Immutable lifecycle selections,

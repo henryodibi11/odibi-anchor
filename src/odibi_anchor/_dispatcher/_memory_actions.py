@@ -1223,6 +1223,7 @@ def memory_action(
             finalize_verifier_attestation,
             inspect_shadow_promotion,
             request_owner_promotion,
+            request_owner_retirement,
             withdraw_candidate_activation,
         )
         from odibi_anchor.codebase._memory_verifier import (
@@ -1232,7 +1233,7 @@ def memory_action(
 
         unknown = set(payload) - {
             "command", "memory_id", "run_id", "limit", "timeout_minutes",
-            "provider", "in_session_approval",
+            "provider", "in_session_approval", "replacement_id", "reason",
         }
         if unknown:
             raise ValueError(
@@ -1278,6 +1279,29 @@ def memory_action(
             if payload or memory_id is not None:
                 raise ValueError("memory promotion attest accepts only run_id")
             return finalize_verifier_attestation(path, run_id=run_id, project_id=project)
+        if command in {"retire", "supersede"}:
+            owner_keys = {"timeout_minutes", "provider", "in_session_approval", "replacement_id", "reason"}
+            if run_id is not None or set(payload) - owner_keys:
+                raise ValueError(
+                    f"memory promotion {command} accepts only memory_id, reason, replacement_id "
+                    "(supersede), timeout_minutes, provider, and in_session_approval. "
+                    f"{_MEMORY_HELP_HINT}"
+                )
+            _validate_json_object(payload.get("reason"), "reason", nonempty=True)
+            return request_owner_retirement(
+                path, memory_id=memory_id, project_id=project, command=command,
+                reason=payload.get("reason"), replacement_id=payload.get("replacement_id"),
+                timeout_minutes=payload.get("timeout_minutes", 60),
+                provider=payload.get("provider"),
+                in_session_approval=payload.get("in_session_approval"),
+                authority_id=_ENV.get("authority_id"),
+                trust_domain=_ENV.get("trust_domain"),
+            )
+        if "replacement_id" in payload or "reason" in payload:
+            raise ValueError(
+                "replacement_id and reason are only valid for memory promotion retire or supersede. "
+                f"{_MEMORY_HELP_HINT}"
+            )
         if command in {"request_owner_activation", "request_owner_confirmation"}:
             if run_id is not None or "limit" in payload:
                 raise ValueError(
@@ -1332,7 +1356,8 @@ def memory_action(
             }
         raise ValueError(
             "memory promotion command must be inspect, evaluate, verify, attest, withdraw, "
-            "quarantine, request_owner_activation, or request_owner_confirmation"
+            "quarantine, retire, supersede, request_owner_activation, or "
+            "request_owner_confirmation"
         )
     if selector == "seed":
         return _memory_seed(path, **payload)

@@ -1122,11 +1122,19 @@ def test_semantic_projection_retry_recovers_without_duplicate_memory(
 
 def test_derivation_kind_and_source_version_rules(ledger: Path) -> None:
     observation = capture(activate())["item"]
-    lesson = derive([observation], "derive_lesson")["item"]
+    derived = derive([observation], "derive_lesson")
+    lesson = derived["item"]
+    assert derived["source_transitions"] == [{
+        "item_id": observation["item_id"], "from_status": "open",
+        "to_status": "retired", "version": 2,
+    }]
     with pytest.raises(ValueError, match="version/status conflict"):
         derive([lesson], "derive_watch")
     with pytest.raises(ValueError, match="version/status conflict"):
-        derive([observation], "derive_improvement", expected_source_versions={observation["item_id"]: 2})
+        derive([observation], "derive_improvement", expected_source_versions={observation["item_id"]: 1})
+    # The triage-retired observation stays citable lineage at its new version.
+    watch = derive([observation], "derive_watch", expected_source_versions={observation["item_id"]: 2})
+    assert watch["source_transitions"] == []
     assert derive([lesson], "derive_improvement")["item"]["kind"] == "improvement_candidate"
 
 
@@ -1148,6 +1156,120 @@ def test_exact_status_transitions_and_history(ledger: Path, first: str, second: 
         }
         with pytest.raises(ValueError, match="invalid status transition"):
             triage(changed, "reopen")
+
+
+def _learn(**payload: object) -> dict:
+    result = learning.structured_learning_context(**payload)
+    assert isinstance(result, dict)
+    return result
+
+
+def _open_ids() -> set[str]:
+    listed = _learn(command="list", kind="observation", status="open")
+    return {entry["item_id"] for entry in listed["items"]}
+
+
+@pytest.mark.parametrize("first", [None, "defer"])
+def test_dismiss_closes_an_observation_without_deriving_and_replays(
+    ledger: Path, first: str | None,
+) -> None:
+    obligation = activate()
+    keep = capture(obligation)["item"]
+    duplicate = capture(obligation, reference="src/pkg/other.py#L1-L2")["item"]
+    if first:
+        duplicate = triage(duplicate, first)["item"]
+    before = _learn(command="list")["items"]
+    dismissed = triage(duplicate, "dismiss", rationale=f"Duplicate of {keep['item_id']}.")
+    assert dismissed["deduped"] is False and dismissed["item"]["status"] == "rejected"
+    assert _open_ids() == {keep["item_id"]}
+    after = _learn(command="list")["items"]
+    assert {e["item_id"] for e in after} == {e["item_id"] for e in before} - {duplicate["item_id"]}
+    shown = _learn(
+        command="show", item_id=duplicate["item_id"], include_history=True,
+    )["item"]
+    assert shown["evidence_refs"] and shown["links"] == []
+    assert shown["events"][-1]["event_type"] == "rejected"
+    assert shown["events"][-1]["rationale"] == f"Duplicate of {keep['item_id']}."
+    # An exact replay is answered from history; a different decision at the stale version is not.
+    replay = triage(duplicate, "dismiss", rationale=f"Duplicate of {keep['item_id']}.")
+    assert replay["deduped"] is True and replay["item"]["version"] == dismissed["item"]["version"]
+    with pytest.raises(ValueError, match="version conflict"):
+        triage(duplicate, "dismiss", rationale="A different reason.")
+    with pytest.raises(ValueError, match="invalid status transition"):
+        triage(dismissed["item"], "dismiss")
+    events = _learn(
+        command="show", item_id=duplicate["item_id"], include_history=True,
+    )["item"]["events"]
+    assert len(events) == len(shown["events"])
+
+
+def test_triage_refusals_name_fields_and_allowed_values_without_writing(ledger: Path) -> None:
+    observation = capture(activate())["item"]
+    lesson = derive([capture(activate(2))["item"]], "derive_lesson")["item"]
+    with pytest.raises(ValueError, match=r"decision must be one of: .*dismiss") as unknown:
+        triage(observation, "discard")
+    assert vars(unknown.value)["context"]["problems"][0]["field"] == "decision"
+    assert "dismiss" in vars(unknown.value)["context"]["allowed_decisions"]
+    # The shape reported in #72: a status decision sent with derive-only fields.
+    with pytest.raises(ValueError, match="invalid triage payload") as shaped:
+        _learn(
+            command="triage", decision="reject", source_item_ids=[observation["item_id"]],
+            expected_source_versions={observation["item_id"]: 1}, actor_kind="human",
+            actor_ref="owner", decision_source="chat", rationale="Duplicate.",
+        )
+    problems = vars(shaped.value)["context"]["problems"]
+    assert {p["field"] for p in problems} == {"source_item_ids", "expected_source_versions"}
+    assert "item_id and expected_version" in problems[0]["fix"]
+    with pytest.raises(ValueError, match="only to observations") as derived:
+        triage(lesson, "dismiss")
+    assert vars(derived.value)["context"]["problems"][0]["field"] == "item_id"
+    shown = _learn(command="show", item_id=observation["item_id"])["item"]
+    assert (shown["status"], shown["version"]) == ("open", 1)
+    assert _learn(command="show", item_id=lesson["item_id"])["item"]["version"] == 1
+
+
+def test_derivation_moves_source_observations_out_of_the_open_queue(ledger: Path) -> None:
+    obligation = activate()
+    first = capture(obligation)["item"]
+    second = capture(obligation, reference="src/pkg/other.py#L1-L2")["item"]
+    parked = triage(capture(obligation, reference="src/pkg/third.py#L1-L2")["item"], "defer")["item"]
+    assert _open_ids() == {first["item_id"], second["item_id"]}
+    derived = derive([first, second, parked], "derive_lesson")
+    lesson_id = derived["item"]["item_id"]
+    assert {(t["item_id"], t["from_status"]) for t in derived["source_transitions"]} == {
+        (first["item_id"], "open"), (second["item_id"], "open"), (parked["item_id"], "deferred"),
+    }
+    assert _open_ids() == set()
+    for source in (first, second, parked):
+        shown = _learn(
+            command="show", item_id=source["item_id"], include_history=True,
+        )["item"]
+        assert shown["status"] == "retired" and shown["evidence_refs"]
+        assert {(link["source_item_id"], link["derived_item_id"]) for link in shown["links"]} == {
+            (source["item_id"], lesson_id),
+        }
+        assert shown["events"][-1]["event_type"] == "retired"
+        assert lesson_id in shown["events"][-1]["rationale"]
+        assert shown["events"][-1]["actor_ref"] == "reviewer:one"
+    lesson = _learn(command="show", item_id=lesson_id)["item"]
+    assert {link["source_item_id"] for link in lesson["links"]} == {
+        first["item_id"], second["item_id"], parked["item_id"],
+    }
+    # Triage shrinks the queue, not the signal's recurrence or its insight lineage.
+    insights = _learn(command="insights")["insights"]
+    assert [group["recurrence_count"] for group in insights] == [3]
+    assert lesson_id in {item["item_id"] for item in insights[0]["linked_derived_items"]}
+    assert capture(obligation, reference="src/pkg/five.py#L1-L2")["recurrence_count"] == 4
+    replay = derive([first, second, parked], "derive_lesson")
+    assert replay["deduped"] is True and replay["item"]["item_id"] == lesson_id
+    assert replay["source_transitions"] == []
+    assert _learn(
+        command="show", item_id=first["item_id"],
+    )["item"]["version"] == 2
+    # An explicitly retired observation without lineage still cannot be derived from.
+    retired = triage(capture(obligation, reference="src/pkg/four.py#L1-L2")["item"], "retire")["item"]
+    with pytest.raises(ValueError, match="version/status conflict"):
+        derive([retired], "derive_watch")
 
 
 @pytest.mark.parametrize("missing", ["actor_kind", "rationale", "expected_version"])
