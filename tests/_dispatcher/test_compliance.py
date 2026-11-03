@@ -284,11 +284,16 @@ class TestComplianceAudit:
 class TestBuildStatusSuggestions:
     """Test context-aware suggestion builder."""
 
-    def _run(self, obligations, timings=None, files_changed=None):
+    def _run(self, obligations, timings=None, files_changed=None, task_open=False):
+        from types import SimpleNamespace
+
         from odibi_anchor._dispatcher._compliance import _build_status_suggestions
 
+        state = SimpleNamespace(active_task_profile=object() if task_open else None,
+                                terminal_status=None, task_window_id="ltw_open")
         with patch(f"{_COMP}._SESSION_TIMINGS", timings or []), \
-             patch(f"{_COMP}._SESSION_FILES_CHANGED", files_changed or set()):
+             patch(f"{_COMP}._SESSION_FILES_CHANGED", files_changed or set()), \
+             patch(f"{_COMP}._SESSION_STATE", state):
             return _build_status_suggestions(obligations)
 
     def test_with_obligations__must_first(self):
@@ -298,6 +303,11 @@ class TestBuildStatusSuggestions:
     def test_no_obligations__ready(self):
         result = self._run([])
         assert any("ready" in s.lower() or "clean" in s.lower() for s in result)
+
+    def test_open_task_is_never_called_clean(self):
+        result = self._run([], task_open=True)
+        assert not any("clean" in s.lower() for s in result)
+        assert any("ltw_open is still open" in s for s in result)
 
     def test_files_changed_no_task__must_planning(self):
         result = self._run([], timings=[], files_changed={"foo.py"})

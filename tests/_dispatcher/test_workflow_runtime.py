@@ -1462,3 +1462,93 @@ def test_rebind_after_branch_switch_names_the_start_branch_and_recovers_after_sw
     assert "`git switch main`" in message
     git("switch", "main")
     assert restarted("task_rebind", task_window_id=producer, output_format="dict")["status"] == "rebound"
+
+
+def _producer_task(anchor, workflow_id):
+    anchor("new_session", name="workflow_takeover", inline=True, output_format="dict")
+    return anchor("task", "Produce exact report output", goal="Qualify report bytes", mode="planning",
+                  risk="low", rigor="direct", trust_domain="personal",
+                  in_scope=["notebooks/report.md"], constraints=["Managed artifacts only"],
+                  workflow_id=workflow_id, acceptance_criteria=["Report matches its contract"],
+                  output_format="dict")
+
+
+@pytest.mark.parametrize("planned", [False, True])
+def test_producer_stops_before_candidate_and_a_fresh_producer_takes_over(runtime, planned):
+    anchor, home, _, draft = runtime
+    if planned:
+        advance(anchor, "accept_plan")
+        artifact = home / "workspace/projects/alpha/notebooks/report.md"
+        artifact.parent.mkdir(exist_ok=True)
+        artifact.write_text("Partial\n")
+        anchor("touched", str(artifact), output_format="dict")
+    before = anchor("workflow", output_format="dict")["state"]
+    closure = anchor("status", output_format="dict")["operating_protocol"]["task_closure"]
+    assert closure["stop_with"] == ['anchor("learning", "safe_stop", status="blocked", reason="...")']
+
+    with pytest.raises(RuntimeError, match="would freeze this producer task"):
+        anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
+    stopped = anchor("learning", "safe_stop", status="blocked", reason="owner paused the work",
+                     output_format="dict")
+
+    record = stopped["terminal_task_record"]["record"]
+    assert record["terminal"]["status"] == "blocked" and record["learning_assessment"] is None
+    assert stopped["metrics"]["learning_assessed"] is False
+    assert stopped["accepted_task_closure"]["status"] == "closed"
+    assert stopped["operating_protocol"]["task_closure"]["closed_as"] == "blocked"
+    after = anchor("workflow", output_format="dict")["state"]
+    assert after["status"] == "active" and after["candidate"] is None
+    assert after["generation"] == before["generation"]
+    with pytest.raises(RuntimeError):
+        advance(anchor, "implemented")
+
+    _producer_task(anchor, draft["workflow_id"])
+    if planned:
+        # Plan admission belongs to the task that accepted the plan, so a taker-over first
+        # returns the unchanged plan to draft, then accepts it under its own authority.
+        with pytest.raises(RuntimeError, match="pre-plan artifact admission"):
+            advance(anchor, "implemented")
+        replanned = advance(anchor, "replan", plan=after["plan"], reason="producer stopped before implementing")
+        assert replanned["progress"] == "draft" and replanned["plan_sha256"] == after["plan_sha256"]
+    advance(anchor, "accept_plan")
+    artifact = home / "workspace/projects/alpha/notebooks/report.md"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_text("Result: 5\n")
+    anchor("touched", str(artifact), output_format="dict")
+    assert advance(anchor, "implemented")["progress"] == "implemented"
+
+
+def test_producer_with_a_candidate_still_needs_assessment_before_stopping(runtime):
+    anchor, *_ = runtime
+    implement(runtime)
+    closure = anchor("status", output_format="dict")["operating_protocol"]["task_closure"]
+    assert closure["stop_with"][0] == 'anchor("learning", "assess", outcome="...")'
+    with pytest.raises(RuntimeError, match="safe_stop requires a closed structured-learning assessment"):
+        anchor("learning", "safe_stop", status="blocked", reason="x", output_format="dict")
+
+
+@pytest.mark.parametrize("source_runtime", ["git", "databricks"], indirect=True)
+def test_source_producer_stops_only_after_restoring_its_edits_so_takeover_starts_clean(source_runtime):
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+
+    anchor, target, _ = source_runtime
+    provider = _SESSION_STATE.repository_provider
+    workflow_id = advance(anchor, "accept_plan")["workflow_id"]
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 3\n")
+    anchor("touched", "source.py", output_format="dict")
+    # Stopping now would strand uncommitted edits that no fresh producer may absorb.
+    with pytest.raises(RuntimeError, match=r"uncommitted source changes: source\.py.*task_rebind"):
+        anchor("learning", "safe_stop", status="blocked", reason="paused", output_format="dict")
+    assert anchor("status", output_format="dict")["operating_protocol"]["task_closure"]["state"] == "open"
+
+    (target / "source.py").write_text("VALUE = 1\n")
+    anchor("touched", "source.py", output_format="dict")  # restoring is an edit like any other
+    stopped = anchor("learning", "safe_stop", status="blocked", reason="paused", output_format="dict")
+    assert stopped["terminal_task_record"]["record"]["terminal"]["status"] == "blocked"
+
+    _fresh_producer(anchor, workflow_id, provider)
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    assert advance(anchor, "implemented")["progress"] == "implemented"

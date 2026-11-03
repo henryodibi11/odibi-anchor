@@ -351,6 +351,25 @@ def _next_operation(protocol: Mapping[str, Any]) -> dict[str, Any]:
                 "copy_ready": f"anchor({json.dumps(action)}{', ' if arguments else ''}{arguments})",
                 "reason": f"required lifecycle obligation: {required[0].get('id')}",
             }
+    closure = protocol.get("task_closure") or {}
+    if closure.get("execution_mode") == "read_only" and closure.get("complete_with") is None:
+        # Recorded file changes keep a read-only task from closing as completed.
+        reason = ("files changed under a read-only task, so it cannot close as completed; "
+                  "follow operating_protocol.task_closure.stop_with")
+        if len(closure["stop_with"]) > 1:
+            return _prepared_operation("learning.assess", reason)
+        return {
+            "status": "ready", "kind": "dispatcher_call", "action": "learning",
+            "args": ["safe_stop"], "kwargs": {},
+            "copy_ready": closure["stop_with"][0], "reason": reason,
+        }
+    if closure.get("execution_mode") == "read_only":
+        # Read-only work has no file checks or gate; its only lifecycle step is closure.
+        return _prepared_operation(
+            "learning.assess",
+            "when the read-only work is complete, learning assess closes this task as completed; "
+            "see operating_protocol.task_closure for stopping or resuming it instead",
+        )
     verification = {str(row.get("id", "")): row.get("status") for row in protocol.get("verification_obligations", ())}
     for obligation, action in (
         ("preflight", "preflight"),

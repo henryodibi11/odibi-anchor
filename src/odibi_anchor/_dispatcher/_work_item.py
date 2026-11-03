@@ -77,6 +77,9 @@ _MAX_FINDINGS = 64
 # rigor -> (approving reviews with distinct angles, adversarial angle required)
 _PLAN_RIGOR = {"direct": (1, False), "compact": (2, False), "full": (4, True)}
 _PENDING_APPROVAL_STATUSES = frozenset({"pending", "approval_required", "expired"})
+# Link metadata a completed or cancelled item may still correct; delivery content stays fixed.
+_AMENDABLE = ("problem_record", "specification", "pr_url")
+_MAX_REASON_CHARS = 4096
 
 _SECTION_NAMES = (
     "Outcome",
@@ -509,9 +512,14 @@ def work_item_action(
     work_item_id: str | None = None,
     output_format: str = "markdown",
     renderer: Callable[[str, dict[str, Any]], str] | None = None,
+    _task_window_id: str | None = None,
     **changes: Any,
 ) -> dict[str, Any] | str:
-    """Execute a local managed work-item lifecycle command."""
+    """Execute a local managed work-item lifecycle command.
+
+    ``_task_window_id`` is supplied by the dispatcher, never by callers, so an amendment
+    records the accepted task that made it.
+    """
     if output_format not in {"dict", "markdown"}:
         raise ValueError("output_format must be 'dict' or 'markdown'")
     command = str(args[0]).strip().lower() if args else "list"
@@ -607,7 +615,11 @@ def work_item_action(
             result = _context(record, path, record=record)
         elif command == "update":
             if record["status"] in _CLOSED_STATUSES:
-                raise ValueError(f"{record['status']} work items cannot be updated")
+                raise ValueError(
+                    f"{record['status']} work items cannot be updated; correct link metadata with "
+                    f"anchor(\"work_item\", \"amend\", \"{record['work_item_id']}\", "
+                    "problem_record=..., specification=..., pr_url=..., reason={...})"
+                )
             candidate = deepcopy(record)
             if "depends_on" in changes:
                 candidate["depends_on"] = _depends_on(changes.pop("depends_on"), record["work_item_id"])
@@ -666,6 +678,8 @@ def work_item_action(
             )
         elif command == "review":
             result = _review(record, path, changes)
+        elif command == "amend":
+            result = _amend(record, path, Path(artifact_root), changes, task_window_id=_task_window_id)
         elif command == "record_publish":
             result = _record_publish(record, path, changes)
         elif command == "close":
@@ -689,7 +703,7 @@ def work_item_action(
         else:
             raise ValueError(
                 "Unknown work_item sub-command. Valid: list, next, create, show, update, review, "
-                "request_plan_approval, preview, approve, record_publish, close"
+                "request_plan_approval, preview, approve, record_publish, close, amend"
             )
     if output_format == "dict":
         return result
@@ -924,6 +938,80 @@ def _review(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[
     _revise(candidate, f"Review recorded: {angle} {verdict}")
     _write(path, candidate)
     return _context(candidate, path, review=review, review_id=review["review_id"], write_performed=True)
+
+
+def _amend_value(artifact_root: Path, key: str, value: Any) -> str:
+    text = _one_line(value, key)
+    if not text:
+        return ""  # Clearing a wrong link is a correction too.
+    if key == "problem_record":
+        text = text.upper()
+        if re.fullmatch(r"PRB-\d{4}-\d{4}", text) is None:
+            raise ValueError("problem_record must match PRB-YYYY-NNNN")
+        if not (artifact_root.resolve() / "problems" / f"{text}.md").is_file():
+            raise ValueError(f"problem_record {text} does not exist")
+    elif key == "specification":
+        from odibi_anchor._dispatcher._spec import spec_path
+
+        spec_file = spec_path(artifact_root.resolve() / "specs", text)
+        if not spec_file.is_file():
+            raise ValueError(f"specification {spec_file.name} does not exist")
+        text = spec_file.name[: -len("_SPEC.md")]
+    else:
+        parts = urlsplit(text)
+        if parts.scheme != "https" or not parts.netloc:
+            raise ValueError("pr_url must be an https URL")
+    return text
+
+
+def _amend(
+    record: dict[str, Any], path: Path, artifact_root: Path, values: dict[str, Any], *, task_window_id: str | None,
+) -> dict[str, Any]:
+    """Correct link metadata on a completed or cancelled item, keeping status and delivery content."""
+    if record["status"] not in _CLOSED_STATUSES:
+        raise ValueError(f"amend applies to completed or cancelled work items; use update for a {record['status']} item")
+    reason = values.pop("reason", None)
+    unknown = sorted(set(values) - set(_AMENDABLE))
+    if unknown:
+        raise ValueError(
+            "amend accepts only link metadata (" + ", ".join(_AMENDABLE) + ") and reason; "
+            f"{', '.join(unknown)} cannot change after the item is {record['status']}"
+        )
+    if not values:
+        raise ValueError("amend requires at least one of: " + ", ".join(_AMENDABLE))
+    if not isinstance(reason, dict) or not reason:
+        raise ValueError("amend requires reason as a non-empty JSON object")
+    try:
+        encoded = json.dumps(reason, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reason must be JSON-serializable") from exc
+    if len(encoded) > _MAX_REASON_CHARS:
+        raise ValueError(f"reason must serialize to at most {_MAX_REASON_CHARS} characters")
+    requested = {key: _amend_value(artifact_root, key, value) for key, value in values.items()}
+    fields = {key: {"before": record[key], "after": after} for key, after in requested.items() if record[key] != after}
+    if not fields:
+        return _context(record, path, amended=False)
+    before = _fingerprint(record)
+    candidate = deepcopy(record)
+    for key, change in fields.items():
+        candidate[key] = change["after"]
+    after = _fingerprint(candidate)
+    # Reviews and approvals bind the old fingerprint; report the ones this amendment makes stale.
+    invalidated = {
+        "reviews": [r.get("review_id") for r in record["reviews"] if r.get("fingerprint") == before],
+        "plan_approvals": [
+            a.get("approval_id") for a in record["plan_approvals"] if _plan_approval_current(a, record, before)
+        ],
+        "publication_approvals": [a.get("approval_id") for a in record["approvals"] if a.get("fingerprint") == before],
+    }
+    amendment = {
+        "fields": fields, "reason": json.loads(encoded), "task_window_id": task_window_id,
+        "fingerprint_before": before, "fingerprint_after": after, "invalidated": invalidated,
+    }
+    _revise(candidate, f"Metadata amended after {record['status']}: " + ", ".join(fields))
+    candidate["revisions"][-1]["amendment"] = amendment
+    _write(path, candidate)
+    return _context(candidate, path, amended=True, amendment=amendment, write_performed=True)
 
 
 def _next(directory: Path) -> dict[str, Any]:

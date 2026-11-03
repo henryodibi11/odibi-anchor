@@ -800,11 +800,15 @@ def init(
         command = str(learning_args[0]).lower().strip() if learning_args else "list"
         if command == "safe_stop":
             from odibi_anchor._dispatcher._safe_stop import safe_stop_task
+            from odibi_anchor._dispatcher._workflow_runtime import producer_before_candidate
             return safe_stop_task(
                 status=learning_kwargs.get("status"), reason=learning_kwargs.get("reason"),
                 unavailable_evidence=learning_kwargs.get("unavailable_evidence"),
                 learning_project_id=_boot_result.project,
                 session_state=_SESSION_STATE, session_timings=_SESSION_TIMINGS,
+                pre_candidate_producer=producer_before_candidate(
+                    _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                ),
             )
 
         from odibi_anchor.codebase.structured_learning_context import (
@@ -1999,7 +2003,7 @@ def init(
             "checkpoint":   lambda: _checkpoint(*args, **kwargs),
             "spec":         lambda: __import__("odibi_anchor._dispatcher._spec", fromlist=["spec_action"]).spec_action(ROOT, *args, specs_dir=_pathlib.Path(_SESSION_STATE.artifact_root) / "specs", **kwargs),
             "problem":      lambda: __import__("odibi_anchor._dispatcher._problem", fromlist=["problem_action"]).problem_action(_SESSION_STATE.artifact_root, *args, project_id=_SESSION_STATE.active_project, **kwargs),
-            "work_item":    lambda: __import__("odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]).work_item_action(_SESSION_STATE.artifact_root, *args, **kwargs),
+            "work_item":    lambda: __import__("odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]).work_item_action(_SESSION_STATE.artifact_root, *args, **{**kwargs, "_task_window_id": _SESSION_STATE.task_window_id if _SESSION_STATE.active_task_profile is not None else None}),
 
             # ── Operational Evidence ──
             "incident_snapshot": lambda: __import__("odibi_anchor.operational", fromlist=["incident_snapshot"]).incident_snapshot(
