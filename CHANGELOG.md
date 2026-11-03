@@ -2,6 +2,45 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] - 2026-11-03
+
+### Fixed
+
+- Source workflows linked to a work item now require its current owner plan approval at
+  `accept_plan` (#62). Creation retains the planning task's work-item link; replans cannot
+  remove or substitute it. Admission reuses the existing approval, preserving its exact
+  fingerprint, dependencies, approved plan identity and assurance. Source-write admission
+  and candidate collection recheck it, covering measurement, review, qualification and
+  delivery preparation. Stale material/dependencies, changed approved spec bytes, blocking
+  reviews and insufficient approval rigor refuse progress. Recovery is explicit re-review/
+  owner approval, replan and reacceptance, with a fresh producer when its binding changed.
+  Legitimate unlinked workflows remain supported.
+- Work-item plan approvals retain their approved specification digest and recheck its bytes
+  after an owner response. Older approvals without the digest require renewal with `spec`
+  when the linked item names a specification; no history or assurance is backfilled.
+- Taking over an artifact workflow before a candidate no longer silently attributes a prior
+  producer's changed outputs to the new producer. Replan returns exact observations and
+  requires `artifact_adoption_sha256` to adopt them. The immutable event records prior
+  admission/baseline, adopting task, files, new plan and reason. Changed observations refuse
+  an old digest. Bytes are preserved; all measurements, review and gates remain owed.
+- Workflow pytest targets must be relative repository paths/node IDs, not external paths or
+  options. Measurement also refuses targets resolving outside the candidate target root.
+
+### Normal-use boundary and deferred work
+
+- Approval binds the exact managed work item/plan and spec, not a semantic proof that every
+  workflow criterion implements it. Scope/criterion sufficiency remains a review duty.
+  `check_plan` is structural readiness, not an owner-approval certificate.
+- Candidate/evidence identity includes runtime project/roots/trust, task and workflow plan,
+  repository revision/worktree bytes, test environment and exact review candidate. This is
+  bounded runtime observation, not universal host-attested execution or a filesystem lock.
+  Arbitrary commands/tests can consult external resources or imports. Agent findings remain
+  judgment with no authenticated reviewer identity; chat approvals retain their original
+  lower-assurance label. Authenticated host hooks/owner-message capture remain adapters.
+- No scheduling, concurrency, setup/retrieval redesign, agent_config/agent_context layout,
+  live Databricks deployment or data cleanup is included. Normal-use feedback should drive
+  any further nonblocking hardening; no broad new harness is introduced.
+
 ## [0.4.5] - 2026-11-03
 
 ### Added

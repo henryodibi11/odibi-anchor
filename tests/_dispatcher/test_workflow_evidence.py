@@ -24,6 +24,9 @@ from tests.codebase.test_task_authority import fresh_state, result, state
 def work(tmp_path, request):
     producer = state(tmp_path)
     producer.trust_domain = "personal"
+    # The authority fixture's WI identifier is only a serialization placeholder;
+    # these evidence-only workflows have no managed work-item plan.
+    producer.linked_work_item = None
     mode = getattr(request, "param", "source_change")
     producer.active_task_profile = normalize_task_profile(
         work_type="change", execution_mode=mode, risk="high", rigor="full",

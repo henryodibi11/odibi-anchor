@@ -253,6 +253,21 @@ def test_pending_approval_writes_nothing_and_returns_next_operations(tmp_path, o
     assert PENDING["approval_response"] in operations["complete_in_session"]
 
 
+def test_spec_changed_while_owner_responds_is_not_recorded_as_approved(tmp_path, monkeypatch):
+    spec_action(tmp_path, "create", name="PLAN", content="# Reviewed\n", specs_dir=tmp_path / "specs", output_format="dict")
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    review(tmp_path, item_id, "problem")
+
+    def respond(**kwargs):
+        (tmp_path / "specs/PLAN_SPEC.md").write_text("# Changed during wait\n")
+        return dict(APPROVED)
+
+    monkeypatch.setattr("odibi_anchor.owner_approval.request_owner_approval", respond)
+    with pytest.raises(ValueError, match="spec changed while approval was pending"):
+        call(tmp_path, "request_plan_approval", work_items=[item_id], rigor="direct", spec="PLAN")
+    assert call(tmp_path, "show", item_id)["plan_approvals"] == []
+
+
 def test_missing_spec_is_a_readiness_problem(tmp_path, owner):
     item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
     review(tmp_path, item_id, "problem")

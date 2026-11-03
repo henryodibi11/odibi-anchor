@@ -1052,7 +1052,8 @@ def _next(directory: Path) -> dict[str, Any]:
 
 
 def _plan_readiness_problems(
-    artifact_root: str | Path, items: list[tuple[str, dict[str, Any] | None]], rigor: str
+    artifact_root: str | Path, items: list[tuple[str, dict[str, Any] | None]], rigor: str,
+    *, allow_completed: bool = False,
 ) -> list[str]:
     problems: list[str] = []
     position = {work_item_id: index for index, (work_item_id, _) in enumerate(items)}
@@ -1061,7 +1062,7 @@ def _plan_readiness_problems(
         if record is None:
             problems.append(f"{work_item_id}: work item does not exist")
             continue
-        if record["status"] in _CLOSED_STATUSES:
+        if record["status"] in _CLOSED_STATUSES and not (allow_completed and record["status"] == "completed"):
             problems.append(f"{work_item_id}: status is {record['status']}; only open work items can be approved")
         for dependency in record["depends_on"]:
             if dependency in position:
@@ -1126,6 +1127,7 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     items = [(work_item_id, _parse(path) if path.is_file() else None) for work_item_id, path in zip(ids, paths, strict=True)]
     problems = _plan_readiness_problems(artifact_root, items, rigor)
     spec: dict[str, str] | None = None
+    spec_file: Path | None = None
     if values.get("spec") is not None:
         from odibi_anchor._dispatcher._spec import spec_path
 
@@ -1210,6 +1212,8 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     for (work_item_id, _, record), bound in zip(current, subject["work_items"], strict=True):
         if _fingerprint(record) != bound["fingerprint"] or record["depends_on"] != bound["depends_on"]:
             raise ValueError(f"{work_item_id} changed while approval was pending; request plan approval again")
+    if spec and spec_file and (not spec_file.is_file() or hashlib.sha256(spec_file.read_bytes()).hexdigest() != spec["sha256"]):
+        raise ValueError("spec changed while approval was pending; request plan approval again")
     approval_id = "WIP-" + uuid4().hex
     approved_at = _now()
     for work_item_id, path, record in current:
@@ -1219,6 +1223,7 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
             "fingerprint": _fingerprint(record),
             "depends_on": list(record["depends_on"]),
             "rigor": rigor,
+            "spec": deepcopy(spec),
             "owner": outcome.get("owner"),
             "assurance": outcome.get("assurance"),
             "authority_ref": outcome.get("authority_ref"),

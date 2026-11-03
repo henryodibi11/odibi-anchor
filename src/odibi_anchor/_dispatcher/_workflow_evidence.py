@@ -14,7 +14,7 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from odibi_anchor._dispatcher._workflow_admission import workflow_owner
+from odibi_anchor._dispatcher._workflow_admission import work_item_plan_approval, workflow_owner
 from odibi_anchor.codebase._workflow import WorkflowError, canonical, digest, read_workflow
 
 
@@ -325,6 +325,8 @@ def collect_candidate(path: str | Path, *, session_state: Any,
     if (binding.get("workflow_id") != workflow_id
             or binding.get("plan_sha256") != state["plan_sha256"]):
         raise WorkflowError("stale_plan", "producing task is not bound to this exact plan")
+    work_item_plan_approval(state, session_state=session_state,
+                            linked_work_item=record["task"].get("linked_work_item"))
     plan = state["plan"]
     validate_producer_policy(plan, TaskProfile.from_dict(record["task"]["profile"]))
     mode = plan["execution_mode"]
@@ -440,6 +442,14 @@ def _criterion_problems(plan: dict[str, Any]):
             if (not isinstance(targets, list) or not targets
                     or any(not isinstance(t, str) or not t.strip() for t in targets)):
                 yield "missing_evidence", f"{label}: pytest criterion requires explicit test_targets"
+            elif any(
+                target.startswith("-") or "\\" in target
+                or ":" in target.split("::", 1)[0]
+                or PurePosixPath(target.split("::", 1)[0]).is_absolute()
+                or ".." in PurePosixPath(target.split("::", 1)[0]).parts
+                for target in targets
+            ):
+                yield "out_of_scope", f"{label}: pytest test_targets must be relative paths under the target root, not options"
             expected_xfailed = criterion.get("expected_xfailed", 0)
             if type(expected_xfailed) is not int or expected_xfailed < 0:
                 yield "missing_evidence", f"{label}: pytest criterion expected_xfailed must be a nonnegative integer"

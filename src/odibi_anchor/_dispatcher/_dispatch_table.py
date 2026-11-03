@@ -779,11 +779,22 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'fix them all with check_plan first. Draft create, replan and status results '
         'also carry acceptance_check {ready, problems}. A producer task that states no risk '
         'inherits the plan risk; an explicit lower risk is refused.',
+        'Linked source plans retain plan.work_item from the planning task (or an explicit matching '
+        'WI-YYYY-NNNN). accept_plan reuses the item\'s current request_plan_approval record, '
+        'including exact fingerprint/dependencies, spec digest and assurance; no parallel approval. '
+        'Replan retains the link. Source writes and candidate/evidence collection recheck freshness. '
+        'On stale approval preserve work, refresh reviews/owner approval, replan and accept again '
+        'from a fresh producer where the task binding changed. Unlinked standalone plans remain '
+        'supported. check_plan is structural only; it does not certify owner approval.',
         'Artifact drafts retain a pre-plan byte/metadata baseline. Changed planned outputs '
         'cannot be admitted or laundered by registering them later. Ancillary planning notes '
-        'remain writable; historical missing baselines require recovery, not backfilling.',
+        'remain writable; historical missing baselines require recovery, not backfilling. '
+        'A takeover replan of changed prior-producer outputs requires explicit '
+        'artifact_adoption_sha256 from the refusal context after inspecting its exact observations. '
+        'Adoption retains prior admission, task, files and reason; it never grants passing evidence.',
         '`criteria`: unique id, expected and method. For method="pytest", test_targets is an '
-        'exact list; measure with anchor("test", target=[...], workflow_criterion="id", '
+        'exact list of relative paths/node IDs resolving inside the target root, never options '
+        'or external paths; measure with anchor("test", target=[...], workflow_criterion="id", '
         'output_format="dict"). A pytest criterion qualifies only with zero failed, errors, '
         'skipped and xpassed; optional expected_xfailed (nonnegative int, default 0) declares the '
         'exact xfailed count. For method="artifact_sha256", expected_sha256 maps every '
