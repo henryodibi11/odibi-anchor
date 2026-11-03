@@ -39,7 +39,8 @@ _REVIEW_BY_RIGOR: dict[str, dict[str, Any]] = {
 _PLANNING_RECORDS = [
     {"record": "problem", "how": 'anchor("problem", "create"|"update", ...) for the investigation'},
     {"record": "spec", "how": 'anchor("spec", "create", content=...) for the shared design'},
-    {"record": "work_items", "how": 'anchor("work_item", "create", ..., depends_on=[...]): one pull request each'},
+    {"record": "work_items",
+     "how": 'anchor("work_item", "create", ..., problem_record="PRB-...", depends_on=[...]): one pull request each'},
     {"record": "work_item_reviews",
      "how": 'anchor("work_item", "review", ...) with angle, verdict, findings and reviewer'},
     {"record": "plan_approval",

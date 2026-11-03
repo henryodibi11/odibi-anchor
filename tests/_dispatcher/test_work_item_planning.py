@@ -355,3 +355,111 @@ def test_real_owner_approval_completes_plan_in_session_without_a_remote_channel(
     stored = call(tmp_path, "show", item_id)["record"]["plan_approvals"][0]
     assert stored["assurance"] == "lower_assurance_single_user_chat_session_assertion"
     assert call(tmp_path, "next")["ready"][0]["plan_approval"]["approved"] is True
+
+
+def _completed_item_with_approved_plan(root, owner):
+    from odibi_anchor._dispatcher._problem import problem_action
+
+    problem_action(root, "create", title="Exports are slow", output_format="dict")
+    problem_action(root, "create", title="Imports are slow", output_format="dict")
+    spec_action(root, "create", name="PLAN", content="# Plan\n", specs_dir=Path(root) / "specs", output_format="dict")
+    item_id = call(
+        root, "create", title="Fix exports", outcome="Exports finish in time", scope="export path",
+        acceptance_criteria=["Exports finish"], problem_record="PRB-2026-0002",
+        # Recorded before review so closing leaves the reviewed fingerprint current.
+        implementation_disposition="implemented",
+    )["work_item_id"]
+    reviewed = review(root, item_id, "problem")
+    call(root, "request_plan_approval", work_items=[item_id], rigor="direct",
+         provider="chat_in_session", in_session_approval=APPROVED["approval_response"])
+    closed = call(root, "close", item_id, outcome="completed")
+    return item_id, reviewed["review_id"], closed
+
+
+def test_amend_corrects_links_on_a_completed_item_and_reports_invalidated_bindings(tmp_path, owner):
+    item_id, review_id, closed = _completed_item_with_approved_plan(tmp_path, owner)
+    path = Path(closed["artifact_path"])
+    approval_id = closed["plan_approval"]["approval_id"]
+    assert approval_id
+    revision = call(tmp_path, "show", item_id)["record"]["revision"]
+
+    amended = call(
+        tmp_path, "amend", item_id, problem_record="prb-2026-0001", specification="plan",
+        pr_url="https://github.com/org/repo/pull/7", reason={"why": "audit found the wrong Problem link"},
+    )
+
+    assert amended["amended"] is True and amended["status"] == "completed"
+    shown = call(tmp_path, "show", item_id)
+    record = shown["record"]
+    assert (record["problem_record"], record["specification"], record["pr_url"]) == (
+        "PRB-2026-0001", "PLAN", "https://github.com/org/repo/pull/7",
+    )
+    assert (record["title"], record["outcome"], record["scope"], record["acceptance_criteria"]) == (
+        "Fix exports", "Exports finish in time", "export path", ["Exports finish"],
+    )
+    assert record["implementation_disposition"] == "implemented"
+    assert shown["fingerprint"] != closed["fingerprint"]
+    entry = record["revisions"][-1]
+    assert entry["revision"] == record["revision"] == revision + 1
+    assert entry["change"].startswith("Metadata amended after completed")
+    amendment = entry["amendment"]
+    assert amendment["reason"] == {"why": "audit found the wrong Problem link"}
+    assert amendment["fields"]["problem_record"] == {"before": "PRB-2026-0002", "after": "PRB-2026-0001"}
+    assert amendment["fingerprint_before"] == closed["fingerprint"]
+    assert amendment["fingerprint_after"] == shown["fingerprint"]
+    assert amendment["invalidated"] == {
+        "reviews": [review_id], "plan_approvals": [approval_id], "publication_approvals": [],
+    }
+    assert [r["stale"] for r in shown["reviews"]] == [True]
+    assert shown["plan_approval"] == {"approved": False, "approval_id": None, "stale_approval_ids": [approval_id]}
+
+    before = path.read_bytes()
+    replay = call(
+        tmp_path, "amend", item_id, problem_record="PRB-2026-0001", specification="PLAN",
+        pr_url="https://github.com/org/repo/pull/7", reason={"why": "audit found the wrong Problem link"},
+    )
+    assert replay["amended"] is False and replay["write_performed"] is False
+    assert path.read_bytes() == before
+    cleared = call(tmp_path, "amend", item_id, pr_url="", reason={"why": "PR link belonged elsewhere"})
+    assert cleared["amendment"]["invalidated"] == {"reviews": [], "plan_approvals": [], "publication_approvals": []}
+    assert call(tmp_path, "show", item_id)["record"]["pr_url"] == ""
+
+
+@pytest.mark.parametrize(
+    "changes,match",
+    [
+        ({"scope": "wider", "reason": {"why": "x"}}, "scope cannot change after the item is completed"),
+        ({"outcome": "other", "reason": {"why": "x"}}, "outcome cannot change"),
+        ({"acceptance_criteria": ["other"], "reason": {"why": "x"}}, "acceptance_criteria cannot change"),
+        ({"implementation_disposition": "deferred", "reason": {"why": "x"}}, "implementation_disposition cannot"),
+        ({"status": "draft", "reason": {"why": "x"}}, "status cannot change"),
+        ({"reason": {"why": "x"}}, "requires at least one of"),
+        ({"pr_url": "https://x.test/1"}, "reason as a non-empty JSON object"),
+        ({"pr_url": "https://x.test/1", "reason": "text"}, "reason as a non-empty JSON object"),
+        ({"pr_url": "https://x.test/1", "reason": {}}, "reason as a non-empty JSON object"),
+        ({"problem_record": "PRB-2026-0099", "reason": {"why": "x"}}, "PRB-2026-0099 does not exist"),
+        ({"problem_record": "the export problem", "reason": {"why": "x"}}, "must match PRB-YYYY-NNNN"),
+        ({"specification": "MISSING", "reason": {"why": "x"}}, "MISSING_SPEC.md does not exist"),
+        ({"pr_url": "http://x.test/1", "reason": {"why": "x"}}, "https URL"),
+    ],
+)
+def test_amend_refuses_delivery_content_and_invalid_links_without_writing(tmp_path, owner, changes, match):
+    item_id, _, closed = _completed_item_with_approved_plan(tmp_path, owner)
+    path = Path(closed["artifact_path"])
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=match):
+        call(tmp_path, "amend", item_id, **changes)
+    assert path.read_bytes() == before
+
+
+def test_amend_applies_only_to_terminal_items_and_update_points_to_it(tmp_path):
+    item_id = call(tmp_path, "create", title="T", outcome="O")["work_item_id"]
+    with pytest.raises(ValueError, match="use update for a draft item"):
+        call(tmp_path, "amend", item_id, pr_url="https://x.test/1", reason={"why": "x"})
+    call(tmp_path, "close", item_id, outcome="cancelled", implementation_disposition="rejected")
+    with pytest.raises(ValueError, match=r'cancelled work items cannot be updated; correct link metadata with anchor\("work_item", "amend"'):
+        call(tmp_path, "update", item_id, pr_url="https://x.test/1")
+    amended = call(tmp_path, "amend", item_id, pr_url="https://x.test/1", reason={"why": "record the closing PR"})
+    shown = call(tmp_path, "show", item_id)
+    assert amended["status"] == shown["status"] == "cancelled"
+    assert shown["record"]["pr_url"] == "https://x.test/1"

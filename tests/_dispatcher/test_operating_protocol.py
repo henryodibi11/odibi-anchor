@@ -274,3 +274,22 @@ def test_public_task_renderer_renders_protocol_once():
     rendered = render_task_execution_report(context)
     assert rendered.count("## Operating Protocol v1") == 1
     assert rendered.count("### Verification obligations") == 1
+
+
+def test_task_closure_names_the_workflow_and_ignores_completion_without_a_task():
+    profile = normalize_task_profile(execution_mode="source_change")
+    producer = build_operating_protocol(
+        _state(profile, workflow_binding={"workflow_id": "wf_1"}, task_verification_epoch=0),
+        action="gate", session_timings=[{"action": "gate", "passed": True}],
+    )
+    assert producer["task_closure"]["workflow_id"] == "wf_1"
+    assert producer["task_closure"]["complete_with"] == ['anchor("learning", "assess", outcome="...")']
+    closed = build_operating_protocol(
+        _state(profile, terminal_status="completed", terminal_basis="gate_and_learning_committed"),
+        action="learning",
+    )
+    assert closed["phase"] == "terminal" and closed["required_now"] == []
+    assert closed["task_closure"]["closed_as"] == "completed"
+    # A completion restored from an earlier process never makes an idle runtime terminal.
+    idle = build_operating_protocol(_state(terminal_status="completed"), action="orient")
+    assert idle["phase"] == "bootstrap" and idle["task_closure"] is None

@@ -2,6 +2,56 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] - 2026-11-03
+
+### Added
+
+- `work_item amend` corrects link metadata on a completed or cancelled work item (#71). It
+  accepts only `problem_record` (an existing Problem), `specification` (an existing Spec) and
+  `pr_url` (an https URL), or `""` to clear a wrong link, plus a non-empty JSON-object
+  `reason`. Status, title, outcome, scope, acceptance criteria and disposition cannot change.
+  Each amendment appends a revision with the before and after values, the reason, the accepted
+  task that made it, both fingerprints, and the reviews, plan approvals and publication
+  approvals it made stale. Repeating it is a no-op. It needs a write-capable task, like
+  `update`, and no owner approval. `update` on a closed item now points to `amend`.
+- The operating protocol carries `task_closure` for the task this process holds: whether it is
+  open or closed (and closed as completed, blocked or failed), its remaining obligations, and
+  the calls that complete, stop or later resume it. `complete_with` is `learning assess` for a
+  read-only task, and `gate` then `learning assess` for a write-capable one. A workflow-bound
+  task also names its `workflow_id`; closing it does not complete the workflow.
+
+### Fixed
+
+- Agents left tasks open after finishing because nothing showed a task was still open. For an
+  open read-only task, `status` said the session was clean, the next
+  operation was `preflight`, and the contract said read-only tasks owe no learning, although
+  `learning assess` is what closes them. Now the read-only next operation is the closing call,
+  `status` names the open task instead of calling the session clean, and the contract's
+  terminal return reports whether the task was closed or left open.
+- After `learning assess` closed a task, the projection still reported it in progress. It now
+  reports the task closed, with no next operation.
+- A read-only task that never opened a learning obligation can stop with `learning safe_stop`
+  (`blocked` or `failed`) instead of having to close as completed. `safe_stop` is refused once
+  a task has closed as completed.
+- `work_item create` always accepted `problem_record`, but help and `prepare` did not show
+  it (#71). Help and the planning mode contract now show it, and `prepare` fills it from the
+  task's linked Problem when the caller does not supply one.
+
+### Verification boundary
+
+- Anchor enforces the closure calls, the refusals and the projection. Whether a final response
+  reports closure is guidance only; nothing enforces it. Tasks stay open across a restart until
+  they are rebound and closed, and `orient` lists them. Nothing closes tasks in bulk.
+- A read-only task that captured an observation still closes as completed when assessed, so it
+  cannot be stopped as blocked; its `task_closure.stop_with` is `null`. A read-only task under
+  which the runtime recorded file changes cannot close as completed; its `complete_with` is
+  `null` and its next operation is the stop call.
+- A workflow producer stopped before `workflow implemented` still cannot run the advertised
+  stop sequence: `learning assess` is refused before a candidate and `safe_stop` needs an
+  assessment. This existed before 0.4.5 and is unchanged.
+- Focused dispatcher, work-item and protocol tests and the affected suites pass. No existing
+  managed project or store was migrated, and no live host session was exercised.
+
 ## [0.4.4] - 2026-11-03
 
 ### Added

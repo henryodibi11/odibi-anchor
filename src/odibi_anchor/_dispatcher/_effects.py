@@ -540,7 +540,7 @@ def build_static_action_contracts(
             {"preview"},
             # request_plan_approval contacts the owner and records the approval, like
             # memory promotion's request_owner_activation.
-            {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"},
+            {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close", "amend"},
         ),
     )
     contracts["project"] = ActionContract(

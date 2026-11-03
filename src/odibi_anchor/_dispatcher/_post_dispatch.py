@@ -133,6 +133,7 @@ def _persist_terminal_task_if_ready(
             session_state=session_state, closure=result["accepted_task_closure"],
             terminal_status=retained["record"]["terminal"]["status"],
         )
+        _record_completed_closure(session_state, result["accepted_task_closure"], retained["record"]["terminal"])
         _snapshot_durable_state(
             result, memory_db=_ENV["memory_db"], enforce_retention=True,
         )
@@ -153,9 +154,19 @@ def _persist_terminal_task_if_ready(
     retire_completed_task_drift(
         session_state=session_state, closure=result["accepted_task_closure"], terminal_status=status,
     )
+    _record_completed_closure(session_state, result["accepted_task_closure"], record["terminal"])
     _snapshot_durable_state(
         result, memory_db=_ENV["memory_db"], enforce_retention=True,
     )
+
+
+def _record_completed_closure(session_state, closure, terminal) -> None:
+    """Let the lifecycle projection report a durably closed completed task as closed."""
+    if (terminal.get("status") == "completed"
+            and closure.get("status") in {"closed", "already_closed"}
+            and closure.get("task_window_id") == session_state.task_window_id):
+        session_state.terminal_status = "completed"
+        session_state.terminal_basis = terminal.get("basis")
 
 
 def _snapshot_durable_state(

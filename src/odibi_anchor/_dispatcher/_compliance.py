@@ -282,7 +282,15 @@ def _build_status_suggestions(obligations):
     if obligations:
         suggestions.append(f"MUST: Run anchor('{obligations[0].split(' ')[0]}')")
 
-    if not obligations:
+    task_open = (_SESSION_STATE.active_task_profile is not None
+                 and _SESSION_STATE.terminal_status not in {"completed", "blocked", "failed"})
+    if not obligations and task_open:
+        # Nothing pending now is not a closed task; never call an open task clean.
+        suggestions.append(
+            f"Task {_SESSION_STATE.task_window_id} is still open: close it when its work is complete "
+            "(operating_protocol.task_closure lists the closing, stopping and resume calls)."
+        )
+    elif not obligations:
         suggestions.append("Session clean — ready for delivery or next feature.")
 
     # Planning enforcement

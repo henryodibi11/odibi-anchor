@@ -252,6 +252,7 @@ def _required_and_recommended(
             else {"work_item_id": "selects the existing Work Item"}
         )
         recommended_fields = {
+            "problem_record": "links the Problem Record this work serves",
             "scope": "bounds implementation ownership",
             "non_goals": "prevents unrelated work",
             "acceptance_criteria": "defines verifiable completion",
@@ -397,6 +398,11 @@ def prepare_action(
             values["summary"] = task_goal
             prefills.append(_verified("summary", task_goal, "accepted_task_authority:v1"))
             required = [item for item in required if item["field"] != "summary"]
+    linked_problem = getattr(session_state, "linked_problem", None)
+    if canonical == "work_item.create" and linked_problem and not _nonempty(values, "problem_record"):
+        values["problem_record"] = linked_problem
+        prefills.append(_verified("problem_record", linked_problem, "accepted_task_authority:v1"))
+        recommended = [item for item in recommended if item["field"] != "problem_record"]
     if canonical == "handoff.prepare" and "state" not in values:
         values["state"] = "in_progress"
         prefills.append(_verified("state", "in_progress", "handoff_contract:v1"))

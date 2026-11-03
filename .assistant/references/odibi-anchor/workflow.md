@@ -1217,6 +1217,31 @@ an authenticated exception. For an intentional continuation after the prior task
 `new_session` and pass `continuation=True`; Anchor creates a fresh task window. That is
 replacement-task creation, not durable rebinding.
 
+### Close, stop, or hand off a task
+
+Saying "done" does not close a task. While a task is active, `operating_protocol.task_closure`
+reports its `task_window_id`, `state` (`open` or `closed`), the `remaining` obligations, and the
+exact calls for each ending:
+
+- **Completed and closed.** A read-only task closes with `anchor("learning", "assess", outcome=...)`;
+  it owes no file checks or gate. If the runtime recorded file changes under it, it cannot close
+  as completed: `complete_with` is `null` and only `stop_with` applies. A write-capable task closes when `learning assess` follows a
+  successful `gate`. Afterwards `task_closure.state` is `closed` with `closed_as="completed"`.
+- **Blocked and left open.** When work waits on the owner, an approval, or an external fact and
+  will resume, do not close it. Report `status: blocked`, the task window, its `remaining`
+  obligations and `resume_with` (`anchor('task_rebind', task_window_id=...)`) in the terminal return.
+- **Stopped.** When the task ends unfinished (owner cancelled it, it failed, or its scope moved
+  elsewhere), use `stop_with`: `anchor("learning", "safe_stop", status="blocked" or "failed",
+  reason="...")`, after `learning assess` where a learning obligation is open. A read-only task that
+  never opened one stops directly; once assessed without recorded changes it is closed as completed.
+
+Closing a producer, reviewer or delivery task never completes or cancels its workflow; the next
+stage runs in a fresh task bound to the same `workflow_id`. On resume, `orient` lists this owner's
+`open_tasks`: rebind the one that holds your work and finish, stop or report it. Never close an
+open task you do not own or understand to tidy the list, and never close unfinished work as
+completed. Anchor enforces the closure calls and the projection; that a final response reports
+them is instruction-only.
+
 ### Reference guidance
 
 `reference_guidance` entries are advisory; load relevant ones before technology decisions. Use
@@ -1248,6 +1273,9 @@ touched in line with what was actually verified. A status records evidence, not 
 - Work Item: `anchor("work_item", "update", "<id>", ...)` for remaining work;
   `anchor("work_item", "close", "<id>", outcome="completed" or "cancelled",
   implementation_disposition=...)` with a truthful disposition and any `reopening_triggers`.
+  Link its Problem at creation (`problem_record="PRB-..."`). A completed or cancelled item accepts
+  only `anchor("work_item", "amend", "<id>", problem_record=..., specification=..., pr_url=...,
+  reason={...})`; its status and delivery content stay unchanged.
 - `PROJECT.md`: edit status text in its body in place; never replace frontmatter or the file.
 
 Partial work stays open with the remaining work recorded; blocked work records its blocker;

@@ -14,7 +14,7 @@ _PROFILE_EFFECTS = ("read", "governance_write", "artifact_write", "source_write"
 _MUTATING_SELECTORS = {
     "problem": {"create", "update", "link_spec", "close"},
     "spec": {"create", "update", "done", "persist", "execute", "review", "from_problem"},
-    "work_item": {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close"},
+    "work_item": {"create", "update", "review", "request_plan_approval", "approve", "record_publish", "close", "amend"},
 }
 
 
@@ -71,10 +71,12 @@ def build_operating_protocol(
         or gate_satisfied
     )
     safe_terminal = getattr(session_state, "terminal_status", None)
+    # A completed closure is recorded only for the task this process holds.
+    closed_completed = profile is not None and safe_terminal == "completed"
 
     if stale:
         phase = "rebootstrap"
-    elif safe_terminal in {"blocked", "failed"}:
+    elif safe_terminal in {"blocked", "failed"} or closed_completed:
         phase = "terminal"
     elif learning_due:
         phase = "learning"
@@ -118,7 +120,7 @@ def build_operating_protocol(
             required.append({"id": "orient", "satisfy_with": {"route": "orient"}})
         else:
             required.append({"id": "start_session", "satisfy_with": {"route": "new_session"}})
-    else:
+    elif not closed_completed:
         skills, spec_disposition = _required_skills_and_spec(profile, session_state)
         loaded = set(getattr(session_state, "skills_loaded", set()))
         missing = sorted(set(skills) - loaded)[:20]
@@ -181,6 +183,8 @@ def build_operating_protocol(
         terminal = {"status": "rebootstrap_required", "basis": "routing_invalidated"}
     elif safe_terminal in {"blocked", "failed"}:
         terminal = {"status": safe_terminal, "basis": "safe_stop"}
+    elif closed_completed:
+        terminal = {"status": "ready", "basis": getattr(session_state, "terminal_basis", None) or "task_closed"}
     elif phase == "terminal":
         terminal = {"status": "ready", "basis": "gate_and_learning_committed"}
     elif learning_due:
@@ -199,7 +203,75 @@ def build_operating_protocol(
         },
         "verification_obligations": verification[:20],
         "terminal_return": terminal, "rebootstrap_required": stale,
+        "task_closure": _task_closure(
+            session_state, profile, terminal=terminal, required=required,
+            gate_satisfied=gate_satisfied, active_learning=active_learning,
+            closed_learning=closed_learning,
+        ),
     }
+
+
+_ASSESS = 'anchor("learning", "assess", outcome="...")'
+_SAFE_STOP = 'anchor("learning", "safe_stop", status="blocked", reason="...")'
+
+
+def _task_closure(
+    session_state: Any, profile: Any, *, terminal: Mapping[str, Any], required: Sequence[Mapping[str, Any]],
+    gate_satisfied: bool, active_learning: bool, closed_learning: bool,
+) -> dict[str, Any] | None:
+    """Project whether this process's task is still open and its mode-specific closing calls.
+
+    Informational: Anchor closes a task only through ``learning assess`` (completed) or
+    ``learning safe_stop`` (blocked or failed); this projection never closes anything.
+    """
+    if profile is None:
+        return None
+    window = getattr(session_state, "task_window_id", None)
+    binding = getattr(session_state, "workflow_binding", None)
+    base: dict[str, Any] = {
+        "task_window_id": window,
+        "execution_mode": profile.execution_mode,
+        "workflow_id": binding.get("workflow_id") if isinstance(binding, Mapping) else None,
+    }
+    if terminal.get("status") in {"ready", "blocked", "failed"}:
+        return {**base, "state": "closed",
+                "closed_as": "completed" if terminal["status"] == "ready" else terminal["status"]}
+    read_only = profile.execution_mode == "read_only"
+    remaining = [str(row.get("id")) for row in required]
+    if read_only and _files_changed():
+        # Assessment closes a read-only task as completed only when nothing changed
+        # (_persist_terminal_task_if_ready), so recorded changes leave only a truthful stop.
+        return {
+            **base, "state": "open", "remaining": [*remaining, "read_only_changes_recorded"],
+            "complete_with": None,
+            "stop_with": [_ASSESS, _SAFE_STOP] if active_learning else [_SAFE_STOP],
+            "resume_with": f"anchor('task_rebind', task_window_id={window!r})",
+        }
+    complete_with = []
+    if not read_only and not gate_satisfied:
+        remaining.append("task_window_gate")
+        complete_with.append('anchor("gate")')
+    if "learning_closure" not in remaining:
+        remaining.append("learning_closure")
+    complete_with.append(_ASSESS)
+    if read_only:
+        # Without an open learning obligation a read-only task stops directly; with one,
+        # assessment closes it as completed, so no truthful stop call is offered.
+        stop_with = None if active_learning else [_SAFE_STOP]
+    else:
+        stop_with = [_SAFE_STOP] if closed_learning and not active_learning else [_ASSESS, _SAFE_STOP]
+    return {
+        **base, "state": "open", "remaining": remaining,
+        "complete_with": complete_with, "stop_with": stop_with,
+        "resume_with": f"anchor('task_rebind', task_window_id={window!r})",
+    }
+
+
+def _files_changed() -> bool:
+    """Read the dispatcher's recorded file changes; the same set gates read-only completion."""
+    from odibi_anchor._utils._session_state import _SESSION_FILES_CHANGED
+
+    return bool(_SESSION_FILES_CHANGED)
 
 
 def _required_skills_and_spec(profile: Any, session_state: Any) -> tuple[tuple[str, ...], str | None]:
@@ -271,4 +343,16 @@ def render_operating_protocol(protocol: Mapping[str, Any], *, concise: bool = Fa
     )
     lines.extend(["", f"**Terminal:** `{protocol['terminal_return']['status']}` "
                   f"(`{protocol['terminal_return']['basis']}`)"])
+    closure = protocol.get("task_closure")
+    if closure and closure["state"] == "closed":
+        lines.append(f"**Task:** `{closure['task_window_id']}` closed as `{closure['closed_as']}`")
+    elif closure:
+        lines.append(
+            f"**Task:** `{closure['task_window_id']}` is open; remaining: "
+            + ", ".join(f"`{x}`" for x in closure["remaining"])
+            + "; complete with " + " then ".join(f"`{x}`" for x in closure["complete_with"])
+            + (" or stop with " + " then ".join(f"`{x}`" for x in closure["stop_with"])
+               if closure["stop_with"] else "")
+            + f"; resume later with `{closure['resume_with']}`"
+        )
     return "\n".join(lines)

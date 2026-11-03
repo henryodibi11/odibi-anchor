@@ -332,6 +332,23 @@ def test_handoff_prefills_verified_task_goal_without_guessing(owner) -> None:
     assert result["next_operation"]["kwargs"]["mode"] == "handoff"
 
 
+def test_work_item_preparation_links_the_task_problem_but_keeps_an_explicit_link(owner) -> None:
+    state, route = owner
+    state.linked_problem = "PRB-2026-0007"
+    inputs = {"title": "Harden parser", "outcome": "Malformed input is rejected"}
+    linked = prepare_action(state, operation="work_item.create", inputs=inputs, route_binding=route)
+    explicit = prepare_action(
+        state, operation="work_item.create", inputs={**inputs, "problem_record": "PRB-2026-0001"},
+        route_binding=route,
+    )
+    assert isinstance(linked, dict) and isinstance(explicit, dict)
+
+    assert linked["next_operation"]["kwargs"]["problem_record"] == "PRB-2026-0007"
+    assert {"field": "problem_record", "value": "PRB-2026-0007", "status": "verified",
+            "provenance": {"source": "accepted_task_authority:v1"}} in linked["prefilled_verified"]
+    assert explicit["next_operation"]["kwargs"]["problem_record"] == "PRB-2026-0001"
+
+
 def test_markdown_view_is_compact_and_actionable(owner) -> None:
     state, route = owner
     result = prepare_action(

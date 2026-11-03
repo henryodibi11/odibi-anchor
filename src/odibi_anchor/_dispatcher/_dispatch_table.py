@@ -46,7 +46,7 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "checkpoint":   'anchor("checkpoint", label="feature_name", learning_captures=[...], learning_assessment={"outcome": "..."})',
     "spec":         'anchor("spec")  # list | create | update | status | persist | from_problem | review | execute | done',
     "problem":      'anchor("problem")  # list | create | show | update | resume | link_spec | close',
-    "work_item":    'anchor("work_item")  # list | next | create | show | update | review | request_plan_approval | preview | approve | record_publish | close',
+    "work_item":    'anchor("work_item")  # list | next | create | show | update | review | request_plan_approval | preview | approve | record_publish | close | amend',
     "incident_snapshot": 'anchor("incident_snapshot", collectors=[...], problem_id="PRB-...")',
     "environment_diff": 'anchor("environment_diff", left, right)',
     "spark_diagnose": 'anchor("spark_diagnose", plan_text, query_profile={...})',
@@ -524,7 +524,10 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("problem", "resume", "PRB-2026-0001")',
     ],
     "work_item":    [
-        'anchor("work_item", "create", title="Ship export scaling", outcome="Reduce processing delay", depends_on=["WI-2026-0001"])',
+        'anchor("work_item", "create", title="Ship export scaling", outcome="Reduce processing delay", problem_record="PRB-2026-0001", depends_on=["WI-2026-0001"])',
+        'anchor("work_item", "amend", "WI-2026-0002", pr_url="https://github.com/org/repo/pull/7", reason={"why": "PR link missed at close"})  '
+        '# completed or cancelled items only: problem_record, specification and pr_url may change (an existing Problem/Spec, an https URL, or "" to clear); '
+        'status, scope, acceptance criteria and outcome stay fixed; the revision records the reason, task and invalidated reviews/approvals',
         'anchor("work_item", "review", "WI-2026-0002", angle="adversarial", verdict="approve", findings=[], reviewer_ref="task-123", expected_fingerprint="sha256:...")',
         'Review findings require summary and status (open|resolved); optional severity is blocking (default) or minor. '
         'Open minor findings are nonblocking only in approving reviews, and remain visible in show and plan approval. '
@@ -1100,6 +1103,7 @@ def build_help_text(
 # session).
 _SERVER_SUPPLIED: Mapping[str, frozenset[str]] = MappingProxyType({
     "workflow": frozenset({"path", "session_state"}),
+    "work_item": frozenset({"artifact_root", "_task_window_id"}),
     "gate": frozenset({
         "actions_taken", "files_changed", "files_created", "obligations_paid",
         "verification_record", "skip_timing_verification", "_timings_override",

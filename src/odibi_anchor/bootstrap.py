@@ -1999,7 +1999,7 @@ def init(
             "checkpoint":   lambda: _checkpoint(*args, **kwargs),
             "spec":         lambda: __import__("odibi_anchor._dispatcher._spec", fromlist=["spec_action"]).spec_action(ROOT, *args, specs_dir=_pathlib.Path(_SESSION_STATE.artifact_root) / "specs", **kwargs),
             "problem":      lambda: __import__("odibi_anchor._dispatcher._problem", fromlist=["problem_action"]).problem_action(_SESSION_STATE.artifact_root, *args, project_id=_SESSION_STATE.active_project, **kwargs),
-            "work_item":    lambda: __import__("odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]).work_item_action(_SESSION_STATE.artifact_root, *args, **kwargs),
+            "work_item":    lambda: __import__("odibi_anchor._dispatcher._work_item", fromlist=["work_item_action"]).work_item_action(_SESSION_STATE.artifact_root, *args, **{**kwargs, "_task_window_id": _SESSION_STATE.task_window_id if _SESSION_STATE.active_task_profile is not None else None}),
 
             # ── Operational Evidence ──
             "incident_snapshot": lambda: __import__("odibi_anchor.operational", fromlist=["incident_snapshot"]).incident_snapshot(

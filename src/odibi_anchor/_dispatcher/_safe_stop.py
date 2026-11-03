@@ -21,6 +21,10 @@ def safe_stop_task(
         raise TypeError("unavailable_evidence must be a list of non-empty strings")
     if session_state.active_task_profile is None:
         raise RuntimeError("safe_stop requires an accepted task")
+    if getattr(session_state, "terminal_status", None) == "completed":
+        raise RuntimeError(
+            "safe_stop is invalid for a task already closed as completed; report it as completed"
+        )
 
     from odibi_anchor.codebase.structured_learning_context import (
         active_learning_obligation,
@@ -37,7 +41,12 @@ def safe_stop_task(
             "anchor('learning', 'assess', outcome=...)"
         )
     closed = latest_closed_learning_obligation(**owner)
-    if closed is None or closed["status"] != "assessed":
+    # A read-only task owes no learning, so one that never opened an obligation stops
+    # directly; assessing it would close it as completed.
+    read_only_unassessed = (
+        closed is None and session_state.active_task_profile.execution_mode == "read_only"
+    )
+    if not read_only_unassessed and (closed is None or closed["status"] != "assessed"):
         raise RuntimeError(
             "safe_stop requires a closed structured-learning assessment; call "
             "anchor('learning', 'assess', outcome='nothing_reusable_learned') first"
@@ -68,10 +77,13 @@ def safe_stop_task(
         metrics={
             "terminal_status": status,
             "gate_passed": False,
-            "learning_assessed": True,
+            "learning_assessed": not read_only_unassessed,
             "unavailable_evidence_count": len(normalized_evidence),
         },
-        findings=["Structured learning assessment is closed."],
+        findings=[
+            "Read-only task stopped without a learning obligation." if read_only_unassessed
+            else "Structured learning assessment is closed."
+        ],
         risks=[f"Unavailable evidence: {item}" for item in normalized_evidence],
         samples={"unavailable_evidence": normalized_evidence},
         suggested_next_actions=[],
