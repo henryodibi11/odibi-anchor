@@ -1,6 +1,7 @@
 """Public workflow operations cannot launder caller evidence into qualification."""
 
 import hashlib
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -902,6 +903,9 @@ def test_public_git_candidate_requires_qualification_approval_and_exact_remote_r
         request_id="fixture-approval", response_message_id="fixture-response"))
     approved = advance(anchor, "request_delivery_approval")
     assert approved["progress"] == "approved_for_delivery" and not approved["completed"]
+    # The producer's learning assess already closed the change; approval opens no new learn debt (#73).
+    status = anchor("status", output_format="dict")
+    assert status["metrics"]["obligations_pending"] == 0, status["findings"]
     reads = []
     observed_head = "0" * 40
 
@@ -1274,3 +1278,187 @@ def test_data_only_exception_survives_context_canonical_handoff_and_exact_rebind
     assert packet["status"] == "unphased_unsupported_collector"
     assert packet["completed"] is False and packet["delivery_verified"] is False
     assert packet["compatibility_exception"]["source_effects_permitted"] is False
+
+
+def _produce_and_close(anchor, target, git, value, *, commit=True):
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text(value)
+    anchor("touched", "source.py", output_format="dict")
+    if commit:
+        git("add", "source.py")
+        git("commit", "-m", "candidate")
+    implemented = advance(anchor, "implemented")
+    anchor("test", target=["test_source.py"], workflow_criterion="constant", output_format="dict")
+    advance(anchor, "review", findings=[])
+    anchor("preflight", output_format="dict")
+    finish_producer(anchor)
+    return implemented
+
+
+def _fresh_producer(anchor, workflow_id, provider=None):
+    anchor("new_session", name="rework", inline=True, output_format="dict")
+    kwargs = {"repository_scope": ["source.py"], "accept_unknown_git_state": True} if provider else {}
+    anchor("task", "Revise candidate after review", goal="Make VALUE equal 2", mode="implementation",
+           risk="low", rigor="direct", trust_domain="personal", in_scope=["source.py"],
+           constraints=["Only source.py may change"], acceptance_criteria=["VALUE equals 2"],
+           workflow_id=workflow_id, output_format="dict", **kwargs)
+
+
+@pytest.mark.parametrize("source_runtime", ["git", "databricks"], indirect=True)
+def test_fresh_producer_recaptures_candidate_after_review_and_requalifies(source_runtime):
+    from odibi_anchor._utils._session_state import _SESSION_STATE
+
+    anchor, target, git = source_runtime
+    provider = _SESSION_STATE.repository_provider
+    advance(anchor, "accept_plan")
+    first = _produce_and_close(anchor, target, git, "VALUE = 2\n", commit=provider is None)
+    _fresh_producer(anchor, first["workflow_id"], provider)
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2  # revised after review\n")
+    anchor("touched", "source.py", output_format="dict")
+    # Git reports the stale candidate; Databricks refuses the unacknowledged write first.
+    with pytest.raises(RuntimeError, match=r"candidate changed since implementation|changed concurrently"):
+        advance(anchor, "qualify")
+    second = advance(anchor, "implemented")
+    # The new candidate drops every measurement and review of the old one; history names them.
+    assert second["candidate"]["producer"] == _SESSION_STATE.task_window_id != first["candidate"]["producer"]
+    assert second["candidate"]["baseline_task"] == first["candidate"]["producer"]
+    assert second["measurements"] == {} and second["review_result"] is None
+    assert second["superseded_candidates"] == [{
+        "candidate_sha256": digest_of(first["candidate"]), "producer": first["candidate"]["producer"],
+        "generation": second["generation"] - 1, "invalidated_measurements": ["constant"],
+        "invalidated_review": True}]
+    with pytest.raises(RuntimeError, match="review"):
+        advance(anchor, "qualify")
+    anchor("test", target=["test_source.py"], workflow_criterion="constant", output_format="dict")
+    advance(anchor, "review", findings=[])
+    with pytest.raises(RuntimeError, match="completed gate-and-learning"):
+        advance(anchor, "qualify")
+    anchor("preflight", output_format="dict")
+    terminal = finish_producer(anchor)
+    qualified = advance(anchor, "qualify")
+    assert qualified["progress"] == "qualified"
+    assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
+    assert anchor("status", output_format="dict")["metrics"]["obligations_pending"] == 0
+
+
+def digest_of(value):
+    from odibi_anchor.codebase._workflow import digest
+
+    return digest(value)
+
+
+def test_recaptured_candidate_still_measures_scope_from_plan_admission(source_runtime):
+    anchor, target, git = source_runtime
+    advance(anchor, "accept_plan")
+    first = _produce_and_close(anchor, target, git, "VALUE = 2\n")
+    # Out of band and outside source_paths: the fresh task's clean start must not launder it.
+    (target / "extra.py").write_text("X = 1\n")
+    git("add", "extra.py")
+    git("commit", "-m", "unplanned")
+    _fresh_producer(anchor, first["workflow_id"])
+    before = anchor("workflow", output_format="dict")["state"]
+    with pytest.raises(RuntimeError, match=r"extra\.py not in source_paths"):
+        advance(anchor, "implemented")
+    assert anchor("workflow", output_format="dict")["state"] == before
+
+
+def test_recapture_is_refused_while_the_candidate_producer_is_open(source_runtime, monkeypatch):
+    from odibi_anchor._utils._session_state import _SESSION_STATE, reset_session_state
+    from odibi_anchor.bootstrap import init
+
+    anchor, target, git = source_runtime
+    producer = _SESSION_STATE.task_window_id
+    advance(anchor, "accept_plan")
+    anchor("known_bad", changed_files=["source.py"], output_format="dict")
+    (target / "source.py").write_text("VALUE = 2\n")
+    anchor("touched", "source.py", output_format="dict")
+    git("add", "source.py")
+    git("commit", "-m", "candidate")
+    implemented = advance(anchor, "implemented")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    reset_session_state()
+    other, _, _ = init(root=str(target), project="alpha", output_format="dict")
+    other("orient", output_format="dict")
+    _fresh_producer(other, implemented["workflow_id"])
+    with pytest.raises(RuntimeError, match=re.escape(f"producer {producer} is still open")) as refused:
+        advance(other, "implemented")
+    assert refused.value.next_operations[0]["kwargs"] == {"task_window_id": producer}
+
+
+def test_wrong_workflow_binding_names_the_open_task_that_holds_it(source_runtime, monkeypatch):
+    from odibi_anchor._utils._session_state import _SESSION_STATE, reset_session_state
+    from odibi_anchor.bootstrap import init
+
+    anchor, target, _ = source_runtime
+    producer = _SESSION_STATE.task_window_id
+    state = anchor("workflow", output_format="dict")["state"]
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    reset_session_state()
+    other, _, _ = init(root=str(target), project="alpha", output_format="dict")
+    other("orient", output_format="dict")
+    other("new_session", name="coordinator", inline=True, output_format="dict")
+    other("task", "Inspect leftover workflows", goal="Decide which workflows to cancel",
+          mode="analysis", risk="low", rigor="direct", trust_domain="personal",
+          acceptance_criteria=["Each workflow's owner is known"], output_format="dict")
+
+    def cancel(caller):
+        return caller("workflow", "cancel", workflow_id=state["workflow_id"],
+                      expected_generation=state["generation"], request_id="cancel",
+                      reason="leftover fixture workflow", output_format="dict")
+
+    with pytest.raises(RuntimeError, match=re.escape(f"bound to open task {producer}")) as refused:
+        cancel(other)
+    assert [op["kwargs"] for op in refused.value.next_operations] == [{"task_window_id": producer}]
+    with pytest.raises(RuntimeError, match=re.escape(f"workflow={state['workflow_id']}")) as listed:
+        other("task_rebind", output_format="dict")
+    workflows = {item["task_window_id"]: item["workflow_id"] for item in listed.value.context["open_tasks"]}
+    assert workflows[producer] == state["workflow_id"] and set(workflows.values()) == {state["workflow_id"], "none"}
+    other("task_rebind", task_window_id=producer, output_format="dict")
+    assert cancel(other)["state"]["status"] == "cancelled"
+    with pytest.raises(RuntimeError, match="no open task is bound") as unbound:
+        other("workflow", "cancel", workflow_id="wf_" + "0" * 64, expected_generation=0,
+               request_id="cancel-missing", reason="absent", output_format="dict")
+    assert unbound.value.next_operations == []
+
+
+def test_orient_after_restart_routes_to_the_open_task_instead_of_a_new_session(source_runtime, monkeypatch):
+    from odibi_anchor._utils._session_state import _SESSION_STATE, reset_session_state
+    from odibi_anchor.bootstrap import init
+
+    anchor, target, _ = source_runtime
+    producer = _SESSION_STATE.task_window_id
+    advance(anchor, "accept_plan")
+    anchor("orient", output_format="dict")  # in-process orientation keeps the binding
+    assert _SESSION_STATE.task_window_id == producer and _SESSION_STATE.active_task_profile is not None
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    reset_session_state()
+    restarted, _, _ = init(root=str(target), project="alpha", output_format="dict")
+    oriented = restarted("orient", output_format="dict")
+    operation = oriented["envelope"]["next_operation"]
+    assert operation["copy_ready"] == f"anchor('task_rebind', task_window_id={producer!r})"
+    assert [item["task_window_id"] for item in oriented["open_tasks"]] == [producer]
+    restarted("task_rebind", task_window_id=producer, output_format="dict")
+    assert restarted("workflow", output_format="dict")["next_step"] == "implement"
+    assert "open_tasks" not in restarted("orient", output_format="dict")
+
+
+def test_rebind_after_branch_switch_names_the_start_branch_and_recovers_after_switching_back(
+        source_runtime, monkeypatch):
+    from odibi_anchor._utils._session_state import _SESSION_STATE, reset_session_state
+    from odibi_anchor.bootstrap import init
+
+    _, target, git = source_runtime
+    producer = _SESSION_STATE.task_window_id
+    start = git("rev-parse", "HEAD")
+    git("switch", "-c", "later-work")
+    monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+    reset_session_state()
+    restarted, _, _ = init(root=str(target), project="alpha", output_format="dict")
+    with pytest.raises(RuntimeError) as refused:
+        restarted("task_rebind", task_window_id=producer, output_format="dict")
+    message = str(refused.value)
+    assert f"started on branch main at {start}" in message and "now on later-work" in message
+    assert "`git switch main`" in message
+    git("switch", "main")
+    assert restarted("task_rebind", task_window_id=producer, output_format="dict")["status"] == "rebound"

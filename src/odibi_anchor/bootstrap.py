@@ -897,6 +897,24 @@ def init(
         _st = _parts.get("status") if isinstance(_parts.get("status"), dict) else {}
         _next = (_st.get("metrics") or {}).get("next_required_action")
         _summary = "Orientation: ran status + audit_history; task memory is deferred to acceptance."
+        # Orientation never changes task authority. After a restart the process holds no task,
+        # so point at the exact open task instead of a fresh session that would orphan it (#74).
+        _open_tasks = []
+        _rebind_operation = None
+        if _SESSION_STATE.active_task_profile is None:
+            from odibi_anchor._recovery import dispatcher_operation
+            from odibi_anchor.codebase._task_authority import open_task_summaries
+
+            _open_tasks = open_task_summaries(_DEFAULT_DB_PATH, session_state=_SESSION_STATE)
+            if _open_tasks:
+                _kwargs = ({"task_window_id": _open_tasks[0]["task_window_id"]} if len(_open_tasks) == 1 else {})
+                _rebind_operation = dispatcher_operation(
+                    "task_rebind", kwargs=_kwargs,
+                    reason="this process holds no task; rebind the interrupted open task before new work",
+                )
+                _next = _rebind_operation["copy_ready"]
+                _summary += (f" No task is active in this process; {len(_open_tasks)} open task(s) remain:"
+                             " rebind with task_rebind before starting a new session.")
         _artifact_contract = artifact_contract(artifact_root=_SESSION_STATE.artifact_root)
         _managed_artifact_actions = [
             {"artifact": item["path"], "absolute_path": item["absolute_path"],
@@ -926,6 +944,9 @@ def init(
             managed_artifact_actions=_managed_artifact_actions,
             capture_standards=_capture_standards,
         )
+        if _rebind_operation is not None:
+            ctx["open_tasks"] = _open_tasks
+            ctx["next_operation"] = _rebind_operation
         if _of == "markdown":
             _lines = ["# Orientation\n", f"**{_summary}**\n"]
             if _next:

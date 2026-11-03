@@ -943,6 +943,32 @@ def _capture_databricks_task_change_scope(
     )
 
 
+def _baseline_divergence(
+    git: _Git, baseline: Any, branch: str | None, head: str | None, cause: str,
+) -> str:
+    """Name the task's start branch and commit, where HEAD is now, and the one Git recovery."""
+    start = getattr(baseline, "task_start_head_sha", None)
+    message = (f"task repository baseline diverged: {cause}. The task started on branch "
+               f"{baseline.branch or '(detached)'} at {start or '(unborn, no commit)'}; the worktree "
+               f"is now on {branch or '(detached HEAD)'} at {head or '(no commit)'}.")
+    abandon = " so abandon (task_rebind abandon=True) is the remaining path."
+    if not baseline.branch:
+        return message + " The task started detached," + abandon
+    tip = _optional_commit(git, f"refs/heads/{baseline.branch}")
+    if start is None:
+        switch = f"git switch {baseline.branch}" if tip else f"git switch --orphan {baseline.branch}"
+    elif tip is None:
+        return message + f" Local branch {baseline.branch} no longer exists," + abandon
+    else:
+        git.run("merge-base", "--is-ancestor", start, tip, check=False)
+        if git.commands[-1]["exit_code"] != 0:
+            return message + f" Local branch {baseline.branch} no longer contains the start commit," + abandon
+        switch = f"git switch {baseline.branch}"
+    return message + (f" Local branch {baseline.branch} can still restore the task: with the owner's "
+                      f"approval run `{switch}` (commit or stash other work first), then retry; "
+                      "abandon only if that is not acceptable.")
+
+
 def capture_task_change_scope(
     baseline: TaskRepositoryBaseline | UnbornTaskRepositoryBaseline | DatabricksGitFolderTaskBaseline,
     acknowledged_fingerprints: Mapping[str, str] | None = None,
@@ -960,15 +986,17 @@ def capture_task_change_scope(
     )
     if snapshot.target_sha is None:
         raise RuntimeError("task configured target disappeared")
-    if snapshot.branch != baseline.branch:
-        raise RuntimeError("task repository baseline diverged: branch switched or detached")
     git = _Git(Path(baseline.target_worktree))
+    if snapshot.branch != baseline.branch:
+        raise RuntimeError(_baseline_divergence(
+            git, baseline, snapshot.branch, snapshot.head_sha, "branch switched or detached"))
     git.run(
         "merge-base", "--is-ancestor", baseline.task_start_head_sha, snapshot.head_sha,
         check=False,
     )
     if git.commands[-1]["exit_code"] != 0:
-        raise RuntimeError("task repository baseline diverged: HEAD is not a descendant of task start")
+        raise RuntimeError(_baseline_divergence(
+            git, baseline, snapshot.branch, snapshot.head_sha, "HEAD is not a descendant of task start"))
     target_drift = snapshot.target_sha != baseline.target_sha
     if target_drift:
         git.run("merge-base", "--is-ancestor", snapshot.target_sha, snapshot.head_sha,
@@ -1282,8 +1310,10 @@ def _capture_unborn_task_change_scope(
     """Capture conceptual-empty task scope without commit ancestry claims."""
     root, git = _task_git(baseline.target_worktree, baseline.configured_target_ref)
     version = git.run("--version").strip()
-    if _optional_branch(git) != baseline.branch:
-        raise RuntimeError("task repository baseline diverged: branch switched or detached")
+    current_branch = _optional_branch(git)
+    if current_branch != baseline.branch:
+        raise RuntimeError(_baseline_divergence(
+            git, baseline, current_branch, _optional_commit(git, "HEAD"), "branch switched or detached"))
 
     target_current = _optional_commit(git, f"refs/heads/{baseline.configured_target_ref}")
     staged, unstaged, untracked = _mutable_paths(git)

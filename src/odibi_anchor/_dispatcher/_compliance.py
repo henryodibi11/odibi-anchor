@@ -358,7 +358,8 @@ def _status(root, manifest, session_frame, session_context, *args, **kwargs) -> 
         obligations_pending.append("test (MUST before gate)")
     if has_any_changes and "gate" not in actions_run and not _checkpoint_ran:
         obligations_pending.append("gate (MUST before delivery)")
-    if has_any_changes and "learn" not in actions_run and not _checkpoint_ran:
+    # learning assess is the closure route too; counting only "learn" reopened a satisfied closure (#73).
+    if has_any_changes and not any(closure_satisfied(t) for t in _SESSION_TIMINGS) and not _checkpoint_ran:
         obligations_pending.append("learn (MUST after gate)")
 
     # ── Next required action (state-machine router) ──

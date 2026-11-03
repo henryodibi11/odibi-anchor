@@ -40,22 +40,7 @@ def _accepted_task(path, session_state, task_window_id, *, require_open=False):
         if not _matches_owner(record, _owner_identity(session_state), load_relocations(connection)):
             raise WorkflowError("wrong_authority", "workflow task belongs to another exact authority")
         if require_open:
-            tables = {item[0] for item in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            causes = []
-            if connection.execute(
-                "SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'",
-                (task_window_id,),
-            ).fetchone():
-                causes.append("the task is closed")
-            for table, cause in (
-                ("terminal_task_records", "the task has a terminal record (learning assess or safe_stop finished it)"),
-                ("learning_obligations", "a successful gate, learning capture or learning assess on this task "
-                                         "created a learning obligation"),
-            ):
-                if table in tables and connection.execute(
-                    f"SELECT 1 FROM {table} WHERE task_window_id=?", (task_window_id,),
-                ).fetchone():
-                    causes.append(cause)
+            causes = _closure_causes(connection, task_window_id)
             if causes:
                 raise WorkflowError(
                     "wrong_authority",
@@ -68,6 +53,46 @@ def _accepted_task(path, session_state, task_window_id, *, require_open=False):
         return record
     finally:
         connection.close()
+
+
+_CLOSED_CAUSES = ("the task is closed",
+                  "the task has a terminal record (learning assess or safe_stop finished it)")
+
+
+def _closure_causes(connection, task_window_id):
+    """Name why a task can no longer produce: closed, terminal, or frozen by learning."""
+    tables = {item[0] for item in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    causes = []
+    if connection.execute(
+        "SELECT 1 FROM accepted_task_events WHERE task_window_id=? AND event_type='closed'",
+        (task_window_id,),
+    ).fetchone():
+        causes.append(_CLOSED_CAUSES[0])
+    for table, cause in (
+        ("terminal_task_records", _CLOSED_CAUSES[1]),
+        ("learning_obligations", "a successful gate, learning capture or learning assess on this task "
+                                 "created a learning obligation"),
+    ):
+        if table in tables and connection.execute(
+            f"SELECT 1 FROM {table} WHERE task_window_id=?", (task_window_id,),
+        ).fetchone():
+            causes.append(cause)
+    return causes
+
+
+def task_closure_state(path, task_window_id):
+    """Return ``closed``, ``frozen`` (learning obligation, not closed) or ``open``; read-only."""
+    from odibi_anchor.codebase._task_authority import _connect, _verify_schema
+
+    connection = _connect(path, read_only=True)
+    try:
+        _verify_schema(connection)
+        causes = _closure_causes(connection, task_window_id)
+    finally:
+        connection.close()
+    if any(cause in _CLOSED_CAUSES for cause in causes):
+        return "closed"
+    return "frozen" if causes else "open"
 
 
 def collect_artifact_baseline(plan, *, session_state):
@@ -277,13 +302,25 @@ def planned_source_paths(path: str | Path, *, session_state: Any) -> frozenset[s
 
 
 def collect_candidate(path: str | Path, *, session_state: Any,
-                      workflow_id: str) -> dict[str, Any]:
-    """Read exact current bytes under the persisted producing task's authority."""
+                      workflow_id: str, recapture: bool = False) -> dict[str, Any]:
+    """Read exact current bytes under the persisted producing task's authority.
+
+    ``recapture`` re-establishes the candidate for the current (fresh) producer after
+    the prior producer closed. Its scope is still measured from the prior candidate's
+    baseline task, so every change since plan admission must stay inside the plan.
+    """
     from odibi_anchor.planning._task_profile import TaskProfile
 
     state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
-    producer = (state.get("candidate") or {}).get("producer") or session_state.task_window_id
+    prior = state.get("candidate") or {}
+    producer = prior.get("producer") or session_state.task_window_id
+    baseline_task = prior.get("baseline_task") or producer
+    if recapture:
+        if not prior:
+            raise WorkflowError("missing_evidence", "candidate recapture requires a prior candidate")
+        producer = session_state.task_window_id
     record = _accepted_task(path, session_state, producer)
+    base_record = record if baseline_task == producer else _accepted_task(path, session_state, baseline_task)
     binding = record["task"].get("workflow_binding") or {}
     if (binding.get("workflow_id") != workflow_id
             or binding.get("plan_sha256") != state["plan_sha256"]):
@@ -297,17 +334,20 @@ def collect_candidate(path: str | Path, *, session_state: Any,
         from odibi_anchor._repository_snapshot import capture_task_change_scope
         from odibi_anchor.codebase._task_authority import _restore_baseline
 
-        baseline = _restore_baseline(record.get("repository_baseline"), session_state.repository_provider)
+        baseline = _restore_baseline(base_record.get("repository_baseline"), session_state.repository_provider)
         if baseline is None:
             raise WorkflowError("unavailable", "source candidate requires accepted repository evidence")
         acknowledgements = session_state.task_repository_write_fingerprints
-        prior = state.get("candidate") or {}
-        if producer != session_state.task_window_id and prior.get("kind") == "databricks_git_folder":
+        current = producer == session_state.task_window_id
+        if (not current or baseline_task != producer) and prior.get("kind") == "databricks_git_folder":
+            # Writes acknowledged by the prior candidate, plus this producer's own writes.
             acknowledgements = {
                 name: "absent" if entry["final_sha256"] is None
                 else f"file:{entry['final_sha256']}:{entry['final_size']}"
                 for name, entry in prior["snapshot"]["content_changes"].items()
             }
+            if current:
+                acknowledgements.update(session_state.task_repository_write_fingerprints)
         scope = capture_task_change_scope(baseline, acknowledgements)
         allowed = _paths(plan, "source_paths")
         extra = sorted(set(scope.changed_paths) - set(allowed))
@@ -345,8 +385,8 @@ def collect_candidate(path: str | Path, *, session_state: Any,
         admission = state.get("admission") or {}
         admitted = admission.get("baseline", {}).get("artifact_observation")
         if (not baseline or baseline.get("plan_sha256") != state["plan_sha256"]
-                or admission.get("authority_ref") != "accepted_task:" + producer
-                or admission.get("baseline", {}).get("accepted_task_record") != record["record_id"]
+                or admission.get("authority_ref") != "accepted_task:" + baseline_task
+                or admission.get("baseline", {}).get("accepted_task_record") != base_record["record_id"]
                 or not matches_restored_baseline(path, state=state, owner=workflow_owner(session_state),
                                                 observed=admitted, historical=True)):
             raise WorkflowError("missing_evidence", "candidate lacks exact pre-plan artifact admission evidence")
@@ -363,8 +403,10 @@ def collect_candidate(path: str | Path, *, session_state: Any,
             snapshot[name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
     else:
         raise WorkflowError("unavailable", "this candidate kind has no supported content collector")
-    return {"kind": kind, "identity": digest(snapshot), "producer": producer,
-            "snapshot": snapshot}
+    candidate = {"kind": kind, "identity": digest(snapshot), "producer": producer, "snapshot": snapshot}
+    if baseline_task != producer:
+        candidate["baseline_task"] = baseline_task
+    return candidate
 
 
 COMMAND_MODES = frozenset({"source_change", "artifact_only", "data_change"})

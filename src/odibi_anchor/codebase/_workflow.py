@@ -363,6 +363,14 @@ def _apply(state: dict[str, Any], operation: str, payload: dict[str, Any]) -> di
         candidate = _object(payload.get("candidate"), "candidate")
         for key in ("kind", "identity", "producer"):
             _text(candidate.get(key), f"candidate.{key}")
+        if state["candidate"] is not None:
+            # The event chain keeps every prior byte; this names what a new candidate invalidated.
+            result.setdefault("superseded_candidates", []).append({
+                "candidate_sha256": digest(state["candidate"]),
+                "producer": state["candidate"]["producer"], "generation": state["generation"],
+                "invalidated_measurements": sorted(state.get("measurements") or {}),
+                "invalidated_review": state.get("review_result") is not None,
+            })
         result.update(progress="implemented", candidate=candidate, qualification=None,
                       approval=None, delivery=None, verification=None,
                       measurements={}, review_result=None)
