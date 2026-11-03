@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -258,13 +259,31 @@ def _task_closure(
         # Without an open learning obligation a read-only task stops directly; with one,
         # assessment closes it as completed, so no truthful stop call is offered.
         stop_with = None if active_learning else [_SAFE_STOP]
+    elif closed_learning and not active_learning:
+        stop_with = [_SAFE_STOP]
+    elif not active_learning and _producer_before_candidate(session_state):
+        # assess is refused here (it would freeze the producer), so the stop is direct.
+        stop_with = [_SAFE_STOP]
     else:
-        stop_with = [_SAFE_STOP] if closed_learning and not active_learning else [_ASSESS, _SAFE_STOP]
+        stop_with = [_ASSESS, _SAFE_STOP]
     return {
         **base, "state": "open", "remaining": remaining,
         "complete_with": complete_with, "stop_with": stop_with,
         "resume_with": f"anchor('task_rebind', task_window_id={window!r})",
     }
+
+
+def _producer_before_candidate(session_state: Any) -> bool:
+    """Read the bound workflow, as the safe_stop exception does; unknown reads as False."""
+    if not getattr(session_state, "workflow_binding", None):
+        return False
+    try:
+        from odibi_anchor._dispatcher._boot import _ENV
+        from odibi_anchor._dispatcher._workflow_runtime import producer_before_candidate
+
+        return producer_before_candidate(_ENV["memory_db"], session_state=session_state)
+    except (KeyError, OSError, RuntimeError, ValueError, sqlite3.Error):
+        return False
 
 
 def _files_changed() -> bool:

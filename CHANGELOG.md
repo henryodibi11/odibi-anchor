@@ -31,8 +31,18 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 - After `learning assess` closed a task, the projection still reported it in progress. It now
   reports the task closed, with no next operation.
 - A read-only task that never opened a learning obligation can stop with `learning safe_stop`
-  (`blocked` or `failed`) instead of having to close as completed. `safe_stop` is refused once
-  a task has closed as completed.
+  (`blocked` or `failed`) instead of having to close as completed.
+- A workflow producer could not stop before `workflow implemented`: `learning assess` was refused
+  because it would freeze the producer, and `safe_stop` demanded an assessment first. Such a
+  producer now stops directly with `learning safe_stop` as `blocked` or `failed`. Its terminal
+  record shows no learning assessment, the workflow stays active at the same generation, and a
+  fresh producer bound to it can take over. A source producer must first restore its own
+  uncommitted edits (the stop is refused and names them), because a stopped task's edits cannot
+  be adopted and a fresh producer needs a clean worktree. For an artifact-only plan the stopped
+  producer had accepted, the new producer runs `workflow replan` with the unchanged plan, then
+  `accept_plan`. A producer that already has a candidate, or has passed a gate, still assesses
+  before stopping.
+- `safe_stop` is refused once a task has closed as completed.
 - `work_item create` always accepted `problem_record`, but help and `prepare` did not show
   it (#71). Help and the planning mode contract now show it, and `prepare` fills it from the
   task's linked Problem when the caller does not supply one.
@@ -46,9 +56,9 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
   cannot be stopped as blocked; its `task_closure.stop_with` is `null`. A read-only task under
   which the runtime recorded file changes cannot close as completed; its `complete_with` is
   `null` and its next operation is the stop call.
-- A workflow producer stopped before `workflow implemented` still cannot run the advertised
-  stop sequence: `learning assess` is refused before a candidate and `safe_stop` needs an
-  assessment. This existed before 0.4.5 and is unchanged.
+- Artifact bytes left by a producer that stopped before its candidate stay in place. A fresh
+  producer's replan re-collects them as the admitted baseline, so they can end up in its
+  candidate; they are still measured, reviewed and gated there. This predates 0.4.5.
 - Focused dispatcher, work-item and protocol tests and the affected suites pass. No existing
   managed project or store was migrated, and no live host session was exercised.
 

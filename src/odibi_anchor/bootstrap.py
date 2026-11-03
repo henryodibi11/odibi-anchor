@@ -800,11 +800,15 @@ def init(
         command = str(learning_args[0]).lower().strip() if learning_args else "list"
         if command == "safe_stop":
             from odibi_anchor._dispatcher._safe_stop import safe_stop_task
+            from odibi_anchor._dispatcher._workflow_runtime import producer_before_candidate
             return safe_stop_task(
                 status=learning_kwargs.get("status"), reason=learning_kwargs.get("reason"),
                 unavailable_evidence=learning_kwargs.get("unavailable_evidence"),
                 learning_project_id=_boot_result.project,
                 session_state=_SESSION_STATE, session_timings=_SESSION_TIMINGS,
+                pre_candidate_producer=producer_before_candidate(
+                    _DEFAULT_DB_PATH, session_state=_SESSION_STATE,
+                ),
             )
 
         from odibi_anchor.codebase.structured_learning_context import (

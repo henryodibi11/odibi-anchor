@@ -293,20 +293,25 @@ def _wrong_binding(path, *, session_state, workflow_id):
                            ) for item in holders])
 
 
+def producer_before_candidate(path, *, session_state) -> bool:
+    """Whether this task produces an active workflow that has no implemented candidate yet."""
+    binding = getattr(session_state, "workflow_binding", None)
+    if not binding or "review_candidate_sha256" in binding:
+        return False
+    try:
+        state = bound_workflow(path, session_state=session_state)
+    except WorkflowError:
+        return False  # a stale or mismatched binding is recovered by closing this task
+    return state is not None and state["status"] == "active" and state["candidate"] is None
+
+
 def refuse_learning_before_candidate(path, *, session_state, command):
     """Refuse learning that would open an obligation on a producer before workflow implemented.
 
     A learning obligation freezes the task: accept_plan and implemented require an open
     task, so creating one first strands the workflow without a candidate.
     """
-    binding = getattr(session_state, "workflow_binding", None)
-    if not binding or "review_candidate_sha256" in binding:
-        return
-    try:
-        state = bound_workflow(path, session_state=session_state)
-    except WorkflowError:
-        return  # a stale or mismatched binding is recovered by closing this task
-    if state is None or state["status"] != "active" or state["candidate"] is not None:
+    if not producer_before_candidate(path, session_state=session_state):
         return
     raise WorkflowError(
         "learning_before_candidate",

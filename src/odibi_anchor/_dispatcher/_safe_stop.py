@@ -8,6 +8,7 @@ from typing import Any
 def safe_stop_task(
     *, status: str, reason: str, unavailable_evidence: list[str] | None,
     session_state: Any, session_timings: list[dict[str, Any]], learning_project_id: str,
+    pre_candidate_producer: bool = False,
 ) -> dict[str, Any]:
     """Close blocked or failed work without implying successful verification."""
     if status not in {"blocked", "failed"}:
@@ -41,11 +42,15 @@ def safe_stop_task(
             "anchor('learning', 'assess', outcome=...)"
         )
     closed = latest_closed_learning_obligation(**owner)
-    # A read-only task owes no learning, so one that never opened an obligation stops
-    # directly; assessing it would close it as completed.
-    read_only_unassessed = (
-        closed is None and session_state.active_task_profile.execution_mode == "read_only"
+    # Stopping directly needs a task that owes no learning: a read-only task that never
+    # opened an obligation (assessing would close it as completed), or a workflow producer
+    # before its candidate (assessing is refused because it would freeze the producer).
+    # The workflow itself is untouched, so a fresh producer can take it over.
+    read_only_unassessed = closed is None and (
+        session_state.active_task_profile.execution_mode == "read_only" or pre_candidate_producer
     )
+    if read_only_unassessed and pre_candidate_producer:
+        _refuse_stranded_source_edits(session_state)
     if not read_only_unassessed and (closed is None or closed["status"] != "assessed"):
         raise RuntimeError(
             "safe_stop requires a closed structured-learning assessment; call "
@@ -81,10 +86,39 @@ def safe_stop_task(
             "unavailable_evidence_count": len(normalized_evidence),
         },
         findings=[
-            "Read-only task stopped without a learning obligation." if read_only_unassessed
+            "Task stopped without a learning obligation; nothing was assessed." if read_only_unassessed
             else "Structured learning assessment is closed."
         ],
         risks=[f"Unavailable evidence: {item}" for item in normalized_evidence],
         samples={"unavailable_evidence": normalized_evidence},
         suggested_next_actions=[],
     )
+
+
+def _refuse_stranded_source_edits(session_state: Any) -> None:
+    """Keep a source producer open while its own edits differ from its start baseline.
+
+    A stopped task's uncommitted edits cannot be adopted, and a fresh source producer needs
+    a clean worktree, so stopping now would strand the workflow. Unknown state fails closed.
+    """
+    if session_state.active_task_profile.execution_mode != "source_change":
+        return
+    try:
+        from odibi_anchor._repository_snapshot import capture_task_change_scope
+
+        changed = list(capture_task_change_scope(
+            session_state.task_repository_baseline, session_state.task_repository_write_fingerprints,
+        ).changed_paths)
+    except Exception as exc:  # any unreadable state must not permit the stop
+        raise RuntimeError(
+            f"safe_stop cannot verify this producer's source changes ({type(exc).__name__}); keep the "
+            "task open and resume it later with anchor('task_rebind', task_window_id=...)"
+        ) from exc
+    if changed:
+        shown = ", ".join(changed[:10])
+        raise RuntimeError(
+            f"safe_stop would strand uncommitted source changes: {shown}. A fresh producer cannot "
+            "take over a dirty worktree and a stopped task's edits cannot be adopted. Restore these "
+            "files to the task's start state, then stop; or keep the task open and resume it later "
+            f"with anchor('task_rebind', task_window_id={session_state.task_window_id!r})."
+        )

@@ -1234,6 +1234,13 @@ exact calls for each ending:
   elsewhere), use `stop_with`: `anchor("learning", "safe_stop", status="blocked" or "failed",
   reason="...")`, after `learning assess` where a learning obligation is open. A read-only task that
   never opened one stops directly; once assessed without recorded changes it is closed as completed.
+  A workflow producer stopped before `workflow implemented` also stops directly (assessing it is
+  refused); the workflow stays active and a fresh producer bound to it can take over. A source
+  producer must first restore its own uncommitted edits (register each restore with `touched`),
+  or stay open for `task_rebind`, because
+  a stopped task's edits cannot be adopted. Artifact bytes it wrote stay in place and are measured
+  in any later candidate. For an artifact-only plan the stopped producer had accepted, the new
+  producer runs `workflow replan` with the unchanged plan and a reason, then `accept_plan`.
 
 Closing a producer, reviewer or delivery task never completes or cancels its workflow; the next
 stage runs in a fresh task bound to the same `workflow_id`. On resume, `orient` lists this owner's
