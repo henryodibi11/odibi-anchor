@@ -14,8 +14,24 @@ file edit.
 
 | Name | Signature | Role |
 | --- | --- | --- |
-| `preflight_context` | `(root, *, changed_files, check_types, check_lint, check_syntax, subject, output_format, baseline)` | Main builder — runs all checks and returns context dict or markdown |
+| `preflight_context` | `(root, *, changed_files, check_types, check_lint, check_syntax, subject, output_format, baseline, changed_line_ranges, created_paths, deleted_paths)` | Main builder — runs all checks and returns context dict or markdown |
 | `render_preflight_report` | `(ctx: dict) -> str` | Renders a preflight context dict as a markdown report |
+
+### Moves and deletions
+
+`anchor("preflight")` retains the complete authoritative task scope, including old
+rename paths and deletions. Explicit `changed_files` must still equal that full scope.
+Within a managed task, `changed_files=None` also selects that full task scope;
+the standalone builder keeps `None` as repository-wide discovery.
+The dispatcher supplies `deleted_paths` from Git or Databricks task evidence; this
+is not a caller override for narrowing a managed task.
+
+Only confirmed deletions that remain absent (not symlinks) are removed from checker
+inputs. Existing replacements and recreated files are checked; other missing paths
+are not silently dropped. A deletion-only task invokes no Python checker and never
+falls back to scanning the repository. `metrics.files_in_scope` counts the full
+inventory, `metrics.files_checked` counts selected Python checker inputs, and
+`samples.changed_files` / `samples.deleted_paths` retain scope and skipped deletions.
 
 ## Main Execution Flow
 
@@ -23,7 +39,7 @@ file edit.
 preflight_context(root, changed_files=["lib/extractor.py"])
 |
 |-- 1. validate_output_format(output_format)
-|-- 2. Resolve root to absolute Path; filter changed_files to .py files only
+|-- 2. Resolve root; retain full scope, then select .py files excluding confirmed absent deletions
 |-- 3. ast_cache_invalidate(fp)  <- called for every resolved file path
 |
 |-- 4. check_syntax=True  -> _check_syntax(file_paths)

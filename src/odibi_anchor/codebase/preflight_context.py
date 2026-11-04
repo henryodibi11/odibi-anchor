@@ -83,6 +83,7 @@ def preflight_context(
     baseline: set[str] | None = None,
     changed_line_ranges: tuple[Any, ...] | None = None,
     created_paths: tuple[str, ...] = (),
+    deleted_paths: tuple[str, ...] = (),
 ) -> dict[str, Any] | str:
     """Run pre-commit checks on changed files and return diagnostics.
 
@@ -99,6 +100,8 @@ def preflight_context(
         check_syntax: If True, verify files parse without SyntaxError.
         subject: Human label. Defaults to directory name.
         output_format: "dict" or "markdown".
+        deleted_paths: Authoritative task deletions. Only still-absent paths
+            are excluded from checker inputs, never from the scope inventory.
 
     Returns:
         Structured context dict (or markdown string).
@@ -111,10 +114,19 @@ def preflight_context(
 
     # None means repository-wide scope. An explicit empty or non-Python scope
     # intentionally has no applicable files and must never fall back to the root.
-    file_paths = (
-        [root / f for f in changed_files if str(f).lower().endswith(".py")]
+    scope_paths = (
+        [root / f for f in changed_files]
         if explicit_scope else _find_py_files(root)
     )
+    deleted = {root / f for f in deleted_paths}
+    skipped_deletions = {
+        fp for fp in scope_paths
+        if fp in deleted and not fp.exists() and not fp.is_symlink()
+    }
+    file_paths = [
+        fp for fp in scope_paths
+        if fp.suffix.lower() == ".py" and fp not in skipped_deletions
+    ]
 
     # Invalidate cache for changed files so downstream tools see fresh content
     for fp in file_paths:
@@ -173,6 +185,7 @@ def preflight_context(
 
     metrics = {
         "files_checked": len(file_paths),
+        "files_in_scope": len(scope_paths),
         "scope": "explicit" if explicit_scope else "repository",
         "total_diagnostics": len(diagnostics),
         "errors": len(errors),
@@ -303,7 +316,12 @@ def preflight_context(
         metrics=metrics,
         findings=findings,
         risks=risks,
-        samples={},
+        samples={
+            "changed_files": [str(f) for f in changed_files] if explicit_scope else [
+                str(fp.relative_to(root)) for fp in scope_paths
+            ],
+            "deleted_paths": sorted(str(f) for f in deleted_paths if root / f in skipped_deletions),
+        },
         suggested_next_actions=suggested_actions,
         diagnostics=returned_diagnostics,
         passed=is_safe,
