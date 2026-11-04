@@ -127,6 +127,8 @@ def test_missing_legacy_binding_does_not_create_workflow_or_prior_evidence(tmp_p
 
 @pytest.mark.parametrize("missing", [["project"], ["trust_domain"], ["project", "trust_domain"]])
 def test_workflow_context_refusal_identifies_missing_authority(runtime, missing):
+    from odibi_anchor._dispatcher._request_adapter import error_information
+
     db, session = runtime
     before = db.read_bytes()
     for name in missing:
@@ -134,12 +136,13 @@ def test_workflow_context_refusal_identifies_missing_authority(runtime, missing)
     with pytest.raises(WorkflowError, match=f"missing: {', '.join(missing)}") as caught:
         workflow_owner(session)
     assert caught.value.code == "unavailable"
-    assert caught.value.error_code == "workflow_context_required"
-    assert caught.value.context == {"missing_authority": missing, "automatic_project_creation": False}
+    error = error_information(caught.value)
+    assert error["error_code"] == "workflow_context_required"
+    assert error["context"] == {"missing_authority": missing, "automatic_project_creation": False}
     assert "fresh read-only task" in str(caught.value)
     assert "task_rebind" in str(caught.value)
-    assert caught.value.next_operation["action"] == "help"
-    assert caught.value.next_operation["args"] == ["workflow"]
+    assert error["next_operation"]["action"] == "help"
+    assert error["next_operation"]["args"] == ["workflow"]
     assert db.read_bytes() == before
 
 

@@ -2046,7 +2046,9 @@ class TestTypedTools:
 
         def call(tool, **arguments):
             result = asyncio.run(mcp_server.mcp.call_tool(tool, arguments))
-            return json.loads(result.content[0].text)
+            block = result.content[0]
+            assert block.type == "text"
+            return json.loads(block.text)
 
         monkeypatch.delenv("ANCHOR_TRUST_DOMAIN", raising=False)
         if context == "environment":
