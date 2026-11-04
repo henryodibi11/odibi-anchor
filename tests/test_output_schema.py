@@ -15,19 +15,10 @@ Run:
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
-
-ROOT = str(Path(__file__).resolve().parent.parent)
-sys.path.insert(0, os.path.join(ROOT, "src"))
-
-# Force clean imports
-for key in list(sys.modules.keys()):
-    if "odibi_anchor" in key:
-        del sys.modules[key]
 
 from odibi_anchor.planning import (
     task_execution_context,
@@ -57,6 +48,8 @@ from odibi_anchor.codebase import (
     workflow_gate_context,
     framework_lookup_context,
 )
+
+ROOT = str(Path(__file__).resolve().parent.parent)
 
 # ---------------------------------------------------------------------------
 # Standard contract definition
