@@ -1469,6 +1469,11 @@ def capture_repository_snapshot(
         git.run("merge-tree", "--write-tree", target, head, check=False)
         code = git.commands[-1]["exit_code"]
         conflict = "clear" if code == 0 else "conflict" if code == 1 else "unknown"
+    # Compare the baseline to the current tree without rename collapsing: old
+    # rename identities and empty files must be accounted for as deletions too.
+    deleted_paths = _paths(git.run_bytes(
+        "diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", base, "--",
+    ), root) if base else ()
     captured = datetime.now(timezone.utc).isoformat()
     index_fingerprint = _index_fingerprint(git)
     provenance = {
@@ -1482,6 +1487,7 @@ def capture_repository_snapshot(
         "worktree_fingerprint": _source_state_fingerprint(root, changed),
         "managed_fingerprint": _fingerprint(root, _managed_paths(root, tuple(sorted(classified)))),
         "deleted_line_counts": deleted_lines,
+        "deleted_paths": deleted_paths,
     }
     return RepositorySnapshot(1, str(root), branch, head, configured_target_ref, target, base,
                               committed_range, staged, unstaged, untracked, changed,

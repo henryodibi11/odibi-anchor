@@ -113,6 +113,62 @@ def test_aggregate_committed_staged_unstaged_untracked_and_ranges(repository: Pa
         ("a.py", 2, 2), ("new.txt", 1, 2)}
 
 
+@pytest.mark.parametrize("state", ["unstaged", "staged", "committed"])
+def test_preflight_accounts_for_git_deletions_and_checks_rename_destination(
+    repository: Path, state: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from odibi_anchor._dispatcher._gate_wrappers import preflight_with_baseline
+    from odibi_anchor._repository_snapshot import (
+        capture_task_change_scope,
+        capture_task_repository_baseline,
+    )
+    from odibi_anchor.codebase.preflight_context import preflight_context
+
+    # Empty deletions have no hunk ranges; renames must retain the old identity.
+    (repository / "empty.py").touch()
+    (repository / "unrelated.py").write_text("VALUE = unrelated_missing_name\n", encoding="utf-8")
+    git(repository, "add", ".")
+    git(repository, "commit", "-m", "empty file baseline")
+    baseline = capture_task_repository_baseline(repository, "main")
+    (repository / "a.py").rename(repository / "moved.py")
+    (repository / "empty.py").unlink()
+    if state != "unstaged":
+        git(repository, "add", "-A")
+    if state == "committed":
+        git(repository, "commit", "-m", "move and delete")
+
+    scope = capture_task_change_scope(baseline)
+    assert scope.changed_paths == ("a.py", "empty.py", "moved.py")
+    assert scope.provenance["deleted_paths"] == ("a.py", "empty.py")
+    kwargs = dict(
+        session_frame=None, frame_enabled=False, session_files_changed=set(),
+        preflight_fn=preflight_context,
+        session_state=SimpleNamespace(task_repository_baseline=baseline),
+    )
+    result = preflight_with_baseline(repository, {}, **kwargs)
+    assert result["passed"] is True
+    assert result["metrics"]["files_checked"] == 1
+    assert result["metrics"]["files_in_scope"] == 3
+    assert result["samples"]["deleted_paths"] == ["a.py", "empty.py"]
+    assert result["samples"]["changed_files"] == list(scope.changed_paths)
+
+    result = preflight_with_baseline(repository, {"changed_files": None}, **kwargs)
+    assert result["passed"] is True
+    assert result["metrics"]["scope"] == "explicit"
+    assert result["samples"]["changed_files"] == list(scope.changed_paths)
+
+    with pytest.raises(RuntimeError, match="full task scope"):
+        preflight_with_baseline(repository, {"changed_files": ["moved.py"]}, **kwargs)
+
+    (repository / "moved.py").write_text("VALUE = missing_name\n", encoding="utf-8")
+    result = preflight_with_baseline(repository, {}, **kwargs)
+    assert result["passed"] is False
+    assert any(d["rule"] == "F821" for d in result["diagnostics"])
+    assert not any(d["rule"] == "E902" for d in result["diagnostics"])
+
+
 def test_task_scope_unions_committed_staged_unstaged_untracked(repository: Path) -> None:
     baseline = capture_task_repository_baseline(repository, "main")
     (repository / "committed.py").write_text("COMMITTED = 1\n", encoding="utf-8")
@@ -856,13 +912,22 @@ def test_databricks_drift_guidance_is_bounded_and_preserves_non_python_message(
 def test_databricks_scope_tracks_acknowledged_create_edit_and_delete(
     tmp_path: Path,
 ) -> None:
+    from odibi_anchor._repository_snapshot import (
+        DatabricksTaskChangeScope,
+        acknowledge_databricks_task_writes,
+        capture_databricks_git_folder_task_baseline,
+        capture_task_change_scope,
+        task_scope_review_diff,
+    )
+
     provider = StubDatabricksRepositoryProvider()
     (tmp_path / "edit.py").write_text("OLD = 1\n", encoding="utf-8")
     (tmp_path / "delete.py").write_bytes(b"delete me\n")
-    baseline = capture_databricks_baseline(
+    baseline = capture_databricks_git_folder_task_baseline(
         tmp_path,
         provider,
         ["edit.py", "delete.py", "create.py"],
+        accept_unknown_git_state=True,
     )
 
     (tmp_path / "edit.py").write_text("NEW = 2\n", encoding="utf-8")
@@ -891,6 +956,25 @@ def test_databricks_scope_tracks_acknowledged_create_edit_and_delete(
     assert review["metrics"]["repository_capabilities"]["git_changed_paths_and_diff"] == "unavailable"
     assert review["samples"]["per_file"]["create.py"]["status"] == "created"
     assert review["samples"]["per_file"]["delete.py"]["status"] == "deleted"
+
+    from types import SimpleNamespace
+
+    from odibi_anchor._dispatcher._gate_wrappers import preflight_with_baseline
+    from odibi_anchor.codebase.preflight_context import preflight_context
+
+    result = preflight_with_baseline(
+        tmp_path, {}, session_frame=None, frame_enabled=False,
+        session_files_changed=set(), preflight_fn=preflight_context,
+        session_state=SimpleNamespace(
+            task_repository_baseline=baseline,
+            task_repository_write_fingerprints=fingerprints,
+        ),
+    )
+    assert result["passed"] is True
+    assert result["metrics"]["scope_source"] == "databricks_git_folder"
+    assert result["metrics"]["files_in_scope"] == 3
+    assert result["metrics"]["files_checked"] == 2
+    assert result["samples"]["deleted_paths"] == ["delete.py"]
 
 
 @pytest.mark.parametrize("absolute_scope", [

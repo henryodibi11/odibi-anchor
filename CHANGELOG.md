@@ -2,6 +2,20 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.9] - 2026-11-04
+
+### Fixed
+
+- Preflight retains the full task scope while excluding authoritative, still-absent
+  deletions from Python checker inputs. Git evidence includes old rename identities
+  and empty-file deletions; Databricks uses its existing task deletion provenance.
+  Existing replacements and recreated paths remain checked, other missing paths are
+  not silently ignored, and deletion-only scope never falls back to a repository scan.
+  Results distinguish full scope size from Python checker inputs and retain the
+  changed-path inventory and skipped deletions. Full-scope enforcement is unchanged.
+  Explicit `changed_files=None` now selects the full managed task scope rather than
+  switching to repository-wide discovery; standalone builder discovery is unchanged.
+
 ## [0.4.8] - 2026-11-04
 
 ### Fixed

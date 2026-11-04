@@ -34,8 +34,9 @@ def preflight_with_baseline(
         task_scope = capture_task_change_scope(
             baseline, getattr(session_state, "task_repository_write_fingerprints", {}),
         )
-    # Inject changed_files default from Git scope; ledger remains provenance only.
-    if "changed_files" not in kwargs:
+    # A managed task's None scope also means its complete authoritative scope,
+    # never a repository-wide scan. The ledger remains provenance only.
+    if "changed_files" not in kwargs or (task_scope is not None and kwargs.get("changed_files") is None):
         kwargs["changed_files"] = sorted(
             task_scope.changed_paths if task_scope is not None else session_files_changed
         )
@@ -45,6 +46,7 @@ def preflight_with_baseline(
             raise RuntimeError("explicit preflight changed_files must equal the full task scope")
         kwargs["changed_line_ranges"] = task_scope.changed_line_ranges
         kwargs["created_paths"] = tuple(task_scope.provenance.get("created_paths", ()))
+        kwargs["deleted_paths"] = tuple(task_scope.provenance.get("deleted_paths", ()))
 
     _pf_result = preflight_fn(root, **kwargs)
     if isinstance(_pf_result, dict) and task_scope is not None:

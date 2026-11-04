@@ -195,6 +195,35 @@ class TestGracefulDegradation:
         assert "No applicable Python" in " ".join(ctx["findings"])
         assert not ctx["risks"]
 
+    def test_deletion_only_scope_never_checks_unrelated_files(self, tmp_path):
+        (tmp_path / "unrelated.py").write_text("not valid python !!!\n")
+        with patch("odibi_anchor.codebase.preflight_context.subprocess.run") as run:
+            ctx = preflight_context(
+                tmp_path, changed_files=["deleted.py"],
+                deleted_paths=("deleted.py",), check_types=True,
+            )
+        run.assert_not_called()
+        assert isinstance(ctx, dict)
+        assert ctx["passed"] is True
+        assert ctx["metrics"]["files_in_scope"] == 1
+        assert ctx["metrics"]["files_checked"] == 0
+        assert ctx["samples"]["deleted_paths"] == ["deleted.py"]
+
+    def test_deletion_evidence_neither_hides_missing_files_nor_recreated_files(self, tmp_path):
+        (tmp_path / "recreated.py").write_text("VALUE = missing_name\n")
+        ctx = preflight_context(
+            tmp_path, changed_files=["deleted.py", "missing.py", "recreated.py"],
+            deleted_paths=("deleted.py", "recreated.py"),
+        )
+        assert isinstance(ctx, dict)
+        assert ctx["passed"] is False
+        assert ctx["metrics"]["files_checked"] == 2
+        assert ctx["metrics"]["files_in_scope"] == 3
+        assert ctx["samples"]["deleted_paths"] == ["deleted.py"]
+        assert {(d["rule"], d["file"].rsplit("/", 1)[-1]) for d in ctx["diagnostics"]} == {
+            ("E902", "missing.py"), ("F821", "recreated.py"),
+        }
+
     def test_mixed_scope_passes_only_python_files(self, tmp_path):
         (tmp_path / "x.py").write_text("x = 1\n")
         ruff = Mock(return_value=[])
