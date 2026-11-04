@@ -90,8 +90,27 @@ def workflow_owner(session_state: Any) -> dict[str, str]:
         if not value:
             raise WorkflowError("unavailable", f"workflow requires runtime {key}")
         result[key] = str(Path(value).resolve())
-    if not all(isinstance(value, str) and value.strip() for value in result.values()):
-        raise WorkflowError("unavailable", "workflow requires explicit project and trust domain")
+    missing = [name for name, value in (
+        ("project", result["project_id"]), ("trust_domain", result["trust_domain"]),
+    ) if not isinstance(value, str) or not value.strip()]
+    if missing:
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+
+        raise attach_recovery(WorkflowError(
+            "unavailable", "workflow requires explicit project and trust domain; "
+            f"missing: {', '.join(missing)}. Bind an existing authorized managed project at "
+            "runtime startup with init(project=...). Close the current inquiry's obligations, "
+            "then accept a fresh read-only task with its authorized trust_domain "
+            "(typed anchor_task or generic task; ANCHOR_TRUST_DOMAIN is also supported). "
+            "Retrying workflow creation or changing the environment does not repair an already "
+            "accepted task. For interrupted work use task_rebind with its original context. "
+            "Do not infer authority or create a project without separate approval.",
+        ), error_code="workflow_context_required", context={
+            "missing_authority": missing, "automatic_project_creation": False,
+        }, next_operations=[dispatcher_operation(
+            "help", "workflow", kwargs={"output_format": "dict"},
+            reason="Inspect workflow enrollment before closing the inquiry and binding fresh context.",
+        )])
     return result
 
 

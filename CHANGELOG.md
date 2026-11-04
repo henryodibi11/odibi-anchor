@@ -2,6 +2,20 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.8] - 2026-11-04
+
+### Fixed
+
+- Typed MCP `anchor_task` accepts an explicit `trust_domain`, forwarding it through
+  existing task validation, immutable persistence and workflow admission. The optional
+  `ANCHOR_TRUST_DOMAIN` fallback remains supported; project identity still comes from
+  runtime startup. No authority is inferred and conflicting workflow context is refused.
+- Workflow context refusals identify missing `project` and/or `trust_domain` with
+  structured recovery metadata. Recovery requires closing inquiry obligations and
+  accepting a fresh task with explicit context, or rebinding interrupted work under its
+  original authority; retrying creation cannot repair an accepted task. Structural plan
+  readiness still does not imply admission. Clean-worktree protections are unchanged.
+
 ## [0.4.7] - 2026-11-03
 
 ### Fixed
