@@ -120,6 +120,10 @@ def test_preflight_accounts_for_git_deletions_and_checks_rename_destination(
     from types import SimpleNamespace
 
     from odibi_anchor._dispatcher._gate_wrappers import preflight_with_baseline
+    from odibi_anchor._repository_snapshot import (
+        capture_task_change_scope,
+        capture_task_repository_baseline,
+    )
     from odibi_anchor.codebase.preflight_context import preflight_context
 
     # Empty deletions have no hunk ranges; renames must retain the old identity.
@@ -908,13 +912,22 @@ def test_databricks_drift_guidance_is_bounded_and_preserves_non_python_message(
 def test_databricks_scope_tracks_acknowledged_create_edit_and_delete(
     tmp_path: Path,
 ) -> None:
+    from odibi_anchor._repository_snapshot import (
+        DatabricksTaskChangeScope,
+        acknowledge_databricks_task_writes,
+        capture_databricks_git_folder_task_baseline,
+        capture_task_change_scope,
+        task_scope_review_diff,
+    )
+
     provider = StubDatabricksRepositoryProvider()
     (tmp_path / "edit.py").write_text("OLD = 1\n", encoding="utf-8")
     (tmp_path / "delete.py").write_bytes(b"delete me\n")
-    baseline = capture_databricks_baseline(
+    baseline = capture_databricks_git_folder_task_baseline(
         tmp_path,
         provider,
         ["edit.py", "delete.py", "create.py"],
+        accept_unknown_git_state=True,
     )
 
     (tmp_path / "edit.py").write_text("NEW = 2\n", encoding="utf-8")

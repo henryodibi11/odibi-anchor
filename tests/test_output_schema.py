@@ -22,8 +22,8 @@ import pytest
 
 from odibi_anchor.planning import (
     task_execution_context,
-    handoff_context,
 )
+from odibi_anchor.planning.handoff_context import handoff_context
 from odibi_anchor.validation import (
     quality_gate_context,
     validation_summary_context,
