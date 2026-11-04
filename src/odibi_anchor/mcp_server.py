@@ -974,6 +974,7 @@ def anchor_task(
     risk: Literal["low", "medium", "high"] | _Unset = None,
     rigor: Literal["direct", "compact", "full"] | _Unset = None,
     priority: TaskPriority | _Unset = None,
+    trust_domain: str | _Unset = None,
     workflow_id: str | _Unset = None,
     continuation: bool | _Unset = None,
     scope: str | _Unset = None,
@@ -1007,6 +1008,9 @@ def anchor_task(
 
     Args:
         task: the task text.
+        trust_domain: explicit authorized trust domain for this task; otherwise uses
+            ANCHOR_TRUST_DOMAIN. Workflow creation and producer binding require it.
+            The managed project comes from runtime startup, not this field.
         workflow_id: producer task only: the draft workflow to bind.
         continuation: true only to continue in this startup without a new session.
         problem: only to link an existing Problem Record.

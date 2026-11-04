@@ -940,12 +940,12 @@ class TestTypedTableResolution:
 # ─── End-to-end tool invocation ──────────────────────────────────────────────
 
 @pytest.fixture
-def booted(tmp_path, monkeypatch):
+def booted(tmp_path, tmp_path_factory, monkeypatch):
     """Boot the MCP anchor() against an isolated tmp root and reset the cache after."""
     from odibi_anchor._dispatcher._project import project_action
 
-    state = tmp_path / "state"
-    state.mkdir()
+    # Installed runtimes require state outside the target, just as real hosts do.
+    state = tmp_path_factory.mktemp("mcp-state")
     project_action(
         state,
         "create",
@@ -1948,6 +1948,7 @@ _TYPED_CALLS = [
     }, "workflow"),
     ("anchor_task", "task", {
         "task": "Fix median.", "mode": "implementation", "continuation": False,
+        "trust_domain": "personal",
         "memory_limit": 3, "repository_scope": ["src"], "out_of_scope": [],
         "adoption_approval_id": "",
     }, "task"),
@@ -2033,8 +2034,84 @@ class TestTypedTools:
         assert criterion["expected_xfailed"]["type"] == "integer"
         assert criterion["test_targets"]["type"] == "array"
         assert schemas["anchor_task"]["properties"]["continuation"]["type"] == "boolean"
+        assert schemas["anchor_task"]["properties"]["trust_domain"]["type"] == "string"
         assert schemas["anchor_learning"]["properties"]["evidence"]["items"]["type"] == "object"
         assert schemas["anchor_memory"]["properties"]["reason"]["type"] == "object"
+
+    @pytest.mark.parametrize("context", ["explicit", "environment", "missing"])
+    def test_task_trust_context_reaches_workflow_and_survives_rebind(
+        self, booted, monkeypatch, context,
+    ):
+        from fastmcp.exceptions import ToolError
+
+        def call(tool, **arguments):
+            result = asyncio.run(mcp_server.mcp.call_tool(tool, arguments))
+            return json.loads(result.content[0].text)
+
+        monkeypatch.delenv("ANCHOR_TRUST_DOMAIN", raising=False)
+        if context == "environment":
+            monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+        elif context == "explicit":
+            monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "foreign")
+        call("anchor_execute", action="orient")
+        call("anchor_execute", action="new_session", args={"name": "typed-context", "inline": True})
+        task = call("anchor_task", task="Plan bounded report", mode="analysis",
+                    goal="Verify workflow context", risk="low", rigor="direct",
+                    acceptance_criteria=["Report plan is bounded"],
+                    **({"trust_domain": "personal"} if context == "explicit" else {}))
+        assert "error" not in task, task
+        plan = {"schema_version": 1, "goal": "Write report", "risk": "low",
+                "execution_mode": "artifact_only", "scope": ["notebooks/report.md"],
+                "artifact_paths": ["notebooks/report.md"], "exclusions": [], "constraints": [],
+                "risks": [], "stop_conditions": [], "unresolved_decisions": [],
+                "destination": {"kind": "managed_artifacts"},
+                "reconciliation": {"requirements": [], "reason": "Disposable fixture"},
+                "criteria": [{"id": "review", "expected": "Report matches scope", "method": "review"}]}
+        ready = call("anchor_workflow", command="check_plan", plan=plan)
+        assert ready["ready"] is True
+        if context == "missing":
+            with pytest.raises(ToolError, match="missing: trust_domain") as refused:
+                call("anchor_workflow", command="create", plan=plan, request_id="typed-plan")
+            assert "fresh" in str(refused.value)
+            assert "task_rebind" in str(refused.value)
+            monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+            still_refused = call("anchor_execute", action="workflow", response_version=2,
+                                 args={"command": "create", "plan": plan, "request_id": "typed-plan"})
+            assert still_refused["ok"] is False
+            assert still_refused["error"]["context"]["missing_authority"] == ["trust_domain"]
+            return
+        created = call("anchor_workflow", command="create", plan=plan, request_id="typed-plan")
+        state = created["state"]
+        workflow_id = state["workflow_id"]
+        # A restarted runtime must explicitly match the persisted task's trust identity.
+        monkeypatch.delenv("ANCHOR_TRUST_DOMAIN", raising=False)
+        mcp_server._CW = None
+        with pytest.raises(ToolError, match="no open accepted task matches"):
+            call("anchor_execute", action="task_rebind")
+        monkeypatch.setenv("ANCHOR_TRUST_DOMAIN", "personal")
+        mcp_server._CW = None
+        rebound = call("anchor_execute", action="task_rebind")
+        assert "error" not in rebound, rebound
+        retained = call("anchor_workflow", command="status", workflow_id=workflow_id)
+        assert retained["state"] == state
+        closed = call("anchor_learning", command="assess", outcome="nothing_reusable_learned")
+        assert "error" not in closed, closed
+        call("anchor_execute", action="orient")
+        call("anchor_execute", action="new_session", args={"name": "producer", "inline": True})
+        with pytest.raises(ToolError, match="authority"):
+            call("anchor_task", task="Write bounded report", goal="Report matches scope", mode="planning",
+                 risk="low", rigor="direct", trust_domain="foreign", workflow_id=workflow_id,
+                 acceptance_criteria=["Report matches scope"])
+        accepted = call("anchor_task", task="Write bounded report", goal="Report matches scope", mode="planning",
+                        risk="low", rigor="direct", trust_domain="personal", workflow_id=workflow_id,
+                        in_scope=["notebooks/report.md"], constraints=["Managed artifacts only"],
+                        known_facts=["The workflow fixes the report path"], deliverables=["A scoped report"],
+                        acceptance_criteria=["Report matches scope"])
+        assert "error" not in accepted, accepted
+        admitted = call("anchor_workflow", command="accept_plan", workflow_id=workflow_id,
+                        expected_generation=state["generation"], request_id="typed-accept")
+        assert "error" not in admitted, admitted
+        assert admitted["state"]["admission"]
 
     def test_published_enums_match_validators(self):
         from odibi_anchor._dispatcher._workflow_runtime import READ_COMMANDS, WRITE_COMMANDS
