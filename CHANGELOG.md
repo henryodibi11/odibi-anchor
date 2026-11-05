@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.12] - 2026-11-05
+
+### Fixed
+
+- The MCP `anchor_execute` gateway no longer rejects memory subcommands that take
+  their own nested `command`, such as
+  `{"arg0": "promotion", "command": "request_owner_activation", "memory_id": "..."}`.
+  It treated `command` as the typed-tool alias for `arg0` and refused the call before
+  dispatch. For memory `promotion`, `seed` and `storage` (as `arg0` or the first `args`
+  item), `command` now reaches the subcommand unchanged; the dispatcher's existing
+  argument, project/trust, task-profile and owner-approval guards still apply. Combining
+  the alias with any other memory subcommand, or with learning/workflow/task, is still
+  refused. This affects only the MCP gateway; Python `anchor()` calls were not affected.
+
+No dependency, schema, migration, or settings changes.
+
 ## [0.4.11] - 2026-11-05
 
 ### Fixed
