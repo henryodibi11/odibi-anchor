@@ -2022,7 +2022,7 @@ class TestTypedTools:
         assert "arg0" in str(output["error"]) and key in str(output["error"])
         assert calls == []
 
-    @pytest.mark.parametrize("selector", ["promotion", "seed", "storage", "Promotion"])
+    @pytest.mark.parametrize("selector", ["promotion", "seed", "storage", "Promotion", " promotion "])
     @pytest.mark.parametrize("positional", ["arg0", "args"])
     @pytest.mark.parametrize("command", ["inspect", "request_owner_activation"])
     def test_memory_subcommand_keeps_its_nested_command(self, monkeypatch, selector, positional, command):
