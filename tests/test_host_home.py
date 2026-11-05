@@ -544,6 +544,7 @@ def test_recorded_instruction_root_matches_as_a_path_including_windows_forms():
     posix = PurePosixPath("/home/owner/host")
     assert host_home._binding_root_matches("/home/owner/host/", posix)
     assert not host_home._binding_root_matches("/home/owner/other", posix)
+    assert not host_home._binding_root_matches("/home/OWNER/host", posix)  # POSIX is case-sensitive
 
 
 @pytest.mark.parametrize("variant", ["unchanged", "equivalent_spelling", "other_root", "extra_key", "non_canonical"])
