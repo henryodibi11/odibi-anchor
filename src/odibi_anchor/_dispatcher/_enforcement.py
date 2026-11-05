@@ -9,6 +9,7 @@ state access — only the DECISION logic is extracted here.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -570,7 +571,8 @@ def should_block_gate_learn(timings: list[dict]) -> tuple[bool, str]:
 def should_block_mode_mismatch(
     timings: list[dict], files_changed: set[str], *,
     artifact_root: str | None = None, target_root: str | None = None,
-    execution_mode: str | None = None,
+    execution_mode: str | None = None, task_mode: str | None = None,
+    path_basis: Mapping[str, str] | None = None,
 ) -> tuple[bool, str]:
     """Reject file delivery incompatible with the latest task mode.
 
@@ -578,6 +580,10 @@ def should_block_mode_mismatch(
     source writer. This gate check separately covers out-of-band filesystem drift:
     an artifact-only task may deliver managed artifacts, but must never absorb
     arbitrary target-root files as if they were artifacts.
+
+    ``task_mode`` is the accepted task mode for the diagnostic label when the
+    supplied timings do not include the task's own timing. ``path_basis`` maps
+    paths to how they entered scope; both affect only the message.
     """
     if not files_changed:
         return False, ""
@@ -589,6 +595,7 @@ def should_block_mode_mismatch(
         None,
     )
     planned_mode = last_task.get("task_mode", "planning") if last_task else None
+    label = task_mode or planned_mode
     from odibi_anchor.planning._task_profile import _LEGACY_DEFAULTS
 
     # The accepted profile is authoritative, including explicit overrides. Legacy
@@ -606,22 +613,33 @@ def should_block_mode_mismatch(
             )
         )
         if invalid:
+            listed = "\n".join(
+                f"  - {path}: {path_basis.get(path, 'unknown')}" if path_basis else f"  - {path}"
+                for path in invalid[:5]
+            )
+            more = f"\n  ... and {len(invalid) - 5} more" if len(invalid) > 5 else ""
             return True, (
-                f"Mode mismatch — planned as '{planned_mode}' but non-artifact paths were registered or detected.\n"
-                f"Non-artifact files: {invalid[:5]}\n"
+                f"Mode mismatch — accepted mode '{label}' (execution_mode 'artifact_only') but "
+                "non-artifact paths were registered or detected.\n"
+                f"Non-artifact files{' (detection basis)' if path_basis else ''}:\n{listed}{more}\n"
                 f"Relative paths resolve against target_root={target_root!r}, not artifact_root={artifact_root!r}, "
                 "in every execution mode. Registration alone does not prove a byte change.\n"
                 "For managed artifacts, inspect anchor('project', 'status', output_format='dict') "
                 "artifact_contract.artifacts and explicitly register the intended available absolute_path. "
                 "Preserve the rejected registration/history; do not clear it to bypass qualification.\n"
                 "Artifact-only tasks may write only managed artifact paths. Use an authorized "
-                "source-change task for repository files."
+                "source-change task for repository files.\n"
+                "This gate did not pass. Retrying it unchanged or rotating sessions will not clear "
+                "detected drift. If this task cannot qualify without these paths, follow "
+                "operating_protocol.task_closure.stop_with: record anchor('learning', 'assess', ...) "
+                "and then anchor('learning', 'safe_stop', status='blocked', reason=...), which closes "
+                "the task as blocked, not completed."
             )
         return False, ""
     if execution_mode != "read_only":
         return False, ""
     return True, (
-        f"Mode mismatch — planned as '{planned_mode}' but files were modified.\n"
+        f"Mode mismatch — planned as '{label}' but files were modified.\n"
         f"Changed files: {sorted(files_changed)[:5]}\n"
         f"The accepted execution mode is '{execution_mode}'. Re-run anchor(\"task\", goal=\"...\") with a\n"
         "mode that may write: an artifact_only mode such as \"documentation\" or \"planning\"\n"
