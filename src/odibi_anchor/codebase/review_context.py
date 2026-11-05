@@ -70,7 +70,11 @@ def review_context(
             risks=[],
             samples={},
             suggested_next_actions=[
-                "Session has no changes — gate will pass trivially.",
+                "No session-registered changes. Review does not check filesystem drift; "
+                "anchor('gate') still runs drift, mode, and obligation checks and may refuse.",
+                "If gate refuses, follow its recovery and operating_protocol.task_closure "
+                "(assess, then safe_stop as blocked when the task cannot qualify); do not retry "
+                "it unchanged or rotate sessions to clear drift.",
             ],
         )
         if output_format == "markdown":

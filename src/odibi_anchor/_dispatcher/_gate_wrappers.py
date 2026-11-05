@@ -453,6 +453,7 @@ def gate_with_auto_confirm(
     _auto_touched_files = []
     _unattested_outside_scope = []
     _drift_known_bad_status = None
+    _drift: dict = {}
     try:
         _drift = check_drift_fn(str(root))
         if _drift.get("has_drift"):
@@ -531,6 +532,19 @@ def gate_with_auto_confirm(
 
     # Drift detection may have discovered files that were absent during
     # pre-dispatch. Reject read-only task modes before gate state can advance.
+    # verification_timings starts after the accepted task's own timing, so the
+    # accepted mode is passed explicitly for the diagnostic label.
+    _basis = _drift.get("detection_basis", {}) if isinstance(_drift, dict) else {}
+    _path_basis = {
+        path: (
+            f"newly detected by this gate's filesystem drift check ({_basis.get(path, 'unknown')})"
+            if path in _auto_touched_files
+            else "task repository change scope" if task_scope is not None
+            else "already in this session's change ledger before this gate "
+                 "(touched, write tracking, or an earlier gate's drift detection)"
+        )
+        for path in scope_files
+    }
     from odibi_anchor._dispatcher._enforcement import should_block_mode_mismatch
     _blocked, _message = should_block_mode_mismatch(
         verification_timings,
@@ -538,6 +552,8 @@ def gate_with_auto_confirm(
         artifact_root=getattr(session_state, "artifact_root", None),
         target_root=getattr(session_state, "target_root", None) or str(root),
         execution_mode=getattr(getattr(session_state, "active_task_profile", None), "execution_mode", None),
+        task_mode=getattr(session_state, "active_task_mode", None),
+        path_basis=_path_basis,
     )
     if _blocked:
         raise RuntimeError(f"BLOCKED: {_message}")
@@ -656,6 +672,13 @@ def gate_with_auto_confirm(
         if _drift_known_bad_status:
             _msg += f" (known_bad guardrail on .py drift: {_drift_known_bad_status})"
         result.setdefault("findings", []).append(_msg)
+    _metadata_only = _drift.get("metadata_only", []) if isinstance(_drift, dict) else []
+    if _metadata_only and isinstance(result, dict):
+        result.setdefault("metrics", {})["metadata_only_drift_count"] = len(_metadata_only)
+        result.setdefault("findings", []).append(
+            "Timestamp-only filesystem drift with unchanged content (SHA-256 confirmed) was "
+            f"not registered as a change: {_metadata_only[:5]}"
+        )
     if _unattested_outside_scope and isinstance(result, dict):
         result.setdefault("metrics", {})["unattested_outside_scope_count"] = len(
             _unattested_outside_scope

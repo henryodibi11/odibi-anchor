@@ -619,7 +619,7 @@ anchor("gate")
 **Gate hard blocks (all RuntimeError):**
 - Tests must pass for .py changes — RuntimeError if tests haven't run or last test failed
 - Test target cross-reference — RuntimeError if test target doesn't cover changed .py files
-- Filesystem drift safety — clean unregistered changes are auto-registered; known-bad Python drift or policy-forbidden documentation paths block
+- Filesystem drift safety — clean unregistered changes are auto-registered; known-bad Python drift or policy-forbidden documentation paths block. Timestamp-only changes whose bytes match the SHA-256 baseline are reported, not registered; changes that cannot be content-confirmed still register
 - Mode mismatch — RuntimeError if readonly mode (e.g., "analysis") but files were modified
 - Ungated edit limit — max 12 file edits before gate/checkpoint; the 13th blocks
 - known_bad REQUIRED before .py edits — RuntimeError if skipped

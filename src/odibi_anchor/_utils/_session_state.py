@@ -635,6 +635,30 @@ _CW_GENERATED_FILES: frozenset[str] = frozenset({
     ".agent_memory.db", ".agent_memory.db-journal", ".agent_memory.db-wal",
 })
 
+# Larger files keep stat-only drift detection: their mtime/size changes are reported
+# without content confirmation rather than read in full on the boot path.
+_CONTENT_FINGERPRINT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _content_fingerprint(abs_path: str, size: int) -> str | None:
+    """Return the file's SHA-256, or None when its content cannot be confirmed."""
+    import hashlib
+    import stat
+
+    if size > _CONTENT_FINGERPRINT_MAX_BYTES:
+        return None
+    try:
+        # Never open FIFOs or devices: reading them can block or never end.
+        if not stat.S_ISREG(_os.stat(abs_path).st_mode):
+            return None
+        with open(abs_path, "rb") as handle:
+            data = handle.read(size + 1)
+    except OSError:
+        return None
+    if len(data) != size:
+        return None  # Changed while being read; content cannot be confirmed.
+    return hashlib.sha256(data).hexdigest()
+
 
 def build_boot_manifest(root: str) -> dict[str, dict]:
     """Record the project root for deferred manifest building.
@@ -660,7 +684,8 @@ def _ensure_boot_manifest_built() -> None:
     """Build the boot manifest on first demand (lazy initialization).
 
     Called by :func:`check_filesystem_drift` on its first invocation.
-    Uses mtime + size from os.stat() for comparison.
+    Records mtime + size from os.stat() plus a SHA-256 content fingerprint, so a
+    later stat-only change can be confirmed as metadata-only rather than an edit.
     """
     global _SESSION_BOOT_MANIFEST, _BOOT_MANIFEST_BUILT
     if _BOOT_MANIFEST_BUILT or not _BOOT_MANIFEST_ROOT:
@@ -684,7 +709,10 @@ def _ensure_boot_manifest_built() -> None:
 
             try:
                 st = _os.stat(abs_path)
-                manifest[rel_path] = {"mtime": st.st_mtime, "size": st.st_size}
+                manifest[rel_path] = {
+                    "mtime": st.st_mtime, "size": st.st_size,
+                    "sha256": _content_fingerprint(abs_path, st.st_size),
+                }
             except (OSError, PermissionError):
                 continue
 
@@ -727,7 +755,10 @@ def reconcile_session_file_ledger(root: str) -> dict[str, list[str]]:
             if path in _SESSION_BOOT_MANIFEST:
                 try:
                     stat = _os.stat(abs_path)
-                    _SESSION_BOOT_MANIFEST[path] = {"mtime": stat.st_mtime, "size": stat.st_size}
+                    _SESSION_BOOT_MANIFEST[path] = {
+                        "mtime": stat.st_mtime, "size": stat.st_size,
+                        "sha256": _content_fingerprint(abs_path, stat.st_size),
+                    }
                 except OSError:
                     pass
             removed_restored.append(path)
@@ -739,15 +770,19 @@ def check_filesystem_drift(root: str) -> dict[str, Any]:
     """Compare current filesystem state against the boot manifest.
 
     Detects files that have been modified, created, or deleted since
-    :func:`build_boot_manifest` was called. Uses mtime + size comparison
-    for speed. Files that appear in the drift but are NOT registered via
+    :func:`build_boot_manifest` was called. mtime + size comparison selects
+    candidates; a candidate with unchanged size whose bytes still match the
+    baseline SHA-256 is reported as ``metadata_only`` instead of ``modified``.
+    When either fingerprint is unavailable the candidate stays ``modified``
+    (fail closed). Files that appear in the drift but are NOT registered via
     :func:`touched` are flagged as *unregistered*.
 
     Args:
         root: Absolute path to the project root directory.
 
     Returns:
-        Dict with keys ``modified``, ``created``, ``deleted``,
+        Dict with keys ``modified``, ``created``, ``deleted``, ``metadata_only``,
+        ``detection_basis`` (path -> basis for each modified/created path),
         ``unregistered``, and ``has_drift``.  If no boot manifest exists,
         returns a graceful-degradation dict instead.
     """
@@ -762,13 +797,32 @@ def check_filesystem_drift(root: str) -> dict[str, Any]:
     boot_keys = set(_SESSION_BOOT_MANIFEST)
     current_keys = set(current)
 
-    modified = [
-        p for p in boot_keys & current_keys
-        if (current[p]["mtime"] != _SESSION_BOOT_MANIFEST[p]["mtime"]
-            or current[p]["size"] != _SESSION_BOOT_MANIFEST[p]["size"])
-    ]
+    modified: list[str] = []
+    metadata_only: list[str] = []
+    detection_basis: dict[str, str] = {}
+    for p in boot_keys & current_keys:
+        boot, now = _SESSION_BOOT_MANIFEST[p], current[p]
+        if now["mtime"] == boot["mtime"] and now["size"] == boot["size"]:
+            continue
+        if now["size"] != boot["size"]:
+            detection_basis[p] = "size_changed"
+        else:
+            baseline_hash = boot.get("sha256")
+            current_hash = (
+                _content_fingerprint(_os.path.join(root, p), now["size"])
+                if baseline_hash else None
+            )
+            if baseline_hash and current_hash == baseline_hash:
+                metadata_only.append(p)
+                continue
+            detection_basis[p] = (
+                "content_changed" if baseline_hash and current_hash
+                else "metadata_changed_content_unverified"
+            )
+        modified.append(p)
     created = sorted(current_keys - boot_keys)
     deleted = sorted(boot_keys - current_keys)
+    detection_basis.update({p: "created" for p in created})
 
     # Flag both modified AND created files as unregistered drift if not
     # registered via touched() — catches all unauthorized filesystem changes.
@@ -778,6 +832,8 @@ def check_filesystem_drift(root: str) -> dict[str, Any]:
         "modified": sorted(modified),
         "created": created,
         "deleted": deleted,
+        "metadata_only": sorted(metadata_only),
+        "detection_basis": dict(sorted(detection_basis.items())),
         "unregistered": unregistered,
         "has_drift": len(unregistered) > 0,
     }
@@ -837,7 +893,7 @@ def retire_completed_task_drift(*, session_state: SessionState, closure: dict, t
         if observation is None:
             _SESSION_BOOT_MANIFEST.pop(path, None)
         else:
-            _SESSION_BOOT_MANIFEST[path] = {key: observation[key] for key in ("mtime", "size")}
+            _SESSION_BOOT_MANIFEST[path] = {key: observation[key] for key in ("mtime", "size", "sha256")}
     session_state.task_gate_drift_snapshot = None
 
 

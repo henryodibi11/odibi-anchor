@@ -2,6 +2,31 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.10] - 2026-11-05
+
+### Fixed
+
+- Gate filesystem drift confirms content before registering a path. The lazy boot
+  manifest now records a SHA-256 fingerprint beside mtime/size; a path whose size is
+  unchanged and whose bytes still match that fingerprint is reported as timestamp-only
+  drift and is not auto-registered, so it no longer blocks an artifact-only task.
+  Size changes, same-size content edits, new files and deletions are detected as before.
+  When either fingerprint is unavailable (unreadable baseline or current file, or files
+  over 8 MiB), the path still registers as a change (fail closed). Confirmed by a
+  synthetic timestamp-only reproduction; the cause of any specific field incident is
+  not established by this fix.
+- The artifact-only mode-mismatch refusal names the accepted task mode instead of
+  `'None'`, and lists each non-artifact path with its detection basis: newly detected
+  by this gate's drift check (`content_changed`, `size_changed`, `created`, or
+  `metadata_changed_content_unverified`), task repository scope, or already in the
+  session's change ledger. It states that the gate did not pass and that a task which
+  cannot qualify ends through assessment and `safe_stop` as blocked, not completed.
+- Review with no session-registered changes no longer promises that gate will pass;
+  it states that gate still runs drift, mode and obligation checks.
+
+No dependency, schema, migration, or settings changes. The fingerprint lives only in
+the in-process boot manifest; no persisted state changes.
+
 ## [0.4.9] - 2026-11-04
 
 ### Fixed
