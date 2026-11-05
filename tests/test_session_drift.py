@@ -163,6 +163,53 @@ class TestCheckFilesystemDrift:
         result = check_filesystem_drift(str(project))
         assert "src/utils.py" in result["deleted"]
 
+    def test_same_bytes_with_new_timestamp_is_metadata_only(self, project):
+        build_boot_manifest(str(project))
+        _ensure_boot_manifest_built()
+        path = project / "src" / "main.py"
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        result = check_filesystem_drift(str(project))
+        assert result["has_drift"] is False
+        assert result["metadata_only"] == ["src/main.py"]
+        assert result["modified"] == [] and result["unregistered"] == []
+
+    def test_size_change_is_reported_with_its_basis(self, project):
+        build_boot_manifest(str(project))
+        _ensure_boot_manifest_built()
+        (project / "src" / "main.py").write_text("def hello(): return 42\n")
+        result = check_filesystem_drift(str(project))
+        assert result["unregistered"] == ["src/main.py"]
+        assert result["detection_basis"] == {"src/main.py": "size_changed"}
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                        reason="needs a file the current user cannot read")
+    def test_unreadable_current_bytes_stay_a_change(self, project):
+        build_boot_manifest(str(project))
+        _ensure_boot_manifest_built()
+        path = project / "src" / "main.py"
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        path.chmod(0)
+        try:
+            result = check_filesystem_drift(str(project))
+        finally:
+            path.chmod(0o644)
+        assert result["unregistered"] == ["src/main.py"]
+        assert result["metadata_only"] == []
+        assert result["detection_basis"] == {"src/main.py": "metadata_changed_content_unverified"}
+
+    @pytest.mark.timeout(30)
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+    def test_named_pipe_with_governed_extension_is_never_read(self, project):
+        os.mkfifo(project / "pipe.json")  # opening this for reading would block forever
+        build_boot_manifest(str(project))
+        _ensure_boot_manifest_built()
+        assert _ss._SESSION_BOOT_MANIFEST["pipe.json"]["sha256"] is None
+        os.utime(project / "pipe.json", ns=(1, 1))
+        result = check_filesystem_drift(str(project))
+        assert result["detection_basis"]["pipe.json"] == "metadata_changed_content_unverified"
+
     def test_graceful_when_no_manifest(self, project):
         result = check_filesystem_drift(str(project))
         assert result["has_drift"] is False

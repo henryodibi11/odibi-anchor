@@ -643,14 +643,21 @@ _CONTENT_FINGERPRINT_MAX_BYTES = 8 * 1024 * 1024
 def _content_fingerprint(abs_path: str, size: int) -> str | None:
     """Return the file's SHA-256, or None when its content cannot be confirmed."""
     import hashlib
+    import stat
 
     if size > _CONTENT_FINGERPRINT_MAX_BYTES:
         return None
     try:
+        # Never open FIFOs or devices: reading them can block or never end.
+        if not stat.S_ISREG(_os.stat(abs_path).st_mode):
+            return None
         with open(abs_path, "rb") as handle:
-            return hashlib.sha256(handle.read()).hexdigest()
+            data = handle.read(size + 1)
     except OSError:
         return None
+    if len(data) != size:
+        return None  # Changed while being read; content cannot be confirmed.
+    return hashlib.sha256(data).hexdigest()
 
 
 def build_boot_manifest(root: str) -> dict[str, dict]:
