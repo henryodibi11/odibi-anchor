@@ -7,7 +7,7 @@ import os
 import shlex
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from odibi_anchor import host_setup as legacy
@@ -34,6 +34,14 @@ def _absolute(value: str | os.PathLike[str]) -> Path:
     if any(parent.is_symlink() for parent in (path, *path.parents)):
         raise legacy.HostSetupError(f"host home path contains a symlink: {path}")
     return path
+
+
+def _binding_root_matches(value: object, root: PurePath) -> bool:
+    """Compare a recorded instruction root as a path, not as text.
+
+    Bindings record ``as_posix()`` paths, so on Windows ``C:/x`` must equal ``C:\\x``.
+    """
+    return isinstance(value, str) and type(root)(value) == root
 
 
 def _io(adapter: str):
@@ -368,7 +376,7 @@ def setup_home(
             not isinstance(bound, dict)
             or set(bound) != {"version", "instruction_root", "host_id", "config_path"}
             or bound["version"] != 1
-            or bound["instruction_root"] != str(root)
+            or not _binding_root_matches(bound["instruction_root"], root)
             or not isinstance(bound["host_id"], str)
             or not bound["host_id"]
             or legacy._canonical_json(bound) != binding_bytes

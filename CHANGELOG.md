@@ -2,6 +2,20 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.11] - 2026-11-05
+
+### Fixed
+
+- `setup-host --reconcile` on Windows no longer refuses Anchor's own host binding with
+  `host binding ownership/schema mismatch`. The binding records `instruction_root` as
+  a forward-slash path; host-home setup compared that text with the native backslash
+  root. It now compares paths, consistent with the existing binding reader. Bindings
+  for another root, extra keys, wrong versions and non-canonical bytes are still
+  refused; the binding writer, existing binding bytes and portfolio configuration are
+  unchanged.
+
+No dependency, schema, migration, or settings changes.
+
 ## [0.4.10] - 2026-11-05
 
 ### Fixed
