@@ -1042,6 +1042,21 @@ class TestToolInvocation:
         assert parsed["error"]["type"] == "ValueError"
         assert "Unknown anchor() action" in parsed["error"]["message"]
 
+    def test_real_nested_memory_operations_reach_their_guards(self, booted):
+        """Nested memory commands run for real; activation is still refused by its own guard."""
+        mcp_server.anchor_execute("status")
+        for selector in ("promotion", "seed", "storage"):
+            output = json.loads(mcp_server.anchor_execute(
+                "memory", {"arg0": selector, "command": "inspect"}, response_version=2,
+            ))
+            assert output["ok"] is True, (selector, output)
+        refused = json.loads(mcp_server.anchor_execute("memory", {
+            "arg0": "promotion", "command": "request_owner_activation", "memory_id": "missing",
+        }, response_version=2))
+        assert refused["ok"] is False
+        assert refused["error"]["type"] != "RequestError"  # reached dispatch, not the alias check
+        assert "alias for arg0" not in refused["error"]["message"]
+
     def test_gateway_rejects_non_object_args(self, booted):
         with pytest.raises(ValueError, match="JSON object"):
             mcp_server.anchor_execute("learning", json.dumps([]))
@@ -2005,6 +2020,41 @@ class TestTypedTools:
         output = json.loads(result.content[0].text)
         assert output["ok"] is False
         assert "arg0" in str(output["error"]) and key in str(output["error"])
+        assert calls == []
+
+    @pytest.mark.parametrize("selector", ["promotion", "seed", "storage", "Promotion"])
+    @pytest.mark.parametrize("positional", ["arg0", "args"])
+    @pytest.mark.parametrize("command", ["inspect", "request_owner_activation"])
+    def test_memory_subcommand_keeps_its_nested_command(self, monkeypatch, selector, positional, command):
+        """anchor("memory", "promotion", command=...) is a subcommand argument, not the arg0 alias."""
+        calls = TestStructuredArgs._capture(monkeypatch)
+        first = {"arg0": selector} if positional == "arg0" else {"args": [selector]}
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": "memory", "args": {**first, "command": command, "memory_id": "m1"},
+            "response_version": 2,
+        }))
+        assert json.loads(result.content[0].text)["ok"] is True
+        assert calls == [{"action": "memory", "args": (selector,),
+                          "kwargs": {"command": command, "memory_id": "m1"}}]
+
+    @pytest.mark.parametrize("positional", [{"arg0": "inspect"}, {"arg0": "evaluate"},
+                                            {"args": ["disposition"]}, {"arg0": "query"}])
+    def test_memory_command_alias_still_conflicts_with_other_subcommands(self, monkeypatch, positional):
+        calls = TestStructuredArgs._capture(monkeypatch)
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": "memory", "args": {**positional, "command": "evaluate"}, "response_version": 2,
+        }))
+        output = json.loads(result.content[0].text)
+        assert output["ok"] is False and "alias for arg0" in str(output["error"])
+        assert calls == []
+
+    @pytest.mark.parametrize("action", ["learning", "workflow"])
+    def test_nested_command_exemption_is_memory_only(self, monkeypatch, action):
+        calls = TestStructuredArgs._capture(monkeypatch)
+        result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+            "action": action, "args": {"arg0": "promotion", "command": "inspect"}, "response_version": 2,
+        }))
+        assert json.loads(result.content[0].text)["ok"] is False
         assert calls == []
 
     @pytest.mark.parametrize(("tool", "first", "arguments", "action"), _TYPED_CALLS)

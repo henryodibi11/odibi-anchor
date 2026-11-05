@@ -589,14 +589,27 @@ def _decode_args(args: str | dict[str, Any]) -> dict[str, Any]:
     return decode_json_document(args)
 
 
+# Memory subcommands whose own arguments include ``command``, e.g.
+# anchor("memory", "promotion", command="request_owner_activation", memory_id=...).
+_MEMORY_NESTED_COMMAND_SUBCOMMANDS = frozenset({"promotion", "seed", "storage"})
+
+
 def _normalize_typed_positional_alias(payload: dict[str, Any]) -> None:
     """Accept the first-argument names published by the four typed tools."""
-    key = {"workflow": "command", "learning": "command", "memory": "command", "task": "task"}.get(
-        payload["action"].strip()
-    )
+    action = payload["action"].strip()
+    key = {"workflow": "command", "learning": "command", "memory": "command", "task": "task"}.get(action)
     keywords = payload.get("kwargs", {})
     if key is None or key not in keywords:
         return
+    positional = payload.get("arg0")
+    if positional is None and isinstance(payload.get("args"), list) and payload["args"]:
+        positional = payload["args"][0]
+    if (
+        action == "memory"
+        and isinstance(positional, str)
+        and positional.strip().lower() in _MEMORY_NESTED_COMMAND_SUBCOMMANDS
+    ):
+        return  # ``command`` belongs to the subcommand, not the arg0 alias.
     if "arg0" in payload or "args" in payload:
         raise RequestError(
             f"{key} is an alias for arg0 for {payload['action']}; do not supply both. "
@@ -626,7 +639,9 @@ def anchor_execute(
               For actions with positional args, use special keys like "arg0", "arg1".
               The typed tools' first-argument names are also accepted: command for
               learning/workflow/memory, and task for task. Do not combine an alias
-              with arg0 or an args array.
+              with arg0 or an args array, except that memory promotion, seed and
+              storage take their own nested command:
+              '{"arg0": "promotion", "command": "inspect"}'.
               Only the table parameters of data actions (e.g. quality ``df``) turn a
               csv/parquet/json path or catalog name into a DataFrame; every other value,
               such as a touched path, reaches the action unchanged.
