@@ -529,3 +529,73 @@ def test_legacy_entrypoint_cannot_bypass_custom_home_transaction(tmp_path, monke
         host_home.host_launcher(root, "amp")
     assert setup_host(root, adapter="amp", rollback=True)["status"] == "rolled_back"
     assert not (root / host_home.TRANSACTION).exists()
+
+
+def test_recorded_instruction_root_matches_as_a_path_including_windows_forms():
+    """Bindings record as_posix() roots; Windows setup compares against backslash roots."""
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    root = PureWindowsPath(r"C:\Users\owner\.odibi-anchor\host")
+    assert host_home._binding_root_matches("C:/Users/owner/.odibi-anchor/host", root)
+    assert host_home._binding_root_matches(r"C:\Users\owner\.odibi-anchor\host", root)
+    for other in ("C:/Users/owner/.odibi-anchor/other", "C:/Users/owner/.odibi-anchor",
+                  "D:/Users/owner/.odibi-anchor/host", "Users/owner/.odibi-anchor/host", "", None, 1):
+        assert not host_home._binding_root_matches(other, root), other
+    posix = PurePosixPath("/home/owner/host")
+    assert host_home._binding_root_matches("/home/owner/host/", posix)
+    assert not host_home._binding_root_matches("/home/owner/other", posix)
+
+
+@pytest.mark.parametrize("variant", ["unchanged", "equivalent_spelling", "other_root", "extra_key", "non_canonical"])
+def test_reconcile_accepts_path_equivalent_binding_and_refuses_foreign_ones(tmp_path, variant):
+    from odibi_anchor.host_setup import _BINDING, _canonical_json, read_host_binding
+    from odibi_anchor.portfolio import write_portfolio
+
+    root = tmp_path / "host"
+    root.mkdir()
+    (tmp_path / "other").mkdir()
+    (tmp_path / "target").mkdir()
+    external = tmp_path / "external.toml"
+    write_portfolio(external, {
+        "schema_version": 1,
+        "authority": {"id": "owner", "trust_domain": "work"},
+        "hosts": {"local": {"adapter": "amp", "instruction_root": str(root),
+                            "local_state_root": str(tmp_path / "state")}},
+        "projects": {"alpha": {"targets": {"local": str(tmp_path / "target")}}},
+        "personas": {},
+    })
+    _setup_legacy_host(root, adapter="amp", portfolio_config=external, host_id="local")
+    setup_host(root, adapter="amp")
+    binding_path = root / "anchor" / _BINDING
+    written = binding_path.read_bytes()
+    binding = json.loads(written)
+    if variant == "equivalent_spelling":
+        binding["instruction_root"] += "/"  # same path, different text, like C:/x versus C:\x
+    elif variant == "other_root":
+        binding["instruction_root"] = str(tmp_path / "other")
+    elif variant == "extra_key":
+        binding["extra"] = "value"
+    content = _canonical_json(binding)
+    binding_path.write_bytes(content.rstrip(b"\n") if variant == "non_canonical" else content)
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    if variant == "unchanged":
+        # Anchor's own binding records an as_posix() root, exactly as on Windows. The
+        # `--reconcile` plan and its apply both accept it without rewriting it.
+        assert setup_host(root, adapter="amp", reconcile=True, dry_run=True)["status"] == "unchanged"
+        setup_host(root, adapter="amp", reconcile=True, dry_run=False)
+        reread = read_host_binding(root)
+        assert (reread["host_id"], reread["config_path"]) == ("local", str(root / "anchor/anchor.toml"))
+        assert (root / "anchor/anchor.toml").read_bytes() == external.read_bytes()
+        assert binding_path.read_bytes() == written
+        return
+    if variant == "equivalent_spelling":
+        # Same path, different bytes: ownership passes, but bytes Anchor did not write
+        # still need explicit owner approval before any replacement.
+        assert setup_host(root, adapter="amp", reconcile=True, dry_run=True)["status"] == "planned"
+        with pytest.raises(HostSetupError, match="host migration conflict"):
+            setup_host(root, adapter="amp", reconcile=True, dry_run=False)
+    else:
+        with pytest.raises(HostSetupError, match="host binding ownership/schema mismatch"):
+            setup_host(root, adapter="amp", reconcile=True, dry_run=True)
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
