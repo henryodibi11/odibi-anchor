@@ -210,6 +210,13 @@ def error_information(exc: Exception) -> dict[str, Any]:
     ):
         if hasattr(exc, field):
             result[field] = _safe_error_metadata(getattr(exc, field))
+    if "error_code" not in result:
+        # WorkflowError carries its stable identifier in ``.code``. Other exceptions'
+        # ``.code`` (HTTP status, exit status, sidecar protocol) is not this contract.
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        if isinstance(exc, WorkflowError) and isinstance(exc.code, str) and exc.code:
+            result["error_code"] = _safe_error_metadata(exc.code)
     return result
 
 

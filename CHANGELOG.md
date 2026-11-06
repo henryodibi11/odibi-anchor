@@ -2,6 +2,19 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.13] - 2026-11-06
+
+### Fixed
+
+- Client-facing error information (MCP `anchor_execute`, CLI and the request adapter)
+  now includes a workflow refusal's stable identifier as `error_code`. `WorkflowError`
+  stores it in `.code`, which serialization previously dropped, leaving only `type` and
+  `message`. An explicitly attached `error_code` still takes precedence. Other
+  exceptions' `.code` attributes (HTTP status, governance envelope codes) are not
+  exported. Workflow transitions, permissions and retry behaviour are unchanged.
+
+No dependency, schema, migration, or settings changes.
+
 ## [0.4.12] - 2026-11-05
 
 ### Fixed

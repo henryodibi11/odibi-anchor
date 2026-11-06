@@ -153,3 +153,31 @@ def test_direct_python_keeps_raw_results_and_exceptions(tmp_path, monkeypatch):
     assert isinstance(anchor("help", output_format="dict"), str)
     with pytest.raises(ValueError, match=r"Unknown anchor\(\) action"):
         anchor("not-an-action")
+
+
+def test_workflow_error_code_is_exported_and_explicit_error_code_wins():
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    error = error_information(WorkflowError("review_required", "synthetic review missing"))
+    assert error == {"type": "WorkflowError", "message": "synthetic review missing",
+                     "error_code": "review_required"}
+    annotated = attach_recovery(WorkflowError("wrong_authority", "bound elsewhere"),
+                                error_code="workflow_binding_mismatch", context={})
+    assert error_information(annotated)["error_code"] == "workflow_binding_mismatch"
+
+
+def test_other_exception_code_attributes_are_not_error_codes():
+    import io
+    from urllib.error import HTTPError
+
+    from odibi_anchor._governance_sidecar._protocol import EnvelopeError
+
+    class CodedError(RuntimeError):
+        code = "not_a_workflow_code"
+
+    for exc in (
+        HTTPError("https://example.invalid", 503, "unavailable", {}, io.BytesIO()),
+        EnvelopeError("bad_envelope"),
+        CodedError("synthetic"),
+    ):
+        assert "error_code" not in error_information(exc), exc

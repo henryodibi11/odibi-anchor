@@ -1042,6 +1042,34 @@ class TestToolInvocation:
         assert parsed["error"]["type"] == "ValueError"
         assert "Unknown anchor() action" in parsed["error"]["message"]
 
+    @pytest.mark.parametrize("telemetry", [{}, {"telemetry_version": 1}])
+    def test_workflow_error_code_crosses_the_transport(self, monkeypatch, telemetry):
+        from odibi_anchor._recovery import attach_recovery
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        errors = iter([
+            WorkflowError("review_required", "synthetic review missing"),
+            attach_recovery(WorkflowError("wrong_authority", "synthetic"), error_code="workflow_binding_mismatch", context={}),
+            RuntimeError("plain failure"),
+        ])
+
+        def dispatch(action, *args, **kwargs):
+            raise next(errors)
+
+        monkeypatch.setattr(mcp_server, "_boot", lambda: dispatch)
+
+        def call():
+            result = asyncio.run(mcp_server.mcp.call_tool("anchor_execute", {
+                "action": "workflow", "args": {"arg0": "review"}, "response_version": 2, **telemetry,
+            }))
+            output = json.loads(result.content[0].text)
+            assert output["ok"] is False
+            return output["error"]
+
+        assert call()["error_code"] == "review_required"
+        assert call()["error_code"] == "workflow_binding_mismatch"
+        assert "error_code" not in call()
+
     def test_real_nested_memory_operations_reach_their_guards(self, booted):
         """Nested memory commands run for real; activation is still refused by its own guard."""
         mcp_server.anchor_execute("status")
