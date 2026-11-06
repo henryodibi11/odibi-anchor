@@ -210,7 +210,24 @@ def error_information(exc: Exception) -> dict[str, Any]:
     ):
         if hasattr(exc, field):
             result[field] = _safe_error_metadata(getattr(exc, field))
+    if "error_code" not in result and (code := workflow_error_code(exc)) is not None:
+        result["error_code"] = _safe_error_metadata(code)
     return result
+
+
+def workflow_error_code(exc: BaseException) -> str | None:
+    """Return a WorkflowError's stable ``.code``; None for every other exception.
+
+    Other exceptions' ``.code`` (HTTP status, exit status, sidecar protocol) is not
+    this contract. Matching by qualified name also covers WorkflowError classes from
+    before bootstrap re-imports the package, and avoids importing the workflow module.
+    """
+    kind = type(exc)
+    code = getattr(exc, "code", None)
+    if (kind.__module__, kind.__qualname__) == ("odibi_anchor.codebase._workflow", "WorkflowError") \
+            and isinstance(code, str) and code:
+        return code
+    return None
 
 
 def execute_request(dispatcher: Callable[..., Any], request: NormalizedRequest) -> dict[str, Any]:

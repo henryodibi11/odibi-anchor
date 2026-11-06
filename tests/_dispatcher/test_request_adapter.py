@@ -153,3 +153,50 @@ def test_direct_python_keeps_raw_results_and_exceptions(tmp_path, monkeypatch):
     assert isinstance(anchor("help", output_format="dict"), str)
     with pytest.raises(ValueError, match=r"Unknown anchor\(\) action"):
         anchor("not-an-action")
+
+
+def test_workflow_error_code_is_exported_and_explicit_error_code_wins():
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    error = error_information(WorkflowError("review_required", "synthetic review missing"))
+    assert error == {"type": "WorkflowError", "message": "synthetic review missing",
+                     "error_code": "review_required"}
+    annotated = attach_recovery(WorkflowError("wrong_authority", "bound elsewhere"),
+                                error_code="workflow_binding_mismatch", context={})
+    assert error_information(annotated)["error_code"] == "workflow_binding_mismatch"
+
+
+def test_other_exception_code_attributes_are_not_error_codes():
+    import io
+    from urllib.error import HTTPError
+
+    from odibi_anchor._governance_sidecar._protocol import EnvelopeError
+
+    class CodedError(RuntimeError):
+        code = "not_a_workflow_code"
+
+    for exc in (
+        HTTPError("https://example.invalid", 503, "unavailable", {}, io.BytesIO()),
+        EnvelopeError("bad_envelope"),
+        CodedError("synthetic"),
+    ):
+        assert "error_code" not in error_information(exc), exc
+
+
+def test_workflow_error_identity_survives_package_reimport_and_envelopes_agree():
+    from odibi_anchor._dispatcher._envelope import build_failure_envelope, build_operation_failure_envelope
+
+    # Bootstrap re-imports the package, so a WorkflowError may come from another module object.
+    reimported = type("WorkflowError", (RuntimeError,), {"__module__": "odibi_anchor.codebase._workflow"})
+    exc = reimported("synthetic")
+    exc.code = "stale_plan"
+    impostor = type("WorkflowError", (RuntimeError,), {"__module__": "elsewhere"})("synthetic")
+    impostor.code = "stale_plan"
+
+    assert error_information(exc)["error_code"] == "stale_plan"
+    assert "error_code" not in error_information(impostor)
+    assert build_failure_envelope("workflow", exc)["error"]["error_code"] == "stale_plan"
+    assert build_operation_failure_envelope("workflow.review", exc, mutating=False)["error"]["error_code"] == "stale_plan"
+    assert build_failure_envelope("workflow", impostor)["error"]["error_code"] is None
+    annotated = attach_recovery(exc, error_code="explicit_code", context={})
+    assert build_failure_envelope("workflow", annotated)["error"]["error_code"] == "explicit_code"
