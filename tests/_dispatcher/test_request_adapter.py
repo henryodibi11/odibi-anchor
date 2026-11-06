@@ -181,3 +181,22 @@ def test_other_exception_code_attributes_are_not_error_codes():
         CodedError("synthetic"),
     ):
         assert "error_code" not in error_information(exc), exc
+
+
+def test_workflow_error_identity_survives_package_reimport_and_envelopes_agree():
+    from odibi_anchor._dispatcher._envelope import build_failure_envelope, build_operation_failure_envelope
+
+    # Bootstrap re-imports the package, so a WorkflowError may come from another module object.
+    reimported = type("WorkflowError", (RuntimeError,), {"__module__": "odibi_anchor.codebase._workflow"})
+    exc = reimported("synthetic")
+    exc.code = "stale_plan"
+    impostor = type("WorkflowError", (RuntimeError,), {"__module__": "elsewhere"})("synthetic")
+    impostor.code = "stale_plan"
+
+    assert error_information(exc)["error_code"] == "stale_plan"
+    assert "error_code" not in error_information(impostor)
+    assert build_failure_envelope("workflow", exc)["error"]["error_code"] == "stale_plan"
+    assert build_operation_failure_envelope("workflow.review", exc, mutating=False)["error"]["error_code"] == "stale_plan"
+    assert build_failure_envelope("workflow", impostor)["error"]["error_code"] is None
+    annotated = attach_recovery(exc, error_code="explicit_code", context={})
+    assert build_failure_envelope("workflow", annotated)["error"]["error_code"] == "explicit_code"

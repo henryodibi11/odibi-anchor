@@ -170,6 +170,10 @@ def _envelope_dispatcher(tmp_path):
 
 
 def _failing_or_recording(action, /, *args, **kwargs):
+    if kwargs.get("workflow_refusal"):
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        raise WorkflowError("review_required", "synthetic review missing")
     if kwargs.get("fail"):
         from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
@@ -235,3 +239,24 @@ def test_failure_envelope_is_identical_across_transports(tmp_path, monkeypatch, 
     assert cli_error["envelope"] == in_process
     assert mcp_error["envelope"] == in_process
     assert cli_error["error_code"] == mcp_error["error_code"] == "conformance_refused"
+
+
+def test_workflow_error_code_reaches_every_transport_and_its_envelope(tmp_path, monkeypatch, capsys):
+    from odibi_anchor.codebase._workflow import WorkflowError
+
+    dispatcher = _envelope_dispatcher(tmp_path)
+    with pytest.raises(WorkflowError) as raised:
+        dispatcher("workflow", "review", workflow_refusal=True)
+    in_process = raised.value.envelope
+
+    monkeypatch.setattr(cli, "_boot", lambda _root: dispatcher)
+    request = json.dumps({"args": ["review"], "kwargs": {"workflow_refusal": True}})
+    cli.main(["exec", "workflow", request])
+    cli_error = json.loads(capsys.readouterr().out)["error"]
+
+    monkeypatch.setattr(mcp_server, "_boot", lambda: dispatcher)
+    mcp_error = json.loads(mcp_server.anchor_execute("workflow", request, response_version=2))["error"]
+
+    assert in_process["error"]["error_code"] == "review_required"
+    assert cli_error["envelope"] == mcp_error["envelope"] == in_process
+    assert cli_error["error_code"] == mcp_error["error_code"] == "review_required"

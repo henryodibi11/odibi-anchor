@@ -548,7 +548,7 @@ def build_failure_envelope(
         "undo": _undo(action, None, False, {}, session_state),
         "error": {
             "type": type(exc).__name__,
-            "error_code": error_code if isinstance(error_code, str) else None,
+            "error_code": error_code if isinstance(error_code, str) else _workflow_error_code(exc),
             "message": _text(message.splitlines()[0] if message else type(exc).__name__),
         },
     }
@@ -802,6 +802,12 @@ def build_operation_envelope(
     }
 
 
+def _workflow_error_code(exc: BaseException) -> str | None:
+    from odibi_anchor._dispatcher._request_adapter import workflow_error_code
+
+    return workflow_error_code(exc)
+
+
 def build_operation_failure_envelope(operation: str, exc: BaseException, *, mutating: bool) -> dict[str, Any]:
     """Failure envelope for CLI operations, mapping attach_recovery metadata."""
     action, _, selector = operation.partition(".")
@@ -822,7 +828,7 @@ def build_operation_failure_envelope(operation: str, exc: BaseException, *, muta
         "undo": {"status": "not_applicable", "copy_ready": None, "reason": "the command did not complete"},
         "error": {
             "type": type(exc).__name__,
-            "error_code": error_code if isinstance(error_code, str) else None,
+            "error_code": error_code if isinstance(error_code, str) else _workflow_error_code(exc),
             "message": _text(message.splitlines()[0] if message else type(exc).__name__),
         },
     }

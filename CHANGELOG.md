@@ -9,7 +9,9 @@ All notable changes to Odibi Anchor are documented here. This project follows [S
 - Client-facing error information (MCP `anchor_execute`, CLI and the request adapter)
   now includes a workflow refusal's stable identifier as `error_code`. `WorkflowError`
   stores it in `.code`, which serialization previously dropped, leaving only `type` and
-  `message`. An explicitly attached `error_code` still takes precedence. Other
+  `message`; the nested failure `envelope.error.error_code` now carries it too. A
+  WorkflowError from a re-imported package module is recognised by its qualified
+  name. An explicitly attached `error_code` still takes precedence. Other
   exceptions' `.code` attributes (HTTP status, governance envelope codes) are not
   exported. Workflow transitions, permissions and retry behaviour are unchanged.
 
