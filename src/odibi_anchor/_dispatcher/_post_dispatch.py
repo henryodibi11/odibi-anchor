@@ -206,8 +206,11 @@ def _snapshot_durable_state(
             ),
         )
     except (OSError, RuntimeError, ValueError) as exc:
+        notes = "".join(f" ({note})" for note in getattr(exc, "__notes__", ()))
         raise RuntimeError(
-            f"BLOCKED: active state could not be durably snapshotted: {type(exc).__name__}: {exc}"
+            f"BLOCKED: active state could not be durably snapshotted: {type(exc).__name__}: {exc}{notes}. "
+            "Authority writes this call made before the snapshot are committed and were not rolled "
+            "back; read state back before retrying."
         ) from exc
 
 

@@ -208,3 +208,95 @@ def test_safe_stop_persists_terminal_status_and_unavailable_evidence(
     record = result["terminal_task_record"]["record"]
     assert record["terminal"]["status"] == terminal_status
     assert "external CI was not observed" in record["coverage"]["unavailable"]
+
+
+def _durable_terminal_environment(tmp_path, monkeypatch):
+    import odibi_anchor._dispatcher._boot as boot
+
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    (tmp_path / "workspace" / "projects").mkdir(parents=True)
+    monkeypatch.setitem(boot._ENV, "memory_db", str(tmp_path / "memory.db"))
+    monkeypatch.setitem(boot._ENV, "durable_root", str(durable))
+    monkeypatch.setitem(boot._ENV, "authority_id", "work")
+    monkeypatch.setitem(boot._ENV, "trust_domain", "work")
+    monkeypatch.setitem(boot._ENV, "is_databricks", False)
+    monkeypatch.setitem(boot._ENV, "runtime_paths", SimpleNamespace(anchor_home=tmp_path))
+    monkeypatch.setitem(boot._ENV, "retention_days", None)
+    monkeypatch.setitem(boot._ENV, "retention_minimum_snapshots", None)
+    return durable
+
+
+def _held_staging(monkeypatch):
+    import errno
+    import shutil
+    from pathlib import Path
+
+    from odibi_anchor import durability
+
+    real_rmtree = shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path).name.startswith("odibi-anchor-snapshot-"):
+            error = PermissionError(errno.EACCES, "held", str(Path(path) / "artifacts.tar"))
+            error.winerror = 32
+            raise error
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(durability.shutil, "rmtree", rmtree)
+    monkeypatch.setattr(durability.time, "sleep", lambda _seconds: None)
+
+
+def _read_only_assess(tmp_path):
+    current = state(tmp_path)
+    current.active_task_profile = SimpleNamespace(execution_mode="read_only")
+    result = {"assessment": {
+        "assessment_id": "las-held", "outcome": "observations_recorded",
+        "observation_ids": ["lrn_synthetic"], "actor_kind": "agent",
+    }}
+    _persist_terminal_task_if_ready(
+        result, action="learning", args=("assess",),
+        session_timings=[{"action": "learning", "learning_command": "assess"}],
+        session_files_changed=set(), session_state=current,
+    )
+    return result
+
+
+def test_read_only_closure_reports_durable_snapshot_when_only_staging_removal_is_held(
+    tmp_path, monkeypatch,
+):
+    durable = _durable_terminal_environment(tmp_path, monkeypatch)
+    _held_staging(monkeypatch)
+
+    result = _read_only_assess(tmp_path)
+
+    assert result["terminal_task_record"]["record"]["terminal"]["status"] == "completed"
+    assert result["durable_state"]["action"] == "created"
+    assert result["durable_state"]["staging_cleanup"]["status"] == "retained"
+    assert list((durable / "work" / "snapshots").glob("*.manifest.json"))
+
+
+def test_snapshot_refusal_after_closure_says_committed_writes_were_not_rolled_back(
+    tmp_path, monkeypatch,
+):
+    from odibi_anchor import durability
+
+    _durable_terminal_environment(tmp_path, monkeypatch)
+    _held_staging(monkeypatch)
+
+    def fail_manifest(source, destination):
+        raise OSError("simulated manifest publication failure")
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", fail_manifest)
+
+    with pytest.raises(RuntimeError) as refusal:
+        _read_only_assess(tmp_path)
+
+    message = str(refusal.value)
+    assert message.startswith(
+        "BLOCKED: active state could not be durably snapshotted: OSError: simulated manifest publication failure"
+    )
+    assert "snapshot staging directory was retained" in message
+    assert "committed and were not rolled back; read state back before retrying" in message
+    records = inspect_terminal_records(tmp_path / "memory.db", task_window_id="ltw-terminal")["records"]
+    assert [record["record"]["terminal"]["status"] for record in records] == ["completed"]
