@@ -239,12 +239,18 @@ def _held_staging(monkeypatch):
     def rmtree(path, *args, **kwargs):
         if Path(path).name.startswith("odibi-anchor-snapshot-"):
             error = PermissionError(errno.EACCES, "held", str(Path(path) / "artifacts.tar"))
-            error.winerror = 32
+            error.winerror = 32  # type: ignore[attr-defined]
             raise error
         real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(durability.shutil, "rmtree", rmtree)
-    monkeypatch.setattr(durability.time, "sleep", lambda _seconds: None)
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        assert len(sleeps) <= 10, "staging removal retry is unbounded"
+
+    monkeypatch.setattr(durability.time, "sleep", sleep)
 
 
 def _read_only_assess(tmp_path):

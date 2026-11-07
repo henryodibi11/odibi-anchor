@@ -2003,7 +2003,13 @@ def _hold_snapshot_staging(
         real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(durability.shutil, "rmtree", rmtree)
-    monkeypatch.setattr(durability.time, "sleep", lambda _seconds: None)
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        assert len(sleeps) <= 10, "staging removal retry is unbounded"
+
+    monkeypatch.setattr(durability.time, "sleep", sleep)
     return attempts
 
 
