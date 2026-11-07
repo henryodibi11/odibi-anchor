@@ -2,6 +2,27 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.14] - 2026-11-07
+
+### Fixed
+
+- A durable snapshot that was fully published is no longer reported as
+  `BLOCKED: active state could not be durably snapshotted` when only removal of its
+  private temporary staging directory fails. On Windows another process can hold a
+  just-written staged file (observed: `PermissionError: [WinError 32]` on the staged
+  `artifacts.tar` after the manifest had been published). Staging removal now retries
+  only that sharing violation, briefly and boundedly; if it still fails, the snapshot
+  result reports `staging_cleanup: {"status": "retained", "path", "error"}` instead
+  of failing. When the snapshot itself fails, its own error is raised and a retained
+  staging directory is added as a note rather than replacing it. Published snapshot
+  objects, manifests and their ordering are unchanged.
+- The post-write snapshot refusal now states that authority writes made by the call
+  before the snapshot are committed and were not rolled back, so state should be
+  read back before retrying.
+
+No dependency, schema, migration, or settings changes. Snapshot results may carry
+the additive `staging_cleanup` key.
+
 ## [0.4.13] - 2026-11-06
 
 ### Fixed

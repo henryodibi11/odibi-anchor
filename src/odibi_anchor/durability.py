@@ -382,6 +382,61 @@ def _publish_file_exclusive(source: Path, destination: Path) -> None:
     _fsync_directory(destination.parent)
 
 
+_WINDOWS_SHARING_VIOLATION = 32
+_STAGING_REMOVAL_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def _remove_private_staging(path: str) -> OSError | None:
+    """Remove Anchor-private snapshot staging; return the final error instead of raising.
+
+    Another process can briefly hold a just-written staged file open on Windows. Removing
+    private staging is idempotent and never touches published objects (a hard-linked
+    publication keeps its own name), so only that sharing violation is retried, boundedly.
+    """
+    for delay in (*_STAGING_REMOVAL_DELAYS, None):
+        try:
+            shutil.rmtree(path)
+            return None
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if delay is None or getattr(exc, "winerror", None) != _WINDOWS_SHARING_VIOLATION:
+                return exc
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+class _SnapshotStaging:
+    """Private snapshot staging whose removal cannot rewrite the snapshot outcome.
+
+    A completed snapshot stays completed when staging removal fails: the result reports the
+    retained directory. A failed snapshot keeps its own error, with the retained directory noted.
+    """
+
+    def __init__(self) -> None:
+        self.path = tempfile.mkdtemp(prefix="odibi-anchor-snapshot-")
+        self._result: dict[str, Any] | None = None
+
+    def __enter__(self) -> _SnapshotStaging:
+        return self
+
+    def completed(self, result: dict[str, Any]) -> dict[str, Any]:
+        self._result = result
+        return result
+
+    def __exit__(self, exc_type: Any, exc: BaseException | None, traceback: Any) -> None:
+        error = _remove_private_staging(self.path)
+        if error is None:
+            return
+        detail = f"{type(error).__name__}: {error}"
+        if exc is not None:
+            exc.add_note(f"snapshot staging directory was retained: {self.path}: {detail}")
+            return
+        if self._result is None:
+            raise error
+        self._result["staging_cleanup"] = {"status": "retained", "path": self.path, "error": detail}
+
+
 def _durable_root_unavailable(root: Path, message: str, *, databricks: bool, observed: str) -> FileNotFoundError:
     return attach_recovery(
         FileNotFoundError(message),
@@ -1783,7 +1838,8 @@ def snapshot_state(
         trust_domain="work",
         initialize=True,
     )
-    with tempfile.TemporaryDirectory(prefix="odibi-anchor-snapshot-") as temporary_directory:
+    with _SnapshotStaging() as staging:
+        temporary_directory = staging.path
         staged = Path(temporary_directory) / "snapshot.sqlite3"
         staged_artifacts = Path(temporary_directory) / "artifacts.tar"
         source_connection = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)
@@ -1925,7 +1981,7 @@ def snapshot_state(
                         remote_entries=remote_entries,
                         index_migrated=index_migrated,
                     )
-                return result
+                return staging.completed(result)
             created = datetime.now(UTC)
             if latest_created is not None:
                 floor = datetime.fromisoformat(latest_created.replace("Z", "+00:00"))
@@ -2034,7 +2090,7 @@ def snapshot_state(
                     remote_entries=remote_entries,
                     index_migrated=index_migrated,
                 )
-            return result
+            return staging.completed(result)
 
 
 def restore_latest(

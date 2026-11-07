@@ -1980,3 +1980,118 @@ def test_databricks_resume_maps_lost_lineage_to_abandon_and_lets_transport_error
     ]
     assert (destination_artifacts / ".odibi-anchor-restore-owner.json").is_file()
     assert not destination_db.exists()
+
+
+def _hold_snapshot_staging(
+    monkeypatch: pytest.MonkeyPatch, *, failures: int | None, winerror: int | None = 32,
+) -> list[str]:
+    """Make staging removal fail as Windows does while another process holds a staged file."""
+    import shutil
+
+    real_rmtree = shutil.rmtree
+    attempts: list[str] = []
+
+    def rmtree(path: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(path).name.startswith("odibi-anchor-snapshot-"):
+            attempts.append(str(path))
+            if failures is None or len(attempts) <= failures:
+                error = PermissionError(
+                    errno.EACCES, "The process cannot access the file", str(Path(path) / "artifacts.tar"),
+                )
+                error.winerror = winerror  # type: ignore[attr-defined]
+                raise error
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(durability.shutil, "rmtree", rmtree)
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        assert len(sleeps) <= 10, "staging removal retry is unbounded"
+
+    monkeypatch.setattr(durability.time, "sleep", sleep)
+    return attempts
+
+
+def test_held_staging_does_not_turn_a_published_snapshot_into_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, artifacts, durable = tmp_path / "live.db", tmp_path / "projects", tmp_path / "durable"
+    durable.mkdir()
+    (artifacts / "alpha").mkdir(parents=True)
+    (artifacts / "alpha" / "notes.md").write_text("alpha\n", encoding="utf-8")
+    _database(source)
+    attempts = _hold_snapshot_staging(monkeypatch, failures=None)
+
+    result = durability.snapshot_state(
+        source_db=source, source_artifacts=artifacts, durable_root=durable, authority_id="work",
+    )
+
+    assert result["action"] == "created"
+    retained = Path(result["staging_cleanup"]["path"])
+    assert result["staging_cleanup"]["status"] == "retained"
+    assert "PermissionError" in result["staging_cleanup"]["error"]
+    assert retained.is_dir() and (retained / "artifacts.tar").is_file()
+    assert 1 < len(attempts) <= 6
+    listed = durability.list_snapshots(durable_root=str(durable), authority_id="work")["snapshots"]
+    assert [item["snapshot_id"] for item in listed] == [result["manifest"]["snapshot_id"]]
+    restored = tmp_path / "restored.db"
+    durability.restore_latest(
+        durable_root=str(durable), destination_db=str(restored),
+        destination_artifacts=str(tmp_path / "restored-projects"), authority_id="work",
+    )
+    assert (tmp_path / "restored-projects" / "alpha" / "notes.md").read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_briefly_held_staging_is_removed_after_bounded_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, durable = tmp_path / "live.db", tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+    attempts = _hold_snapshot_staging(monkeypatch, failures=2)
+
+    result = durability.snapshot_state(source_db=str(source), durable_root=str(durable), authority_id="work")
+
+    assert result["action"] == "created"
+    assert "staging_cleanup" not in result
+    assert len(attempts) == 3
+    assert not Path(attempts[0]).exists()
+
+
+def test_staging_removal_retries_only_windows_sharing_violations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, durable = tmp_path / "live.db", tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+    attempts = _hold_snapshot_staging(monkeypatch, failures=None, winerror=None)
+
+    result = durability.snapshot_state(source_db=str(source), durable_root=str(durable), authority_id="work")
+
+    assert result["staging_cleanup"]["status"] == "retained"
+    assert len(attempts) == 1
+
+
+def test_held_staging_keeps_the_original_snapshot_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, durable = tmp_path / "live.db", tmp_path / "durable"
+    durable.mkdir()
+    _database(source)
+    real_publish = durability._publish_file_exclusive
+
+    def fail_manifest(source_path: Path, destination: Path) -> None:
+        if destination.name.endswith(".manifest.json"):
+            raise OSError("simulated manifest publication failure")
+        real_publish(source_path, destination)
+
+    monkeypatch.setattr(durability, "_publish_file_exclusive", fail_manifest)
+    _hold_snapshot_staging(monkeypatch, failures=None)
+
+    with pytest.raises(OSError, match="simulated manifest publication failure") as failure:
+        durability.snapshot_state(source_db=str(source), durable_root=str(durable), authority_id="work")
+
+    notes = getattr(failure.value, "__notes__", [])
+    assert len(notes) == 1 and "snapshot staging directory was retained" in notes[0]
+    assert durability.list_snapshots(durable_root=str(durable), authority_id="work")["snapshots"] == []
