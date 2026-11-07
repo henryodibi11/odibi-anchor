@@ -227,13 +227,17 @@ def _durable_terminal_environment(tmp_path, monkeypatch):
     return durable
 
 
-def _held_staging(monkeypatch):
+def _held_staging(monkeypatch, tmp_path):
     import errno
     import shutil
+    import tempfile
     from pathlib import Path
 
     from odibi_anchor import durability
 
+    # Retained staging must stay inside the test directory, not the system temp.
+    (tmp_path / "staging-temp").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "staging-temp"))
     real_rmtree = shutil.rmtree
 
     def rmtree(path, *args, **kwargs):
@@ -272,7 +276,7 @@ def test_read_only_closure_reports_durable_snapshot_when_only_staging_removal_is
     tmp_path, monkeypatch,
 ):
     durable = _durable_terminal_environment(tmp_path, monkeypatch)
-    _held_staging(monkeypatch)
+    _held_staging(monkeypatch, tmp_path)
 
     result = _read_only_assess(tmp_path)
 
@@ -288,7 +292,7 @@ def test_snapshot_refusal_after_closure_says_committed_writes_were_not_rolled_ba
     from odibi_anchor import durability
 
     _durable_terminal_environment(tmp_path, monkeypatch)
-    _held_staging(monkeypatch)
+    _held_staging(monkeypatch, tmp_path)
 
     def fail_manifest(source, destination):
         raise OSError("simulated manifest publication failure")
