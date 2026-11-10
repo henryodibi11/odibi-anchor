@@ -9,11 +9,13 @@ import pytest
 from odibi_anchor._dispatcher._problem import problem_action
 from odibi_anchor._dispatcher._project import project_action
 from odibi_anchor._dispatcher._spec import spec_action
-from odibi_anchor._dispatcher._work_item import work_item_action
 from odibi_anchor.artifacts import inspect_readiness
 
 
 def wi(root, *args, **kwargs):
+    # Bootstrap compatibility tests can replace the imported package modules.
+    from odibi_anchor._dispatcher._work_item import work_item_action
+
     result = work_item_action(root, *args, output_format="dict", **kwargs)
     assert isinstance(result, dict)
     return result
