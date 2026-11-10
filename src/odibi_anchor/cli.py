@@ -78,6 +78,23 @@ def _parser() -> argparse.ArgumentParser:
     batch.add_argument("file", nargs="?", default="-", help="UTF-8 input file, or - for stdin")
     commands.add_parser("shell", help="boot once; read one request JSON object per input line")
     commands.add_parser("help", help="discover core actions")
+    commands.add_parser("artifact-schema", help="show native writer/readiness contracts without accessing runtime state")
+    artifacts = commands.add_parser("artifacts", help="discover/read exact saved artifacts without bootstrapping or mutation")
+    artifacts.add_argument("--home", required=True, help="explicit Anchor home")
+    artifacts.add_argument("--project", required=True, help="exact managed project ID")
+    artifacts.add_argument("--path", help="exact project-relative saved path; omit to list")
+    artifacts.add_argument("--offset", type=int, default=0)
+    artifacts.add_argument("--limit", type=int)
+    artifacts.add_argument("--expected-sha256", help="whole saved-content digest, required for subsequent text pages")
+    artifacts.add_argument("--view", choices=("structured", "human"), default="structured")
+    readiness = commands.add_parser("readiness", help="inspect saved lifecycle readiness without mutation or admission")
+    readiness.add_argument("kind", choices=("work_item", "problem", "spec"))
+    readiness.add_argument("identifier")
+    readiness.add_argument("--home", required=True)
+    readiness.add_argument("--project", required=True)
+    readiness.add_argument("--stage")
+    readiness.add_argument("--rigor", choices=("direct", "compact", "full"), default="direct")
+    readiness.add_argument("--spec", help="exact spec name for work-item plan approval readiness")
     doctor = commands.add_parser("doctor", help="inspect startup and routing without mutation")
     doctor.add_argument(
         "--fresh-compute", action="store_true",
@@ -520,6 +537,22 @@ def main(argv: list[str] | None = None) -> int:
     except RequestError as exc:
         _emit({"ok": False, "error": {"type": "input", "message": error_information(exc)["message"]}})
         return EXIT_INPUT
+    if ns.command in {"artifacts", "readiness", "artifact-schema"}:
+        try:
+            from odibi_anchor.artifacts import inspect_artifact_contracts, inspect_artifacts, inspect_readiness
+
+            if ns.command == "artifact-schema":
+                result = inspect_artifact_contracts()
+            elif ns.command == "readiness":
+                result = inspect_readiness(anchor_home=ns.home, project_id=ns.project, kind=ns.kind,
+                                           identifier=ns.identifier, stage=ns.stage, rigor=ns.rigor, spec=ns.spec)
+            else:
+                result = inspect_artifacts(anchor_home=ns.home, project_id=ns.project, path=ns.path,
+                                           offset=ns.offset, limit=ns.limit, expected_sha256=ns.expected_sha256,
+                                           output_format="markdown" if ns.view == "human" else "dict")
+            return _emit({"ok": True, "result": result})
+        except (OSError, UnicodeError, ValueError) as exc:
+            return _emit({"ok": False, "error": error_information(exc)}, EXIT_INPUT)
     if ns.command == "verify-delivery":
         try:
             from odibi_anchor.delivery import DeliveryInputError, verify_delivery

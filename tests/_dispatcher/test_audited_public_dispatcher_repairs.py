@@ -248,7 +248,7 @@ def malformed_problem_root(tmp_path):
 
 def _list_markdown(root):
     result = problem_action(
-        artifact_root=str(root), project_id="p", args=("list",), output_format="dict",
+        str(root), "list", project_id="p", output_format="dict",
     )
     return result, render_problem_result("list", result)
 
@@ -337,4 +337,3 @@ def test_subprocess_child_really_sees_the_preserved_control():
     )
     seen = json.loads(completed.stdout)
     assert seen == {"ANCHOR_REQUIRE_INSTALLED_QUALIFICATION": "1"}
-

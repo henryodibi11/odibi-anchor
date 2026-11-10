@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 _TABLES = {
     "issues": ["ID", "Parent", "Issue", "Status", "Priority", "Rationale"],
     "hypotheses": [
@@ -218,9 +217,10 @@ def _prose(text: str, heading: str, next_heading: str | None) -> str:
     return "" if value.startswith("[Not yet captured]") or value.startswith("[None captured]") else value
 
 
-def _parse(path: Path) -> dict[str, Any]:
+def _parse(path: Path, *, text: str | None = None) -> dict[str, Any]:
     """Parse a canonical Problem Record from disk."""
-    text = path.read_text(encoding="utf-8")
+    if text is None:
+        text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         raise ValueError(f"Invalid Problem Record frontmatter: {path}")
     frontmatter, body = text[4:].split("\n---\n", 1)
@@ -330,12 +330,17 @@ def _next_problem_id(directory: Path) -> str:
     return f"PRB-{year}-{max(numbers, default=0) + 1:04d}"
 
 
-def _write(path: Path, record: dict[str, Any]) -> None:
+def _write(path: Path, record: dict[str, Any], *, expected_sha256: str | None = None) -> None:
     """Atomically persist a Problem Record."""
+    from odibi_anchor._dispatcher._artifact_observation import contained_path
+    from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
+
+    contained_path(path.parent.parent, path)
+    rendered = _render(record)
+    if _render(_parse(path, text=rendered)).strip() != rendered.strip():
+        raise ValueError("problem fields cannot round-trip without content loss; nothing was written")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".md.tmp")
-    temporary.write_text(_render(record), encoding="utf-8")
-    temporary.replace(path)
+    write_descriptor_atomic(path, rendered, expected_sha256=expected_sha256)
 
 
 def _record_revision(record: dict[str, Any], change: str) -> None:
@@ -362,17 +367,61 @@ def _next_entity_id(rows: list[dict[str, Any]], prefix: str) -> str:
 
 def _upsert(rows: list[dict[str, Any]], columns: list[str], value: dict[str, Any], prefix: str) -> str:
     """Insert or update a stable-ID row and return its ID."""
-    normalized = {column: value.get(column, value.get(column.lower().replace(" ", "_"), "")) for column in columns}
-    if "Issue" in columns:
-        normalized["Issue"] = value.get("issue_id", value.get("title", normalized["Issue"]))
+    normalized = {column: value.get(column, value.get(column.lower().replace(" ", "_"))) for column in columns
+                  if column in value or column.lower().replace(" ", "_") in value}
+    if "Issue" in columns and ("issue_id" in value or "title" in value):
+        normalized["Issue"] = value.get("issue_id", value.get("title"))
     row_id = str(value.get("id") or value.get("ID") or _next_entity_id(rows, prefix)).upper()
     normalized["ID"] = row_id
     for index, existing in enumerate(rows):
         if existing.get("ID") == row_id:
-            rows[index] = {**existing, **{key: val for key, val in normalized.items() if val != ""}}
+            rows[index] = {**existing, **normalized}
             return row_id
-    rows.append(normalized)
+    defaults = {"Status": "active", "Critical": False, "Confidence": "medium"}
+    rows.append({column: normalized.get(column, defaults.get(column, "")) for column in columns})
     return row_id
+
+
+def _validate_changes(changes: dict[str, Any], *, strict: bool) -> None:
+    """Reject unrepresentable fields before the legacy renderer can discard them."""
+    template = _empty_record("PRB-0000-0000", "project", "title", "full")
+    text_fields = {key for key, value in template.items() if isinstance(value, str)}
+    meta_fields = {"title", "status", "next_action", "stage", "rigor_level"}
+    table_fields = {"issues", "issue", "hypotheses", "hypothesis", "workplan", "evidence"}
+    unknown = set(changes) - text_fields - meta_fields - table_fields - {"change_note"}
+    if unknown:
+        raise ValueError("unknown problem fields: " + ", ".join(sorted(unknown)))
+    if strict:
+        for key in (text_fields | {"title", "status", "next_action", "change_note"}) & set(changes):
+            if not isinstance(changes[key], str):
+                raise ValueError(f"{key} must be a string in write_version=2")
+            if re.search(r"(?m)^#{1,6}\s", changes[key]):
+                raise ValueError(f"{key} is native prose and must not contain Markdown section headings")
+        if "stage" in changes and (type(changes["stage"]) is not int or not 1 <= changes["stage"] <= 7):
+            raise ValueError("stage must be an integer between 1 and 7")
+    for field in table_fields & set(changes):
+        table = {"issue": "issues", "hypothesis": "hypotheses"}.get(field, field)
+        columns = _TABLES[table]
+        aliases = {column: column for column in columns}
+        aliases.update({column.lower().replace(" ", "_"): column for column in columns})
+        if "ID" in columns:
+            aliases["id"] = "ID"
+        if "Issue" in columns:
+            aliases.update(issue_id="Issue", title="Issue")
+        for row in _items(changes[field]):
+            unknown = set(row) - set(aliases)
+            if unknown:
+                raise ValueError(f"unknown {field} table fields: " + ", ".join(sorted(unknown)))
+            targets = [aliases[key] for key in row]
+            if len(set(targets)) != len(targets):
+                raise ValueError(f"ambiguous aliases in {field} row")
+            if strict:
+                for key, value in row.items():
+                    column = aliases[key]
+                    if not (isinstance(value, str) or (type(value) is bool and column in {"Critical", "Contradicts"})
+                            or (isinstance(value, list) and column in {"Evidence", "Hypotheses", "Contradicts"}
+                            and all(isinstance(x, str) for x in value))):
+                        raise ValueError(f"{field}.{key} has an unsupported cell type")
 
 
 def _items(value: Any) -> list[dict[str, Any]]:
@@ -417,6 +466,30 @@ def _validate_recommendation_traceability(record: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(linked_ids))
 
 
+def _readiness(record: dict[str, Any], stage: str) -> dict[str, Any]:
+    if stage not in {"framing", "recommendation", "close"}:
+        raise ValueError("stage must be framing, recommendation, or close")
+    problems = []
+    if stage == "framing":
+        problems = [f"{key} is missing" for key in ("definition", "decision_needed", "scope", "constraints", "success_measures")
+                    if not record[key].strip()]
+    elif stage == "recommendation":
+        try:
+            _validate_recommendation_traceability(record)
+        except ValueError as exc:
+            problems.append(str(exc))
+    else:
+        unresolved = [item["ID"] for item in record["hypotheses"]
+                      if str(item.get("Critical", "")).lower() in {"yes", "true"}
+                      and str(item.get("Status", "active")).lower()
+                      not in {"supported", "rejected", "deferred", "inconclusive"}]
+        if unresolved:
+            problems.append("critical hypotheses must be resolved, deferred, or inconclusive before close: "
+                            + ", ".join(unresolved))
+    return {"stage": stage, "ready": not problems, "problems": problems,
+            "semantic_certification": False, "write_performed": False}
+
+
 def _apply_changes(record: dict[str, Any], changes: dict[str, Any]) -> list[dict[str, Any]]:
     """Apply updates and return the exact evidence rows accepted this invocation."""
     stage = int(record["meta"].get("stage", 1))
@@ -434,13 +507,11 @@ def _apply_changes(record: dict[str, Any], changes: dict[str, Any]) -> list[dict
         raise ValueError("recommendation must be non-blank when provided")
 
     for issue in _items(changes.get("issues")) + _items(changes.get("issue")):
-        issue = {"status": "active", **issue}
         issue_id = _upsert(record["issues"], _TABLES["issues"], issue, "I")
         if not re.fullmatch(r"I\d+(?:\.\d+)*", issue_id):
             raise ValueError("issue ID must match I<n> or I<n>.<n>")
         stage = max(stage, 2)
     for hypothesis in _items(changes.get("hypotheses")) + _items(changes.get("hypothesis")):
-        hypothesis = {"status": "active", "critical": False, **hypothesis}
         hypothesis_id = _upsert(record["hypotheses"], _TABLES["hypotheses"], hypothesis, "H")
         if not re.fullmatch(r"H\d+", hypothesis_id):
             raise ValueError("hypothesis ID must match H<n>")
@@ -453,7 +524,7 @@ def _apply_changes(record: dict[str, Any], changes: dict[str, Any]) -> list[dict
         source = "" if source_value is None else str(source_value).strip()
         if not source:
             raise ValueError("evidence requires source provenance")
-        evidence = {"confidence": "medium", **evidence}
+        evidence = dict(evidence)
         evidence["Source"] = source
         captured_value = evidence.get("captured", evidence.get("Captured", ""))
         captured = "" if captured_value is None else str(captured_value).strip()
@@ -502,6 +573,8 @@ def _apply_changes(record: dict[str, Any], changes: dict[str, Any]) -> list[dict
 
 def _context(record: dict[str, Any], path: Path, *, kind: str = "problem_record_context") -> dict[str, Any]:
     """Build the narrow action return contract."""
+    from odibi_anchor._dispatcher._artifact_observation import observation
+
     meta = record["meta"]
     unresolved = sum(
         1 for item in record["hypotheses"]
@@ -509,7 +582,9 @@ def _context(record: dict[str, Any], path: Path, *, kind: str = "problem_record_
         and str(item.get("Status", "active")).lower() not in {"supported", "rejected", "deferred", "inconclusive"}
     )
     return {
+        **observation(path.parent.parent, path),
         "kind": kind,
+        "revision": meta["revision"],
         "problem_id": meta["problem_id"],
         "project_id": meta["project_id"],
         "title": meta["title"],
@@ -575,6 +650,10 @@ def _render_context(context: dict[str, Any]) -> str:
 
 def render_problem_result(selector: str, result: dict[str, Any]) -> str:
     """Transport-neutral renderer for a dict-first problem dispatch result."""
+    if selector == "show":
+        return result["content"]
+    if selector == "check_readiness":
+        return json.dumps(result, ensure_ascii=False, indent=2)
     if selector in {"list", "status", ""}:
         lines = ["# Problem Records", ""]
         lines.extend(
@@ -610,6 +689,10 @@ def problem_action(
     problem_id: str | None = None,
     project_id: str | None = None,
     output_format: str = "markdown",
+    write_version: int = 1,
+    expected_sha256: str | None = None,
+    expected_revision: int | None = None,
+    allow_destructive: bool = False,
     **changes: Any,
 ) -> dict[str, Any] | str:
     """Create, list, show, update, resume, link, or close Problem Records."""
@@ -618,6 +701,29 @@ def problem_action(
     directory = _problem_dir(artifact_root)
     command = str(args[0]).lower().strip() if args else "list"
     command_id = str(args[1]) if len(args) > 1 else problem_id
+    if len(args) > 2:
+        raise ValueError("problem accepts a command and one subject only")
+    if type(write_version) is not int or write_version not in {1, 2}:
+        raise ValueError("write_version must be 1 (legacy coercion) or 2 (strict)")
+    if type(allow_destructive) is not bool:
+        raise ValueError("allow_destructive must be boolean")
+    if allow_destructive and expected_sha256 is None and expected_revision is None:
+        raise ValueError("allow_destructive requires the current expected_sha256 or expected_revision")
+    if command in {"create", "update"}:
+        _validate_changes(changes, strict=write_version == 2)
+    elif command in {"list", "status", "", "resume"} and changes:
+        raise ValueError(f"{command} does not accept changes")
+    elif command in {"link_spec", "close"}:
+        allowed = {"spec", "recommendation_revision"} if command == "link_spec" else {"outcome", "next_action"}
+        if set(changes) - allowed:
+            raise ValueError("unknown problem transition fields: " + ", ".join(sorted(set(changes) - allowed)))
+        if write_version == 2:
+            for key in set(changes) - {"recommendation_revision"}:
+                if not isinstance(changes[key], str):
+                    raise ValueError(f"{key} must be a string in write_version=2")
+            revision = changes.get("recommendation_revision")
+            if revision is not None and (type(revision) is not int or revision < 1):
+                raise ValueError("recommendation_revision must be a positive integer")
 
     if command in {"list", "status", ""}:
         records = []
@@ -679,16 +785,44 @@ def problem_action(
         path = _problem_path(artifact_root, command_id)
         if not path.is_file():
             raise FileNotFoundError(f"Problem Record does not exist: {command_id}")
+        from odibi_anchor._dispatcher._artifact_observation import check_expected, observation
+
+        before = observation(Path(artifact_root), path)
         record = _parse(path)
+        if observation(Path(artifact_root), path)["content_sha256"] != before["content_sha256"]:
+            raise ValueError("artifact changed during read; show and reconcile before retry")
+        if project_id is not None and record["meta"]["project_id"] != project_id:
+            raise ValueError("Problem Record project does not match the bound project")
+        if command == "show" and expected_sha256 is not None:
+            changes["expected_sha256"] = expected_sha256
+        else:
+            check_expected(before, expected_sha256=expected_sha256, expected_revision=expected_revision,
+                           revision=record["meta"]["revision"])
+        if command in {"update", "link_spec", "close"} and write_version == 2 and expected_sha256 is None and expected_revision is None:
+            raise ValueError("write_version=2 requires expected_sha256 or expected_revision; show first")
+        if (command in {"update", "link_spec", "close"} and write_version == 2 and not allow_destructive
+                and path.read_text(encoding="utf-8").strip() != _render(record).strip()):
+            raise ValueError("saved content is not losslessly representable by the native writer; preserve it or explicitly allow_destructive=True")
         if command == "show":
+            from odibi_anchor._dispatcher._artifact_observation import saved_content
+
+            if set(changes) - {"offset", "limit", "expected_sha256"}:
+                raise ValueError("unknown problem show arguments")
             context = _context(record, path)
             context["record"] = record
+            context.update(saved_content(Path(artifact_root), path, **changes))
+            if context["content_sha256"] != before["content_sha256"]:
+                raise ValueError("artifact changed during read; read again")
         elif command == "resume":
             context = _resume(record, path)
+        elif command == "check_readiness":
+            if set(changes) - {"stage"}:
+                raise ValueError("check_readiness accepts only stage")
+            context = {**_context(record, path), "readiness": _readiness(record, changes.get("stage", "framing"))}
         elif command == "update":
             accepted = _apply_changes(record, changes)
             _record_revision(record, str(changes.get("change_note") or "Problem Record updated"))
-            _write(path, record)
+            _write(path, record, expected_sha256=before["content_sha256"])
             context = _context(record, path)
             context["updated"] = True
             context["write_performed"] = True
@@ -699,7 +833,9 @@ def problem_action(
             spec = str(changes.get("spec", "")).strip()
             if not spec:
                 raise ValueError("link_spec requires spec=...")
-            _validate_recommendation_traceability(record)
+            readiness = _readiness(record, "recommendation")
+            if not readiness["ready"]:
+                raise ValueError("; ".join(readiness["problems"]))
             wrote = not any(item.get("Spec") == spec for item in record["linked_specs"])
             if wrote:
                 record["linked_specs"].append({
@@ -707,7 +843,7 @@ def problem_action(
                     "Recommendation revision": changes.get("recommendation_revision", record["meta"].get("revision", 1)),
                 })
                 _record_revision(record, f"Linked implementation spec {spec}")
-                _write(path, record)
+                _write(path, record, expected_sha256=before["content_sha256"])
             context = _context(record, path)
             context["linked"] = spec
             context["write_performed"] = wrote
@@ -717,23 +853,15 @@ def problem_action(
             outcome = str(changes.get("outcome", "closed")).lower()
             if outcome not in {"closed", "inconclusive"}:
                 raise ValueError("close outcome must be 'closed' or 'inconclusive'")
-            unresolved_critical = [
-                item["ID"] for item in record["hypotheses"]
-                if str(item.get("Critical", "")).lower() in {"yes", "true"}
-                and str(item.get("Status", "active")).lower()
-                not in {"supported", "rejected", "deferred", "inconclusive"}
-            ]
-            if unresolved_critical:
-                raise ValueError(
-                    "critical hypotheses must be resolved, deferred, or inconclusive before close: "
-                    + ", ".join(unresolved_critical)
-                )
+            readiness = _readiness(record, "close")
+            if not readiness["ready"]:
+                raise ValueError("; ".join(readiness["problems"]))
             record["meta"].update({
                 "status": outcome,
                 "next_action": changes.get("next_action", "No further action."),
             })
             _record_revision(record, f"Problem closed as {outcome}")
-            _write(path, record)
+            _write(path, record, expected_sha256=before["content_sha256"])
             context = _context(record, path)
             context["closed"] = True
             context["write_performed"] = True
@@ -742,6 +870,8 @@ def problem_action(
             raise ValueError("Unknown problem sub-command. Valid: list, create, show, update, resume, link_spec, close")
 
     context.setdefault("write_performed", False)
+    if command in {"create", "update", "link_spec", "close"} and write_version == 1:
+        context["warnings"] = ["Legacy coercion/unconditional update; use write_version=2 and saved version preconditions."]
     if output_format == "dict":
         return context
     return render_problem_result(command, context)

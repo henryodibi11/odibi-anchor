@@ -7,6 +7,10 @@ Odibi Anchor requires Python 3.11 or newer and is licensed under Apache-2.0.
 New installation? Follow the [getting-started guide](docs/guides/getting-started.md) for
 package selection, launch-ready PortfolioV1 scaffolding, host setup, preparation, and recovery.
 
+To find and inspect existing saved records without runtime admission, use `anchor artifacts`,
+`anchor readiness`, and `anchor artifact-schema`. See [artifact discovery, safe updates and readiness](docs/guides/artifact-reliability.md)
+for the public CLI/Python APIs, exact-content pagination, version preconditions and review subjects.
+
 ## Install and run locally
 
 ```bash

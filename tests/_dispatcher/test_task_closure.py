@@ -130,11 +130,12 @@ def test_work_item_amend_records_the_accepted_task_and_needs_write_authority(run
     item = anchor("work_item", "create", title="Fix exports", outcome="Faster exports",
                   problem_record="PRB-2026-0001", output_format="dict")
     item_id = item["work_item_id"]
-    anchor("work_item", "close", item_id, outcome="completed", implementation_disposition="implemented",
-           output_format="dict")
+    closed = anchor("work_item", "close", item_id, outcome="completed", implementation_disposition="implemented",
+                    output_format="dict")
 
     amended = anchor("work_item", "amend", item_id, pr_url="https://github.com/org/repo/pull/7",
                      reason={"why": "PR link missed at close"}, _task_window_id="ltw_forged",
+                     write_version=2, expected_revision=closed["revision"],
                      output_format="dict")
 
     assert amended["envelope"]["outcome"] == "succeeded"

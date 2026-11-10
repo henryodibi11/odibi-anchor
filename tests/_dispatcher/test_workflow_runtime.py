@@ -971,9 +971,38 @@ def test_linked_source_requires_current_plan_approval_and_recovery(source_runtim
     assert measured["workflow_measurement"]["status"] == "satisfied"
     reviewed = advance(anchor, "review", findings=[])
     assert reviewed["review_result"]["reviewer_authentication"] == "none"
+    assert reviewed["review_result"]["subject_type"] == "implementation"
+    assert reviewed["review_result"]["subject"]["plan_sha256"] == reviewed["plan_sha256"]
+    assert reviewed["review_result"]["subject"]["candidate_sha256"]
     call(root, "update", item_id, scope="changed after measurement and review")
     with pytest.raises(RuntimeError, match="current plan approval"):
         advance(anchor, "qualify")
+
+
+@pytest.mark.parametrize("source_runtime", ["linked"], indirect=True)
+def test_foreign_owner_approval_cannot_admit_a_same_id_work_item(source_runtime, monkeypatch, tmp_path):
+    from tests._dispatcher.test_work_item_planning import APPROVED, call, review
+
+    anchor, target, _ = source_runtime
+    root = target.parent / "home/workspace/projects/alpha"
+    saved = call(root, "list")["work_items"][0]
+    item_id = saved["work_item_id"]
+    foreign = tmp_path / "foreign-project"
+    (foreign / "work_items").mkdir(parents=True)
+    path = root / "work_items" / f"{item_id}.md"
+    foreign_path = foreign / "work_items" / path.name
+    foreign_path.write_bytes(path.read_bytes())
+    monkeypatch.setattr("odibi_anchor.owner_approval.request_owner_approval", lambda **kw: dict(APPROVED))
+    review(foreign, item_id, "design")
+    call(foreign, "request_plan_approval", work_items=[item_id], rigor="direct")
+    path.write_bytes(foreign_path.read_bytes())
+    review(root, item_id, "design")  # A fresh local critique cannot transfer a foreign owner decision.
+    before = anchor("workflow", output_format="dict")["state"]
+    assert call(root, "show", item_id)["plan_approval"]["approved"]
+    assert not call(root, "show", item_id)["approval_projection"]["current_subject_approval"]
+    with pytest.raises(RuntimeError, match="current plan approval"):
+        advance(anchor, "accept_plan")
+    assert anchor("workflow", output_format="dict")["state"] == before
 
 
 @pytest.mark.parametrize("source_runtime", ["linked"], indirect=True)

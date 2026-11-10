@@ -142,6 +142,38 @@ def read_enforced_schemas() -> dict[str, ManagedRecordSchema]:
     }
 
 
+def native_artifact_contracts() -> dict[str, Any]:
+    """Machine-readable writer fields, derived from their native definitions."""
+    from odibi_anchor._dispatcher import _problem, _work_item
+
+    template = _problem._empty_record("PRB-0000-0000", "project", "title", "full")
+    return {
+        "schema_version": "anchor.native_artifact_contracts/v1",
+        "records": {kind: {"directory": schema.directory, "pattern": schema.pattern,
+                           "required_frontmatter": sorted(schema.required_fields),
+                           "defaulted_frontmatter": sorted(schema.defaulted_fields),
+                           "enforcement": schema.enforcement}
+                    for kind, schema in managed_record_schemas().items()},
+        "work_item": {"material_fields": list(_work_item._MATERIAL),
+                      "text_fields": sorted(_work_item._TEXT_FIELDS),
+                      "plan_content": _work_item._plan_content({})["fields"],
+                      "readiness": "check_plan", "review_subject": "review_subject"},
+        "problem": {"text_fields": sorted(key for key, value in template.items() if isinstance(value, str)),
+                    "metadata_fields": ["title", "status", "next_action", "stage", "rigor_level"],
+                    "tables": {key: list(_problem._TABLES[key]) for key in ("issues", "hypotheses", "workplan", "evidence")},
+                    "table_aliases": "Column names or lowercase_with_underscores; id=ID, issue_id/title=Issue. Duplicate aliases are rejected.",
+                    "readiness": "check_readiness", "stages": ["framing", "recommendation", "close"]},
+        "writes": {"versions": [1, 2], "default": 1,
+                   "strict": "write_version=2 requires a saved hash/revision for native updates; spec requires expected_sha256 and replacement=True.",
+                   "legacy": "Version 1 preserves historical coercion/preconditions with warnings, but unknown fields are rejected.",
+                   "destructive": "allow_destructive=True explicitly permits a lossy native rewrite or removed spec sections; inspect and bind the current saved version first.",
+                   "concurrency": "Best-effort optimistic saved-byte comparison and atomic replace, not a multi-file transaction or filesystem lock."},
+        "readiness": {"versions": [1, 2], "default": 2,
+                      "semantic_certification": False, "execution_admission": "workflow"},
+        "write_performed": False,
+    }
+
+
 def missing_required_fields(meta: dict[str, Any], schema: ManagedRecordSchema) -> list[str]:
     """Return the canonical fields absent from this record's frontmatter.
 

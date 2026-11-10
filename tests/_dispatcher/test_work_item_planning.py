@@ -32,6 +32,9 @@ PENDING = {
 
 
 def call(root, *args, **kwargs) -> dict[str, Any]:
+    # These sparse historical fixtures exercise the explicit legacy readiness contract.
+    if args and args[0] == "request_plan_approval":
+        kwargs.setdefault("readiness_version", 1)
     result = work_item_action(root, *args, output_format="dict", **kwargs)
     assert isinstance(result, dict)
     return result
@@ -117,7 +120,8 @@ def test_review_is_bound_to_fingerprint_and_goes_stale_after_update(tmp_path):
     recorded = review(tmp_path, item_id, "workplan", findings=[{"summary": "ok", "status": "resolved"}])
     entry = recorded["review"]
     assert entry["review_id"].startswith("WIR-") and entry["fingerprint"] == recorded["fingerprint"]
-    assert set(entry) == {"review_id", "angle", "verdict", "findings", "reviewer_ref", "fingerprint", "recorded_at"}
+    assert {"review_id", "angle", "verdict", "findings", "reviewer_ref", "fingerprint", "recorded_at"} <= set(entry)
+    assert entry["subject_type"] == "plan" and entry["reviewer_authentication"] == "none"
     assert call(tmp_path, "show", item_id)["reviews"][0]["stale"] is False
     call(tmp_path, "update", item_id, scope="changed")
     assert call(tmp_path, "show", item_id)["reviews"][0]["stale"] is True
@@ -247,7 +251,7 @@ def test_pending_approval_writes_nothing_and_returns_next_operations(tmp_path, o
     assert owner["calls"][0]["wait_seconds"] == 5
     operations = {x["purpose"]: x["operation"] for x in result["next_operations"]}
     assert operations["check_again"] == (
-        f'anchor("work_item", "request_plan_approval", work_items=["{item_id}"], rigor="direct")'
+        f'anchor("work_item", "request_plan_approval", work_items=["{item_id}"], rigor="direct", readiness_version=1)'
     )
     assert 'provider="chat_in_session"' in operations["complete_in_session"]
     assert PENDING["approval_response"] in operations["complete_in_session"]

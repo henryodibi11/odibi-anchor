@@ -564,7 +564,8 @@ def _prepared_input_failures(operation: str, inputs: Mapping[str, Any]) -> list[
     if action == "work_item":
         from odibi_anchor._dispatcher._work_item import _MATERIAL
 
-        allowed = {*_MATERIAL, "work_item_id", "change_note", "depends_on"}
+        allowed = {*_MATERIAL, "work_item_id", "change_note", "depends_on", "write_version",
+                   "expected_sha256", "expected_revision", "allow_destructive"}
         unknown = set(inputs) - allowed
         if unknown:
             failures.append((

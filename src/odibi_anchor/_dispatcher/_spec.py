@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Phase 3: Gate helper -- spec criteria verification
 # ---------------------------------------------------------------------------
@@ -183,23 +182,62 @@ def spec_action(
         anchor("spec", "status", "X")     -- show detailed spec status
         anchor("spec", "done", "X")       -- mark spec as done
     """
-    from odibi_anchor.codebase._spec_parser import list_specs, find_spec
+    from odibi_anchor.codebase._spec_parser import find_spec, list_specs
 
     root_path = Path(root)
     _specs_dir = Path(specs_dir) if specs_dir else root_path / "specs"
 
     sub_command = args[0].lower().strip() if args else "list"
     sub_arg: str | None = args[1] if len(args) > 1 else None
+    if content is not None and sub_command not in {"create", "update", "preview_update"}:
+        raise ValueError("content is only supported by create, update, or preview_update")
+    if len(args) > 2:
+        raise ValueError("spec accepts a command and one subject only")
+    allowed_extra = {
+        "show": {"offset", "limit", "expected_sha256"},
+        "update": {"expected_sha256", "replacement", "allow_destructive", "write_version"},
+        "preview_update": {"expected_sha256", "replacement", "allow_destructive", "write_version"},
+        "from_problem": {"recommendation_revision"},
+    }.get(sub_command, set())
+    if set(_extra) - allowed_extra:
+        raise ValueError("unknown spec arguments: " + ", ".join(sorted(set(_extra) - allowed_extra)))
 
-    if sub_command in ("list", ""):
+    if sub_command in {"show", "check_plan"}:
+        from odibi_anchor._dispatcher._artifact_observation import saved_content
+        from odibi_anchor.codebase._spec_parser import parse_spec
+
+        unknown = set(_extra) - {"offset", "limit", "expected_sha256"}
+        if unknown:
+            raise ValueError("unknown spec show arguments: " + ", ".join(sorted(unknown)))
+        query = sub_arg or name
+        if not isinstance(query, str) or not query:
+            raise ValueError("spec show requires an exact canonical name or *_SPEC.md filename")
+        query = query.removesuffix("_SPEC.md")
+        path = spec_path(_specs_dir, query)
+        saved = saved_content(_specs_dir.parent, path, **_extra)
+        metadata = parse_spec(path)
+        from odibi_anchor._dispatcher._artifact_observation import observation
+
+        if observation(_specs_dir.parent, path)["content_sha256"] != saved["content_sha256"]:
+            raise ValueError("spec changed during read; read again")
+        result = {"kind": "spec_saved_content", "name": path.name[:-8], "spec": metadata, **saved}
+        if sub_command == "check_plan":
+            problems = [] if metadata.get("success_criteria") else ["Saved spec has no success criteria; record the intended outcomes."]
+            result["readiness"] = {"stage": "plan_review", "ready": not problems, "problems": problems,
+                                   "semantic_certification": False, "implementation_files_checked": False,
+                                   "limitations": ["This checks saved criteria, not their adequacy. Review the complete saved body.",
+                                                    "Use validate/execute for implementation checks; review writes a Review section."]}
+        return result if output_format == "dict" else render_spec_result(sub_command, result)
+    elif sub_command in ("list", ""):
         return _spec_list(_specs_dir, output_format, list_specs)
     elif sub_command == "create":
         _name = sub_arg or name
         if content is not None:
             return _spec_write(_specs_dir, _name, content, output_format, create=True)
         return _spec_create(_specs_dir, _name, output_format, root_path)
-    elif sub_command == "update":
-        return _spec_write(_specs_dir, sub_arg or name, content, output_format, create=False)
+    elif sub_command in {"update", "preview_update"}:
+        return _spec_write(_specs_dir, sub_arg or name, content, output_format, create=False,
+                           dry_run=sub_command == "preview_update", **_extra)
     elif sub_command == "status":
         return _spec_status(_specs_dir, sub_arg, output_format, find_spec)
     elif sub_command == "done":
@@ -302,21 +340,24 @@ def _spec_create(
             return {"error": msg}
         return msg
     clean_name = name.upper().replace(" ", "_").replace("-", "_")
-    spec_path = specs_dir / f"{clean_name}_SPEC.md"
-    if spec_path.exists():
-        msg = f"Spec already exists: {spec_path}"
+    from odibi_anchor._dispatcher._artifact_observation import contained_path
+    from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
+
+    path = contained_path(specs_dir.parent, spec_path(specs_dir, name))
+    if path.exists():
+        msg = f"Spec already exists: {path}"
         if output_format == "dict":
-            return {"error": msg, "path": str(spec_path)}
+            return {"error": msg, "path": str(path)}
         return msg
     specs_dir.mkdir(parents=True, exist_ok=True)
     title = clean_name.replace("_", " ").title()
-    spec_path.write_text(_SCAFFOLD_TEMPLATE.format(title=title), encoding="utf-8")
-    msg = f"Created: {spec_path}\nEdit the file to fill in details."
+    write_descriptor_atomic(path, _SCAFFOLD_TEMPLATE.format(title=title), expected_sha256=None)
+    msg = f"Created: {path}\nEdit the file to fill in details."
     if output_format == "dict":
         return {
-            "created": True, "path": str(spec_path), "name": clean_name,
+            "created": True, "path": str(path), "name": clean_name,
             "summary": msg,
-            "write_performed": True, "artifact_path": str(spec_path),
+            "write_performed": True, "artifact_path": str(path),
         }
     return msg
 
@@ -330,41 +371,74 @@ def spec_path(specs_dir: Path, name: str) -> Path:
 
 
 def _spec_write(
-    specs_dir: Path, name: str | None, content: str | None, output_format: str, *, create: bool
+    specs_dir: Path, name: str | None, content: str | None, output_format: str, *, create: bool,
+    expected_sha256: str | None = None, replacement: bool = False, allow_destructive: bool = False,
+    write_version: int = 1, dry_run: bool = False,
 ) -> Any:
     """Create or replace a spec with caller-supplied Markdown through an atomic replace."""
     import hashlib
 
+    from odibi_anchor._dispatcher._artifact_observation import contained_path
     from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
 
     command = "create" if create else "update"
+    if type(write_version) is not int or write_version not in {1, 2}:
+        raise ValueError("write_version must be 1 (legacy replacement) or 2 (explicit safe replacement)")
+    if any(type(value) is not bool for value in (replacement, allow_destructive, dry_run)):
+        raise ValueError("replacement, allow_destructive and dry_run must be booleans")
+    if not create and write_version == 2 and (expected_sha256 is None or not replacement):
+        raise ValueError("write_version=2 requires expected_sha256 and replacement=True; show the saved spec first")
+    if allow_destructive and (expected_sha256 is None or not replacement):
+        raise ValueError("intentional removal requires expected_sha256 and replacement=True")
     if not name:
         raise ValueError(f'spec {command} requires a name: anchor("spec", "{command}", "NAME", content="...")')
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"spec {command} requires nonempty Markdown content")
-    path = spec_path(specs_dir, name)
+    path = contained_path(specs_dir.parent, spec_path(specs_dir, name))
     current = path.read_bytes() if path.is_file() else None
     if create and (current is not None or path.exists()):
         raise FileExistsError(f"Spec already exists: {path}")
     if not create and current is None:
         raise FileNotFoundError(f"Spec does not exist: {path}")
+    actual = hashlib.sha256(current).hexdigest() if current is not None else None
+    if expected_sha256 is not None:
+        from odibi_anchor._dispatcher._descriptor import validate_sha256
+
+        if validate_sha256(expected_sha256, "expected_sha256") != actual:
+            raise ValueError("stale spec: expected_sha256 does not match saved bytes; show and reconcile before retry")
+    old_headings = {x.rstrip() for x in re.findall(r"(?m)^#{1,6} .+", current.decode("utf-8"))} if current else set()
+    new_headings = {x.rstrip() for x in re.findall(r"(?m)^#{1,6} .+", content)}
+    removed = sorted(old_headings - new_headings)
+    if removed and not allow_destructive and not dry_run:
+        raise ValueError("full replacement removes sections: " + ", ".join(removed)
+                         + "; use preview_update, then allow_destructive=True for intentional removal")
     clean_name = path.name[: -len("_SPEC.md")]
     changed = current != content.encode("utf-8")
-    if changed:
+    if changed and not dry_run:
         specs_dir.mkdir(parents=True, exist_ok=True)
         digest = write_descriptor_atomic(
             path, content, expected_sha256=hashlib.sha256(current).hexdigest() if current is not None else None,
         )
-    else:
+    elif not dry_run:
         digest = hashlib.sha256(current or b"").hexdigest()
-    summary = f"{'Created' if create else 'Updated' if changed else 'Unchanged'}: {path}"
+    else:
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    summary = f"{'Preview full replacement' if dry_run else 'Created' if create else 'Updated' if changed else 'Unchanged'}: {path}"
     result = {
-        "created" if create else "updated": changed,
+        "created" if create else "updated": changed and not dry_run,
         "path": str(path),
         "name": clean_name,
         "sha256": digest,
         "summary": summary,
-        "write_performed": changed,
+        "content_sha256": digest,
+        "previous_sha256": actual,
+        "replacement": not create,
+        "removed_sections": removed,
+        "destructive_change_allowed": allow_destructive,
+        "preview": dry_run,
+        "warnings": ["Legacy full replacement: use write_version=2 with expected_sha256 and replacement=True."]
+                    if not create and write_version == 1 else [],
+        "write_performed": changed and not dry_run,
         "artifact_path": str(path),
     }
     return result if output_format == "dict" else summary
@@ -547,6 +621,10 @@ def render_spec_result(selector: str, result: dict[str, Any]) -> str:
     """Transport-neutral renderer preserving each spec selector's Markdown."""
     if result.get("error"):
         return str(result["error"])
+    if selector in {"show", "check_plan"}:
+        if selector == "check_plan":
+            return str(result["readiness"]) + "\n\n" + result["content"]
+        return result["content"]
     if selector == "status" and "raw_path" in result:
         emoji = _STATUS_EMOJI.get(result["status"], "❓")
         out = [f"## {emoji} {result['name']}\n", f"**Status:** {result['status']}",
@@ -915,8 +993,6 @@ def _spec_validate(
     4. dependencies_available -- listed deps are installed
     5. spec_age -- warn if > 14 days old
     """
-    import hashlib
-    import json
     import importlib.util
     from datetime import datetime, timezone
 
@@ -1260,7 +1336,7 @@ def _spec_execute(
     lines = [
         f"## Executing: {spec['name']}",
         "",
-        f"**Status:** executing",
+        "**Status:** executing",
         f"**Phases:** {len(execution_phases)}",
         f"**Files:** {', '.join(files_touched[:5])}{'...' if len(files_touched) > 5 else ''}",
         f"**Validation:** {result_dict['validation_summary']}",
@@ -1483,9 +1559,9 @@ def _spec_review(
         suggested_improvements.append("Add ## Risks section with risks and mitigations")
 
     # ---- Check 8: Standards cross-reference ----
+    from odibi_anchor._dispatcher._boot import _resolve_skills_dir
     from odibi_anchor.planning._task_builders import required_skills_for_task
     from odibi_anchor.planning._task_profile import normalize_task_profile
-    from odibi_anchor._dispatcher._boot import _resolve_skills_dir
     profile = normalize_task_profile(
         legacy_mode=mode,
         task_text=spec_text,

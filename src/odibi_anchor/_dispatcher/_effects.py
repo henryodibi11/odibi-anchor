@@ -298,7 +298,7 @@ def _project(
     anchor_home: Path,
 ) -> InvocationSemantics:
     selector = _selector(args, kwargs)
-    if selector in {"", "list", "status"}:
+    if selector in {"", "list", "status", "artifacts", "read_artifact"}:
         return InvocationSemantics("read", "safe_orientation")
     if selector == "use":
         if _is_safe_project_use(anchor_home, args, kwargs):
@@ -518,7 +518,7 @@ def build_static_action_contracts(
         frozenset({"read", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _family(
-            {"", "list", "status", "show", "resume"},
+            {"", "list", "status", "show", "resume", "check_readiness"},
             set(),
             {"create", "update", "link_spec", "close"},
         ),
@@ -527,7 +527,7 @@ def build_static_action_contracts(
         frozenset({"read", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _family(
-            {"", "list", "status"},
+            {"", "list", "status", "show", "check_plan", "preview_update"},
             {"validate"},
             {"create", "update", "done", "persist", "execute", "review", "from_problem"},
         ),
@@ -536,7 +536,7 @@ def build_static_action_contracts(
         frozenset({"read", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _family(
-            {"", "list", "status", "show", "next"},
+            {"", "list", "status", "show", "next", "check_plan", "review_subject"},
             {"preview"},
             # request_plan_approval contacts the owner and records the approval, like
             # memory promotion's request_owner_activation.

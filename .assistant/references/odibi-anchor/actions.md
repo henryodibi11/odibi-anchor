@@ -5,6 +5,12 @@
 Complete reference for anchor() actions that aren't covered by domain-specific skills.
 Run `anchor("help")` for the full API overview, or `anchor("help", "action_name")` for one action.
 
+## Saved artifact inspection
+
+Use `project artifacts` to discover the bound project's saved files through the existing artifact registry, then `project read_artifact` with an exact returned relative path. Native `work_item show`, `problem show` and exact `spec show` expose the same saved content plus typed record metadata. Text pages are bounded to 32000 characters; follow `next_offset` with `expected_sha256=content_sha256`. Content hashes identify exact saved bytes, not material fingerprints, readiness or host authentication.
+
+Without runtime admission, `anchor artifacts --home <absolute-home> --project <exact-id> [--path <relative-path>]`, `anchor readiness` and `anchor artifact-schema` inspect without creating a session or mutating records. `artifact_contract.native_contracts` exposes native fields and versioned write/readiness semantics. Readiness is structural, never semantic certification; plan review does not require future implementation or a real PR. For writes use `write_version=2` and current saved hash/revision; spec updates are explicit full replacements (`replacement=True`) with separately authorized section removal (`allow_destructive=True`). Work-item `check_plan` is pure and shared with plan approval; `review_subject` binds project/material/dependencies/linked spec. Implementation reviews remain workflow-owned. Reviewer strings are not authenticated provenance.
+
 ## When to use this reference
 
 - You need a tool but don't know which one exists

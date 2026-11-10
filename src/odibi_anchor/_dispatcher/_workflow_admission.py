@@ -134,7 +134,11 @@ def linked_plan(plan, *, linked_work_item=None, prior=None):
 def work_item_plan_approval(state, *, session_state, linked_work_item=None, accepting=False):
     """Reuse an existing owner decision; never authenticate review prose or invent approval."""
     from odibi_anchor._dispatcher._spec import spec_path
-    from odibi_anchor._dispatcher._work_item import _plan_readiness_problems, work_item_action
+    from odibi_anchor._dispatcher._work_item import (
+        _approval_subject_current,
+        _plan_readiness_problems,
+        work_item_action,
+    )
     from odibi_anchor._recovery import attach_recovery, dispatcher_operation
 
     if state["plan"]["execution_mode"] != "source_change":
@@ -148,7 +152,8 @@ def work_item_plan_approval(state, *, session_state, linked_work_item=None, acce
     root = Path(session_state.artifact_root)
     shown = cast(dict[str, Any], work_item_action(root, "show", item_id, output_format="dict"))
     item = shown["record"]
-    current = [approval for approval in shown["plan_approvals"] if not approval["stale"]]
+    current = [approval for approval in shown["plan_approvals"] if not approval["stale"]
+               and (not approval.get("subject") or _approval_subject_current(approval, item, Path(shown["artifact_path"])))]
     if retained and not accepting:
         current = [approval for approval in current if approval["approval_id"] == retained["approval_id"]]
     problems = []
@@ -156,8 +161,8 @@ def work_item_plan_approval(state, *, session_state, linked_work_item=None, acce
     for approval in reversed(current):
         # Dependencies may be in the approved group, so this checks review freshness only;
         # dependency ordering was checked when the owner approved the group.
-        problems = _plan_readiness_problems(root, [(item_id, {**item, "depends_on": []})], approval["rigor"],
-                                            allow_completed=not accepting)
+        problems = _plan_readiness_problems(root, [(item_id, item)], approval["rigor"],
+                                            allow_completed=not accepting, check_dependencies=False)
         ranks = {"direct": 0, "compact": 1, "full": 2}
         if ranks[approval["rigor"]] < ranks[state["plan"].get("rigor", "direct")]:
             problems.append("plan approval rigor is lower than workflow rigor")

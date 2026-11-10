@@ -263,8 +263,9 @@ def _render(record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _parse(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
+def _parse(path: Path, *, text: str | None = None) -> dict[str, Any]:
+    if text is None:
+        text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n") or "\n---\n" not in text[4:]:
         raise ValueError(f"Invalid work-item frontmatter: {path}")
     front, body = text[4:].split("\n---\n", 1)
@@ -357,11 +358,20 @@ def _parse(path: Path) -> dict[str, Any]:
     return record
 
 
-def _write(path: Path, record: dict[str, Any], *, create_only: bool = False) -> None:
+def _write(path: Path, record: dict[str, Any], *, create_only: bool = False, expected_sha256: str | None = None) -> None:
+    rendered = _render(record)
+    parsed = _parse(path, text=rendered)
+    if _render(parsed).strip() != rendered.strip() or _normalize_material(parsed) != _normalize_material(record):
+        raise ValueError("work-item fields cannot round-trip without content loss; nothing was written")
     path.parent.mkdir(parents=True, exist_ok=True)
     _directory(path.parent.parent)
     if path.is_symlink() or (path.exists() and path.resolve(strict=True) != path.absolute()):
         raise ValueError("work item destination must not be a symlink or reparse point")
+    if expected_sha256 is not None:
+        from odibi_anchor._dispatcher._descriptor import write_descriptor_atomic
+
+        write_descriptor_atomic(path, _render(record), expected_sha256=expected_sha256)
+        return
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -421,10 +431,60 @@ def _plan_approval_state(item: dict[str, Any], fingerprint: str) -> dict[str, An
     }
 
 
+def _review_subject(record: dict[str, Any], path: Path, *, subject_type: str = "plan") -> dict[str, Any]:
+    from odibi_anchor._dispatcher._artifact_observation import observation
+    from odibi_anchor._dispatcher._spec import spec_path
+
+    if subject_type != "plan":
+        raise ValueError("work_item reviews have subject_type=plan; implementation review uses workflow bind_review/review")
+    info = observation(path.parent.parent, path)
+    spec = None
+    if record.get("specification"):
+        file = spec_path(path.parent.parent / "specs", record["specification"])
+        spec = {"name": file.name[:-8], "content_sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+    binding = {"subject_type": "plan", "project_id": info["project_id"], "artifact_id": info["artifact_id"],
+               "fingerprint": _fingerprint(record), "depends_on": record["depends_on"], "spec": spec}
+    return {"schema_version": "anchor.review_subject/v1", **binding,
+            "binding_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
+            "record_revision": record["revision"], "content_sha256": info["content_sha256"],
+            "reviewer_authentication": "none", "host_observations": "not_collected",
+            "source_revision": None,
+            "limitations": ["Plan review assesses design and validation intent, not implemented tests or a real PR.",
+                             "Record revision/hash is observational; ledger-only edits do not change the material subject."]}
+
+
+def _review_current(review: dict[str, Any], record: dict[str, Any], path: Path) -> bool:
+    if review.get("fingerprint") != _fingerprint(record) or review.get("subject_type", "plan") != "plan":
+        return False
+    subject = review.get("subject")
+    if not subject:
+        return True  # Legacy fingerprint-only reviews remain explicitly identifiable.
+    try:
+        return subject["binding_sha256"] == _review_subject(record, path)["binding_sha256"]
+    except (OSError, ValueError):
+        return False
+
+
+def _approval_subject_current(approval: dict[str, Any], record: dict[str, Any], path: Path) -> bool:
+    from odibi_anchor._dispatcher._spec import spec_path
+
+    try:
+        if approval.get("subject", {}).get("binding_sha256") != _review_subject(record, path)["binding_sha256"]:
+            return False
+        spec = approval.get("spec")
+        return not spec or hashlib.sha256(spec_path(path.parent.parent / "specs", spec["name"]).read_bytes()).hexdigest() == spec["sha256"]
+    except (OSError, ValueError):
+        return False
+
+
 def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
+    from odibi_anchor._dispatcher._artifact_observation import observation
+
     fingerprint = _fingerprint(item)
     result = {
+        **observation(path.parent.parent, path),
         "kind": "work_item_context",
+        "revision": item["revision"],
         "work_item_id": item["work_item_id"],
         "title": item["title"],
         "status": item["status"],
@@ -433,13 +493,26 @@ def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
         "fingerprint": fingerprint,
         "depends_on": list(item["depends_on"]),
         "reviews": [
-            {**deepcopy(review), "stale": review.get("fingerprint") != fingerprint} for review in item["reviews"]
+            {**deepcopy(review), "stale": not _review_current(review, item, path),
+             "binding_assurance": "material_only_legacy" if not review.get("subject") else "project_material_spec"}
+            for review in item["reviews"]
         ],
         "plan_approvals": [
             {**deepcopy(approval), "stale": not _plan_approval_current(approval, item, fingerprint)}
             for approval in item["plan_approvals"]
         ],
         "plan_approval": _plan_approval_state(item, fingerprint),
+        "approval_projection": {
+            "material_approval": _plan_approval_state(item, fingerprint),
+            "current_subject_approval": any(
+                _plan_approval_current(a, item, fingerprint)
+                and _approval_subject_current(a, item, path) for a in item["plan_approvals"]
+            ),
+            "content": _plan_content(item),
+            "execution_admissible": False,
+            "execution_reason": "Use workflow check_plan/accept_plan for implementation admission.",
+            "legacy_boolean_semantics": "plan_approval.approved checks material and dependencies only.",
+        },
         "artifact_path": str(path),
         "write_performed": False,
     }
@@ -449,6 +522,10 @@ def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
 
 def render_work_item_result(selector: str, result: dict[str, Any]) -> str:
     """Deferred, transport-neutral renderer for dict-first dispatchers."""
+    if selector == "show":
+        return f"**Implementation disposition:** {result['implementation_disposition']}\n\n" + result["content"]
+    if selector in {"check_plan", "review_subject"}:
+        return "```json\n" + json.dumps(result, ensure_ascii=False, indent=2) + "\n```"
     if selector in {"", "list", "status"}:
         items = result.get("work_items", [])
         return "\n".join(
@@ -513,6 +590,10 @@ def work_item_action(
     output_format: str = "markdown",
     renderer: Callable[[str, dict[str, Any]], str] | None = None,
     _task_window_id: str | None = None,
+    expected_sha256: str | None = None,
+    expected_revision: int | None = None,
+    write_version: int = 1,
+    allow_destructive: bool = False,
     **changes: Any,
 ) -> dict[str, Any] | str:
     """Execute a local managed work-item lifecycle command.
@@ -524,8 +605,17 @@ def work_item_action(
         raise ValueError("output_format must be 'dict' or 'markdown'")
     command = str(args[0]).strip().lower() if args else "list"
     item_id = str(args[1]) if len(args) > 1 else work_item_id
+    if len(args) > 2:
+        raise ValueError("work_item accepts a command and one subject only")
+    if type(write_version) is not int or write_version not in {1, 2}:
+        raise ValueError("write_version must be 1 (legacy) or 2 (version-checked update)")
+    if type(allow_destructive) is not bool:
+        raise ValueError("allow_destructive must be boolean")
+    if allow_destructive and expected_sha256 is None and expected_revision is None:
+        raise ValueError("allow_destructive requires the current expected_sha256 or expected_revision")
     directory = _directory(artifact_root)
     if command in {"", "list", "status"}:
+        _reject_unknown(changes, set(), "list")
         items: list[dict[str, Any]] = []
         malformed: list[dict[str, Any]] = []
         if directory.is_dir():
@@ -561,7 +651,10 @@ def work_item_action(
     elif command == "request_plan_approval":
         if item_id:
             raise ValueError("request_plan_approval takes work_items=[...], not a work item ID")
-        result = _request_plan_approval(artifact_root, changes)
+        result = _request_plan_approval(artifact_root, changes, expected_sha256=expected_sha256,
+                                        expected_revision=expected_revision, allow_destructive=allow_destructive)
+    elif command == "check_plan" and item_id is None:
+        result = _check_plan(artifact_root, changes)
     elif command == "create":
         title = _material_text(changes.pop("title", ""), "title", required=True)
         outcome = _material_text(changes.pop("outcome", ""), "outcome", required=True)
@@ -608,11 +701,36 @@ def work_item_action(
         path = _path(artifact_root, item_id)
         if not path.is_file():
             raise FileNotFoundError(f"Work item does not exist: {item_id}")
+        from odibi_anchor._dispatcher._artifact_observation import check_expected, observation
+
+        before = observation(Path(artifact_root), path)
         record = _parse(path)
+        if observation(Path(artifact_root), path)["content_sha256"] != before["content_sha256"]:
+            raise ValueError("artifact changed during read; show and reconcile before retry")
+        check_expected(before, expected_sha256=expected_sha256, expected_revision=expected_revision,
+                       revision=record["revision"])
+        if command in {"update", "amend", "close", "approve", "record_publish"} and write_version == 2 and expected_sha256 is None and expected_revision is None:
+            raise ValueError("write_version=2 requires expected_sha256 or expected_revision; show first")
+        if command in {"update", "amend", "close", "review", "approve", "record_publish"} and write_version == 2:
+            if not allow_destructive and path.read_text(encoding="utf-8").strip() != _render(record).strip():
+                raise ValueError("saved content is not losslessly representable by the native writer; preserve it or explicitly allow_destructive=True")
+            if command == "review" and not isinstance(changes.get("expected_subject"), dict):
+                raise ValueError("write_version=2 review requires expected_subject from review_subject")
         if command == "show":
-            if changes:
-                raise ValueError("show does not accept changes")
-            result = _context(record, path, record=record)
+            from odibi_anchor._dispatcher._artifact_observation import saved_content
+
+            _reject_unknown(changes, {"offset", "limit", "expected_sha256"}, "show")
+            saved = saved_content(Path(artifact_root), path, expected_sha256=expected_sha256, **changes)
+            if saved["content_sha256"] != before["content_sha256"]:
+                raise ValueError("artifact changed during read; read again")
+            result = _context(record, path, record=record, **saved)
+        elif command == "review_subject":
+            _reject_unknown(changes, {"subject_type"}, "review_subject")
+            result = {"kind": "work_item_review_subject", "subject": _review_subject(record, path, **changes),
+                      "write_performed": False}
+        elif command == "check_plan":
+            _reject_unknown(changes, {"rigor", "readiness_version", "spec"}, "check_plan")
+            result = _check_plan(artifact_root, {"work_items": [item_id], **changes})
         elif command == "update":
             if record["status"] in _CLOSED_STATUSES:
                 raise ValueError(
@@ -631,7 +749,7 @@ def work_item_action(
                 if material_changed and candidate["provider_bindings"]:
                     candidate["status"] = "changes_pending"
                 _revise(candidate, str(changes.get("change_note", "Work item updated")))
-                _write(path, candidate)
+                _write(path, candidate, expected_sha256=before["content_sha256"])
                 result = _context(candidate, path, updated=True, write_performed=True)
         elif command == "preview":
             _reject_unknown(changes, {"provider", "operations"}, "preview")
@@ -672,16 +790,17 @@ def work_item_action(
             candidate = deepcopy(record)
             candidate["approvals"].append(approval)
             _revise(candidate, f"Publication approved for {provider}")
-            _write(path, candidate)
+            _write(path, candidate, expected_sha256=before["content_sha256"])
             result = _context(
                 candidate, path, approval=approval, approval_id=approval["approval_id"], write_performed=True
             )
         elif command == "review":
-            result = _review(record, path, changes)
+            result = _review(record, path, changes, expected_sha256=before["content_sha256"])
         elif command == "amend":
-            result = _amend(record, path, Path(artifact_root), changes, task_window_id=_task_window_id)
+            result = _amend(record, path, Path(artifact_root), changes, task_window_id=_task_window_id,
+                            expected_sha256=before["content_sha256"])
         elif command == "record_publish":
-            result = _record_publish(record, path, changes)
+            result = _record_publish(record, path, changes, expected_sha256=before["content_sha256"])
         elif command == "close":
             _reject_unknown(changes, {"outcome", "implementation_disposition", "reopening_triggers"}, "close")
             outcome = _string(changes.get("outcome"), "outcome", required=True).lower()
@@ -698,7 +817,7 @@ def work_item_action(
                 raise ValueError("close requires a non-unknown implementation_disposition")
             candidate["status"] = outcome
             _revise(candidate, f"Work item closed as {outcome}")
-            _write(path, candidate)
+            _write(path, candidate, expected_sha256=before["content_sha256"])
             result = _context(candidate, path, closed=True, write_performed=True)
         else:
             raise ValueError(
@@ -706,6 +825,8 @@ def work_item_action(
                 "request_plan_approval, preview, approve, record_publish, close, amend"
             )
     if output_format == "dict":
+        if command in {"update", "amend", "close", "review", "approve", "record_publish"} and write_version == 1:
+            result["warnings"] = ["Legacy update/review preconditions; use write_version=2 and the saved version/subject."]
         return result
     return (renderer or render_work_item_result)(command, result)
 
@@ -717,8 +838,11 @@ def _apply_material(record: dict[str, Any], changes: dict[str, Any]) -> None:
         raise ValueError("unknown work-item fields: " + ", ".join(sorted(unknown)))
     for key, value in changes.items():
         if key == "change_note":
+            _string(value, "change_note")
             continue
         if key in _TEXT_FIELDS:
+            if not isinstance(value, str):
+                raise ValueError(f"{key} must be a string")
             record[key] = _material_text(value, key)
         elif key == "acceptance_criteria":
             if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value):
@@ -796,7 +920,7 @@ def _revise(record: dict[str, Any], change: str) -> None:
     record["revisions"].append({"revision": record["revision"], "time": record["updated_at"], "change": change})
 
 
-def _record_publish(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[str, Any]:
+def _record_publish(record: dict[str, Any], path: Path, values: dict[str, Any], *, expected_sha256: str) -> dict[str, Any]:
     _reject_unknown(
         values,
         {"approval_id", "provider", "provider_id", "provider_url", "performed_operations", "recorded_by"},
@@ -843,7 +967,7 @@ def _record_publish(record: dict[str, Any], path: Path, values: dict[str, Any]) 
     }
     candidate["publication_receipts"].append(receipt)
     _revise(candidate, f"Publication recorded for {provider}")
-    _write(path, candidate)
+    _write(path, candidate, expected_sha256=expected_sha256)
     attestation = {
         "id": f"work-item:{candidate['work_item_id']}:{provider}:{provider_id}",
         "kind": "work-item",
@@ -909,8 +1033,9 @@ def _findings(value: Any) -> list[dict[str, str]]:
     return result
 
 
-def _review(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[str, Any]:
-    _reject_unknown(values, {"angle", "verdict", "findings", "reviewer_ref", "expected_fingerprint"}, "review")
+def _review(record: dict[str, Any], path: Path, values: dict[str, Any], *, expected_sha256: str) -> dict[str, Any]:
+    _reject_unknown(values, {"angle", "verdict", "findings", "reviewer_ref", "expected_fingerprint",
+                             "subject_type", "expected_subject"}, "review")
     if record["status"] in _CLOSED_STATUSES:
         raise ValueError("closed work items cannot be reviewed")
     angle = _one_line(values.get("angle"), "angle", required=True)
@@ -924,6 +1049,13 @@ def _review(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[
     expected = _string(values.get("expected_fingerprint"), "expected_fingerprint", required=True)
     if expected != _fingerprint(record):
         raise ValueError("expected fingerprint does not match the current work item")
+    subject = _review_subject(record, path, subject_type=values.get("subject_type", "plan"))
+    if subject["content_sha256"] != expected_sha256:
+        raise ValueError("stale work-item bytes changed before review; show and reconcile before retry")
+    bound = values.get("expected_subject")
+    binding_keys = ("schema_version", "subject_type", "project_id", "artifact_id", "fingerprint", "depends_on", "spec", "binding_sha256")
+    if bound is not None and (not isinstance(bound, dict) or any(bound.get(k) != subject[k] for k in binding_keys)):
+        raise ValueError("stale or foreign review subject; read review_subject again")
     review = {
         "review_id": "WIR-" + uuid4().hex,
         "angle": angle,
@@ -931,12 +1063,15 @@ def _review(record: dict[str, Any], path: Path, values: dict[str, Any]) -> dict[
         "findings": findings,
         "reviewer_ref": reviewer_ref,
         "fingerprint": expected,
+        "subject_type": "plan",
+        "subject": subject,
+        "reviewer_authentication": "none",
         "recorded_at": _now(),
     }
     candidate = deepcopy(record)
     candidate["reviews"].append(review)
     _revise(candidate, f"Review recorded: {angle} {verdict}")
-    _write(path, candidate)
+    _write(path, candidate, expected_sha256=expected_sha256)
     return _context(candidate, path, review=review, review_id=review["review_id"], write_performed=True)
 
 
@@ -966,6 +1101,7 @@ def _amend_value(artifact_root: Path, key: str, value: Any) -> str:
 
 def _amend(
     record: dict[str, Any], path: Path, artifact_root: Path, values: dict[str, Any], *, task_window_id: str | None,
+    expected_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Correct link metadata on a completed or cancelled item, keeping status and delivery content."""
     if record["status"] not in _CLOSED_STATUSES:
@@ -1010,7 +1146,7 @@ def _amend(
     }
     _revise(candidate, f"Metadata amended after {record['status']}: " + ", ".join(fields))
     candidate["revisions"][-1]["amendment"] = amendment
-    _write(path, candidate)
+    _write(path, candidate, expected_sha256=expected_sha256)
     return _context(candidate, path, amended=True, amendment=amendment, write_performed=True)
 
 
@@ -1054,6 +1190,7 @@ def _next(directory: Path) -> dict[str, Any]:
 def _plan_readiness_problems(
     artifact_root: str | Path, items: list[tuple[str, dict[str, Any] | None]], rigor: str,
     *, allow_completed: bool = False,
+    check_dependencies: bool = True,
 ) -> list[str]:
     problems: list[str] = []
     position = {work_item_id: index for index, (work_item_id, _) in enumerate(items)}
@@ -1064,7 +1201,7 @@ def _plan_readiness_problems(
             continue
         if record["status"] in _CLOSED_STATUSES and not (allow_completed and record["status"] == "completed"):
             problems.append(f"{work_item_id}: status is {record['status']}; only open work items can be approved")
-        for dependency in record["depends_on"]:
+        for dependency in record["depends_on"] if check_dependencies else []:
             if dependency in position:
                 if position[dependency] > position[work_item_id]:
                     problems.append(f"{work_item_id}: dependency {dependency} must come earlier in work_items")
@@ -1081,8 +1218,8 @@ def _plan_readiness_problems(
                 problems.append(
                     f"{work_item_id}: dependency {dependency} is {status}; include it in work_items or complete it"
                 )
-        fingerprint = _fingerprint(record)
-        current = [review for review in record["reviews"] if review.get("fingerprint") == fingerprint]
+        current = [review for review in record["reviews"]
+                   if _review_current(review, record, _path(artifact_root, work_item_id))]
         for index, review in enumerate(current):
             label = f"review {review.get('review_id')} ({review.get('angle')})"
             for finding in review.get("findings", []):
@@ -1111,9 +1248,115 @@ def _plan_readiness_problems(
     return problems
 
 
-def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) -> dict[str, Any]:
+def _plan_content(record: dict[str, Any]) -> dict[str, Any]:
+    """Structural field addressing, never semantic certification or test execution."""
+    required = {"title", "outcome", "context", "scope", "non_goals", "acceptance_criteria",
+                "implementation_notes", "validation_notes", "risks", "dependencies"}
+    fields: dict[str, Any] = {}
+    for key in _MATERIAL:
+        value = record.get(key)
+        if key not in required:
+            fields[key] = {"state": "addressed" if value else "not_applicable",
+                           "reason": "Linkage, publication or implementation outcome is not required to review a plan."}
+            continue
+        state, reason = ("addressed", "Saved plan content is present.") if value else ("missing", "Address this plan field.")
+        for entry in value if isinstance(value, list) else [value]:
+            if not isinstance(entry, str):
+                continue
+            text = entry.strip()
+            lower = text.lower()
+            if lower.startswith(("pending:", "n/a:")):
+                explanation = text.split(":", 1)[1].strip()
+                pending = re.fullmatch(r"pending:\s*(.+?)\s*;?\s*next:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+                if not explanation or (lower.startswith("pending:") and (
+                        not pending or not pending[1].strip(" ;") or not pending[2].strip())):
+                    state, reason = "missing", "Pending needs a reason and next: action; N/A needs a reason."
+                    break
+                elif state != "pending":
+                    state, reason = ("pending" if lower.startswith("pending:") else "not_applicable"), explanation
+            elif lower in {"pending", "n/a", "tbd", "todo", "[not captured]"}:
+                state, reason = "missing", "Unexplained placeholders do not address a field."
+                break
+        fields[key] = {"state": state, "reason": reason}
+    review_ready = all(x["state"] != "missing" for x in fields.values())
+    approval_ready = review_ready and all(x["state"] != "pending" for x in fields.values())
+    return {"fields": fields, "content_addressed_for_review": review_ready,
+            "content_ready_for_approval": approval_ready, "semantic_certification": False}
+
+
+def _check_plan(artifact_root: str | Path, values: dict[str, Any]) -> dict[str, Any]:
+    """Pure saved-plan inspection shared with the owner approval transition."""
+    _reject_unknown(values, {"work_items", "rigor", "spec", "readiness_version"}, "check_plan")
+    rigor = values.get("rigor", "direct")
+    if not isinstance(rigor, str) or rigor not in _PLAN_RIGOR:
+        raise ValueError("rigor must be direct, compact, or full")
+    version = values.get("readiness_version", 2)
+    if type(version) is not int or version not in {1, 2}:
+        raise ValueError("readiness_version must be 1 (legacy review gate) or 2 (addressed plan content)")
+    requested = values.get("work_items")
+    if not isinstance(requested, list) or not requested or not all(isinstance(x, str) for x in requested):
+        raise ValueError("work_items must be a nonempty list of work item IDs")
+    paths = [_path(artifact_root, value) for value in requested]
+    ids = [path.stem for path in paths]
+    if len(set(ids)) != len(ids):
+        raise ValueError("work_items must not repeat a work item")
+    items = []
+    hashes = {}
+    for item_id, path in zip(ids, paths, strict=True):
+        if path.is_file():
+            data = path.read_bytes()
+            hashes[item_id] = hashlib.sha256(data).hexdigest()
+            items.append((item_id, _parse(path, text=data.decode("utf-8").replace("\r\n", "\n"))))
+        else:
+            items.append((item_id, None))
+    problems = _plan_readiness_problems(artifact_root, items, rigor)
+    content = {item_id: _plan_content(record) for item_id, record in items if record is not None}
+    if version == 2:
+        for item_id, addressing in content.items():
+            problems.extend(f"{item_id}: {key} is {field['state']}: {field['reason']}"
+                            for key, field in addressing["fields"].items() if field["state"] in {"missing", "pending"})
+    subjects = []
+    for (item_id, record), path in zip(items, paths, strict=True):
+        if record is not None:
+            try:
+                subject = _review_subject(record, path)
+                if subject["content_sha256"] != hashes[item_id]:
+                    raise ValueError("saved work item changed during readiness inspection")
+                subjects.append({"work_item_id": item_id, **subject})
+            except (OSError, ValueError) as exc:
+                problems.append(f"{item_id}: linked specification unavailable: {exc}")
+    spec = None
+    if values.get("spec") is not None:
+        from odibi_anchor._dispatcher._spec import spec_path
+
+        file = spec_path(Path(artifact_root) / "specs", _one_line(values["spec"], "spec", required=True))
+        if file.is_file():
+            spec = {"name": file.name[:-8], "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+        else:
+            problems.append(f"spec {file.name} does not exist")
+    for subject in subjects:
+        if subject["spec"] and (not spec or subject["spec"]["content_sha256"] != spec["sha256"]
+                                or subject["spec"]["name"] != spec["name"]):
+            problems.append(f"{subject['work_item_id']}: linked specification requires the same exact spec approval binding")
+    return {"kind": "work_item_plan_readiness", "readiness_version": version,
+            "schema_valid": len(content) == len(ids), "rigor": rigor, "content": content, "subjects": subjects,
+            "spec": spec, "approval_ready": not problems, "problems": problems,
+            "content_addressed_for_review": len(content) == len(ids) and all(x["content_addressed_for_review"] for x in content.values()),
+            "execution_admissible": False, "execution_reason": "Workflow admission checks candidate, policy and owner approval separately.",
+            "semantic_certification": False, "write_performed": False,
+            "limitations": ["Review sufficiency counts angles, not authenticated people."]
+                            + (["Legacy readiness does not require addressed plan content."] if version == 1 else [])}
+
+
+def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any], *, expected_sha256: str | None = None,
+                           expected_revision: int | None = None, allow_destructive: bool = False) -> dict[str, Any]:
+    from odibi_anchor._dispatcher._artifact_observation import check_expected
+
+    if allow_destructive:
+        raise ValueError("plan approval cannot authorize content loss; use a version-checked update first")
     passthrough = ("provider", "in_session_approval", "wait_seconds", "timeout_minutes")
-    _reject_unknown(values, {"work_items", "spec", "rigor", *passthrough}, "plan approval")
+    _reject_unknown(values, {"work_items", "spec", "rigor", "readiness_version", *passthrough}, "plan approval")
+    readiness = _check_plan(artifact_root, {key: value for key, value in values.items() if key not in passthrough})
     rigor = _one_line(values.get("rigor"), "rigor", required=True)
     if rigor not in _PLAN_RIGOR:
         raise ValueError("rigor must be direct, compact, or full")
@@ -1124,8 +1367,19 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     ids = [path.stem for path in paths]
     if len(set(ids)) != len(ids):
         raise ValueError("work_items must not repeat a work item")
+    if len(ids) != 1 and (expected_sha256 is not None or expected_revision is not None):
+        raise ValueError("saved-version preconditions on plan approval require one work item; inspect grouped subjects instead")
     items = [(work_item_id, _parse(path) if path.is_file() else None) for work_item_id, path in zip(ids, paths, strict=True)]
-    problems = _plan_readiness_problems(artifact_root, items, rigor)
+    problems = readiness["problems"]
+    for (work_item_id, record), path in zip(items, paths, strict=True):
+        if record is None:
+            continue
+        bound = next((s for s in readiness["subjects"] if s["work_item_id"] == work_item_id), None)
+        if bound is None or hashlib.sha256(path.read_bytes()).hexdigest() != bound["content_sha256"]:
+            raise ValueError("saved work item changed during approval inspection; show and reconcile")
+        check_expected(bound, expected_sha256=expected_sha256, expected_revision=expected_revision, revision=record["revision"])
+        if path.read_text(encoding="utf-8").strip() != _render(record).strip():
+            raise ValueError("plan approval cannot losslessly rewrite saved content; preserve it with an explicit update first")
     spec: dict[str, str] | None = None
     spec_file: Path | None = None
     if values.get("spec") is not None:
@@ -1148,9 +1402,11 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     ]
     subject = {
         "kind": "anchor.work_item_plan",
+        "readiness_version": readiness["readiness_version"],
         "rigor": rigor,
         "spec": spec,
         "open_minor_findings": open_minor_findings,
+        "review_subjects": readiness["subjects"],
         "work_items": [
             {"work_item_id": work_item_id, "fingerprint": _fingerprint(record), "depends_on": list(record["depends_on"])}
             for work_item_id, record in items
@@ -1180,6 +1436,7 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     status = outcome.get("status")
     result: dict[str, Any] = {
         "kind": "work_item_plan_approval",
+        "readiness": readiness,
         "status": status,
         "plan_sha256": plan_sha256,
         "subject": subject,
@@ -1192,6 +1449,9 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
     if status in _PENDING_APPROVAL_STATUSES:
         call = (
             f'anchor("work_item", "request_plan_approval", work_items={json.dumps(ids)}, rigor="{rigor}"'
+            + f', readiness_version={readiness["readiness_version"]}'
+            + (f', expected_sha256="{expected_sha256}"' if expected_sha256 is not None else "")
+            + (f', expected_revision={expected_revision}' if expected_revision is not None else "")
             + (f', spec="{spec["name"]}"' if spec else "")
         )
         reply = outcome.get("approval_response") or f"APPROVE {outcome.get('challenge_sha256', '')}"
@@ -1208,21 +1468,37 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
         return result
     if status != "approved":
         raise ValueError(f"unexpected owner approval status: {status!r}")
-    current = [(work_item_id, path, _parse(path)) for work_item_id, path in zip(ids, paths, strict=True)]
-    for (work_item_id, _, record), bound in zip(current, subject["work_items"], strict=True):
+    current = []
+    for work_item_id, path in zip(ids, paths, strict=True):
+        data = path.read_bytes()
+        record = _parse(path, text=data.decode("utf-8").replace("\r\n", "\n"))
+        if data.decode("utf-8").replace("\r\n", "\n").strip() != _render(record).strip():
+            raise ValueError("plan approval cannot losslessly rewrite saved content; preserve it with an explicit update first")
+        current.append((work_item_id, path, record, hashlib.sha256(data).hexdigest()))
+    for (work_item_id, _, record, _), bound in zip(current, subject["work_items"], strict=True):
         if _fingerprint(record) != bound["fingerprint"] or record["depends_on"] != bound["depends_on"]:
             raise ValueError(f"{work_item_id} changed while approval was pending; request plan approval again")
     if spec and spec_file and (not spec_file.is_file() or hashlib.sha256(spec_file.read_bytes()).hexdigest() != spec["sha256"]):
         raise ValueError("spec changed while approval was pending; request plan approval again")
+    refreshed = _check_plan(artifact_root, {"readiness_version": readiness["readiness_version"],
+                                           **{key: value for key, value in values.items() if key not in passthrough}})
+    if refreshed["problems"]:
+        raise ValueError("readiness changed while approval was pending: " + "; ".join(refreshed["problems"]))
+    if [s["binding_sha256"] for s in refreshed["subjects"]] != [s["binding_sha256"] for s in readiness["subjects"]]:
+        raise ValueError("review subject changed while approval was pending; request plan approval again")
     approval_id = "WIP-" + uuid4().hex
     approved_at = _now()
-    for work_item_id, path, record in current:
+    for (work_item_id, path, record, saved_hash), bound in zip(current, refreshed["subjects"], strict=True):
+        if saved_hash != bound["content_sha256"]:
+            raise ValueError("saved work item changed before approval write; show and reconcile")
         approval = {
             "approval_id": approval_id,
             "plan_sha256": plan_sha256,
             "fingerprint": _fingerprint(record),
             "depends_on": list(record["depends_on"]),
             "rigor": rigor,
+            "readiness_version": readiness["readiness_version"],
+            "subject": bound,
             "spec": deepcopy(spec),
             "owner": outcome.get("owner"),
             "assurance": outcome.get("assurance"),
@@ -1232,8 +1508,8 @@ def _request_plan_approval(artifact_root: str | Path, values: dict[str, Any]) ->
         candidate = deepcopy(record)
         candidate["plan_approvals"].append(approval)
         _revise(candidate, f"Plan approved: {approval_id}")
-        _write(path, candidate)
+        _write(path, candidate, expected_sha256=saved_hash)
         result["plan_approvals"].append({"work_item_id": work_item_id, **approval})
     result["write_performed"] = True
-    result["managed_writes"] = [{"path": str(path), "kind": "work_item"} for _, path, _ in current]
+    result["managed_writes"] = [{"path": str(path), "kind": "work_item"} for _, path, _, _ in current]
     return result
