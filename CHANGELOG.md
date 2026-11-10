@@ -2,6 +2,35 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.15] - 2026-11-10
+
+### Added
+
+- Project-scoped artifact inventory and exact saved UTF-8 readback through the existing
+  registry, including specs, decisions, PROJECT.md and retained handoffs. Bounded pages
+  carry project/path identity and whole-byte hashes, distinct from material fingerprints.
+- Nonmutating `anchor artifacts`, `anchor readiness` and `anchor artifact-schema` CLI
+  commands and public `odibi_anchor.artifacts` inspection APIs, without runtime bootstrap.
+- Native lifecycle readiness shared with plan approval and Problem transitions; explicit
+  plan and implementation review subjects and additive approval projections.
+- Opt-in `write_version=2` native saved-version checks, loss-aware writes and explicit
+  spec replacement/preview/destructive-removal contracts.
+
+### Fixed
+
+- Unknown native arguments/table cells and ambiguous aliases now fail instead of being
+  silently discarded. Problem row patches preserve omitted cells and can explicitly clear cells.
+- Stale/foreign project, material, dependency and linked-spec subjects cannot supply new
+  subject-bound review/approval authority. Concurrent ledger edits are not rebased onto
+  older parsed candidates; approval refuses lossy saved-content rewrites.
+
+Compatibility: legacy `write_version=1` remains the default with warnings; strict writers
+should select version 2. Plan approval defaults to addressed-content `readiness_version=2`;
+explicit version 1 preserves historical sparse-plan readiness. MCP v1/v2 transports,
+standalone workflows, legacy material approval semantics and continuity remain supported.
+No record migration, new store, host authentication or dependency changes. See the
+[artifact reliability guide](docs/guides/artifact-reliability.md) for contracts and limitations.
+
 ## [0.4.14] - 2026-11-07
 
 ### Fixed
