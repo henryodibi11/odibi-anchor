@@ -157,6 +157,8 @@ def artifact_contract(*, artifact_root: str | None = None) -> dict[str, Any]:
     Paths are point-in-time guidance, not write authority or a filesystem lock.
     Never follow a link while suggesting where an agent should write.
     """
+    from odibi_anchor._dispatcher._managed_record_schema import native_artifact_contracts
+
     artifacts = [dict(item) for item in _ARTIFACT_CONTRACT]
     if artifact_root is not None:
         root = Path(artifact_root).absolute()
@@ -178,6 +180,7 @@ def artifact_contract(*, artifact_root: str | None = None) -> dict[str, Any]:
                         path_status="unavailable" if reason else "available", path_reason=reason)
     return {
         "version": ARTIFACT_CONTRACT_VERSION,
+        "native_contracts": native_artifact_contracts(),
         "saved_content": {
             "version": "anchor.artifact_observation/v1",
             "list": 'anchor("project", "artifacts", output_format="dict")',

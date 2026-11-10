@@ -213,8 +213,8 @@ def _list_problems(artifact_root):
     from odibi_anchor._dispatcher._problem import problem_action
 
     result = problem_action(
-        artifact_root=str(artifact_root), project_id="proj",
-        args=("list",), output_format="dict",
+        str(artifact_root), "list", project_id="proj",
+        output_format="dict",
     )
     assert isinstance(result, dict)
     return result

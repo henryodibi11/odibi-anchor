@@ -44,9 +44,9 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',
     "checkpoint":   'anchor("checkpoint", label="feature_name", learning_captures=[...], learning_assessment={"outcome": "..."})',
-    "spec":         'anchor("spec")  # list | create | update | status | persist | from_problem | review | execute | done',
-    "problem":      'anchor("problem")  # list | create | show | update | resume | link_spec | close',
-    "work_item":    'anchor("work_item")  # list | next | create | show | update | review | request_plan_approval | preview | approve | record_publish | close | amend',
+    "spec":         'anchor("spec")  # list | show | check_plan | create | preview_update | update | status | persist | from_problem | review | execute | done',
+    "problem":      'anchor("problem")  # list | create | show | check_readiness | update | resume | link_spec | close',
+    "work_item":    'anchor("work_item")  # list | next | create | show | check_plan | review_subject | update | review | request_plan_approval | preview | approve | record_publish | close | amend',
     "incident_snapshot": 'anchor("incident_snapshot", collectors=[...], problem_id="PRB-...")',
     "environment_diff": 'anchor("environment_diff", left, right)',
     "spark_diagnose": 'anchor("spark_diagnose", plan_text, query_profile={...})',
@@ -513,18 +513,26 @@ _EXAMPLES: dict[str, str | list[str]] = {
         'anchor("spec")  # list all specs',
         'anchor("spec", "persist", task_result)  # save task plan as spec',
         'anchor("spec", "create", name="FEATURE_NAME", content="# Feature\\n...")  # write the full spec',
-        'anchor("spec", "update", "FEATURE_NAME", content="...")  # replace its content',
-        'anchor("spec", "review", "FEATURE_NAME")  # audit spec quality',
+        'anchor("spec", "show", "FEATURE_NAME", output_format="dict")  # exact saved body/hash; no substring selection',
+        'anchor("spec", "check_plan", "FEATURE_NAME", output_format="dict")  # pure saved criteria inspection, not future file existence',
+        'anchor("spec", "preview_update", "FEATURE_NAME", content="...", write_version=2, expected_sha256="<saved hash>", replacement=True)',
+        'anchor("spec", "update", "FEATURE_NAME", content="...", write_version=2, expected_sha256="<saved hash>", replacement=True)  # full replacement; allow_destructive=True explicitly permits section removal',
+        'anchor("spec", "review", "FEATURE_NAME")  # writes a Review section, not a pure read',
         'anchor("spec", "execute", "FEATURE_NAME")  # begin execution',
         'anchor("spec", "done", "FEATURE_NAME")  # mark complete',
     ],
     "problem":      [
         'anchor("problem", "create", title="Choose an export scaling strategy")',
-        'anchor("problem", "update", "PRB-2026-0001", hypothesis={"hypothesis": "Workers are undersized"})',
+        'anchor("problem", "check_readiness", "PRB-2026-0001", stage="recommendation", output_format="dict")',
+        'anchor("problem", "update", "PRB-2026-0001", hypothesis={"hypothesis": "Workers are undersized"}, write_version=2, expected_revision=1)',
         'anchor("problem", "resume", "PRB-2026-0001")',
     ],
     "work_item":    [
         'anchor("work_item", "create", title="Ship export scaling", outcome="Reduce processing delay", problem_record="PRB-2026-0001", depends_on=["WI-2026-0001"])',
+        'anchor("work_item", "check_plan", "WI-2026-0002", rigor="compact", output_format="dict")  # saved content addressing, reviews and dependencies; no owner contact or write',
+        'anchor("work_item", "review_subject", "WI-2026-0002", output_format="dict")  # plan subject bound to project, material, dependencies and exact linked spec',
+        'Strict updates use write_version=2 with expected_revision or expected_sha256; strict reviews use expected_subject from review_subject and expected_fingerprint. '
+        'reviewer_ref is a caller claim, not authenticated provenance. Plan review needs validation intent, not implemented tests or a real PR. Implementation review uses workflow bind_review/review.',
         'anchor("work_item", "amend", "WI-2026-0002", pr_url="https://github.com/org/repo/pull/7", reason={"why": "PR link missed at close"})  '
         '# completed or cancelled items only: problem_record, specification and pr_url may change (an existing Problem/Spec, an https URL, or "" to clear); '
         'status, scope, acceptance criteria and outcome stay fixed; the revision records the reason, task and invalidated reviews/approvals',
@@ -751,6 +759,11 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'Bound-runtime discovery follows the active immutable project, not the legacy selector.',
         'These are read-only, point-in-time paths, not edit authority. Symlinked paths are unavailable; '
         'refresh discovery after rebootstrap or path replacement. Directory entries do not authorize arbitrary descendants.',
+        '`artifacts` lists saved files through that registry; `read_artifact`, path="specs/NAME_SPEC.md", reads exact saved UTF-8 content. '
+        'Lists use limit 1..200; text uses limit 1..32000 characters and next_offset plus expected_sha256=content_sha256. '
+        'artifact_contract.native_contracts derives writer fields and readiness versions from core. '
+        'Without runtime admission use anchor artifacts --home <home> --project <id>, anchor readiness, or anchor artifact-schema; '
+        'Python APIs are odibi_anchor.artifacts.inspect_artifacts, inspect_readiness and inspect_artifact_contracts.',
     ],
     "touched": [
         'Relative paths always resolve against `target_root`, never `artifact_root` or the notebook cwd, '

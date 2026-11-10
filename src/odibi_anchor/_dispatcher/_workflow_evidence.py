@@ -590,6 +590,12 @@ def collect_review(path: str | Path, *, session_state: Any, workflow_id: str,
                 or not finding["summary"].strip() or finding.get("status") not in {"resolved", "open"}):
             raise ValueError("each review finding requires summary and open/resolved status")
     return {"plan_sha256": state["plan_sha256"], "candidate_sha256": digest(candidate),
+            "subject_type": "implementation",
+            "subject": {"schema_version": "anchor.review_subject/v1", "subject_type": "implementation",
+                        "workflow_id": workflow_id, "owner_sha256": digest(state["owner"]),
+                        "plan_sha256": state["plan_sha256"], "candidate_sha256": digest(candidate),
+                        "work_item_plan_approval": state.get("admission", {}).get("work_item_plan_approval"),
+                        "reviewer_authentication": "none", "host_observations": "not_collected"},
             "kind": "independent" if distinct else "self", "reviewer": session_state.task_window_id,
             "status": "failed" if any(f["status"] == "open" for f in findings) else "satisfied",
             "findings": findings, "evidence_ref": digest(findings),
