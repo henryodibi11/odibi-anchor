@@ -422,9 +422,13 @@ def _plan_approval_state(item: dict[str, Any], fingerprint: str) -> dict[str, An
 
 
 def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
+    from odibi_anchor._dispatcher._artifact_observation import observation
+
     fingerprint = _fingerprint(item)
     result = {
+        **observation(path.parent.parent, path),
         "kind": "work_item_context",
+        "revision": item["revision"],
         "work_item_id": item["work_item_id"],
         "title": item["title"],
         "status": item["status"],
@@ -449,6 +453,8 @@ def _context(item: dict[str, Any], path: Path, **extra: Any) -> dict[str, Any]:
 
 def render_work_item_result(selector: str, result: dict[str, Any]) -> str:
     """Deferred, transport-neutral renderer for dict-first dispatchers."""
+    if selector == "show":
+        return f"**Implementation disposition:** {result['implementation_disposition']}\n\n" + result["content"]
     if selector in {"", "list", "status"}:
         items = result.get("work_items", [])
         return "\n".join(
@@ -610,9 +616,11 @@ def work_item_action(
             raise FileNotFoundError(f"Work item does not exist: {item_id}")
         record = _parse(path)
         if command == "show":
-            if changes:
-                raise ValueError("show does not accept changes")
-            result = _context(record, path, record=record)
+            from odibi_anchor._dispatcher._artifact_observation import saved_content
+
+            _reject_unknown(changes, {"offset", "limit", "expected_sha256"}, "show")
+            saved = saved_content(Path(artifact_root), path, **changes)
+            result = _context(record, path, record=record, **saved)
         elif command == "update":
             if record["status"] in _CLOSED_STATUSES:
                 raise ValueError(

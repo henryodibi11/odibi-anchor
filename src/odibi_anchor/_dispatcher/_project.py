@@ -32,7 +32,7 @@ _ACTIVE_PROJECT_FILE = ".active_project"
 _PROJECT_DESCRIPTOR = DESCRIPTOR_NAME
 ROUTE_BINDING_SCHEMA_VERSION = "1.0"
 _BINDING_SOURCES = frozenset({"explicit", "target_match", "legacy_selector"})
-ARTIFACT_CONTRACT_VERSION = "1.2"
+ARTIFACT_CONTRACT_VERSION = "1.3"
 _ARTIFACT_CONTRACT = (
     {
         "path": "PROJECT.md",
@@ -178,6 +178,14 @@ def artifact_contract(*, artifact_root: str | None = None) -> dict[str, Any]:
                         path_status="unavailable" if reason else "available", path_reason=reason)
     return {
         "version": ARTIFACT_CONTRACT_VERSION,
+        "saved_content": {
+            "version": "anchor.artifact_observation/v1",
+            "list": 'anchor("project", "artifacts", output_format="dict")',
+            "read": 'anchor("project", "read_artifact", path="specs/NAME_SPEC.md", output_format="dict")',
+            "pagination": "List limit 1..200; UTF-8 read limit 1..32000 characters. Follow next_offset with expected_sha256=content_sha256.",
+            "native_reads": {"spec": "show", "problem": "show", "work_item": "show"},
+            "hash_semantics": "content_sha256 hashes exact saved bytes, not material plan content or host provenance.",
+        },
         "scope": "all_managed_projects",
         "source_of_truth": "odibi_anchor_runtime",
         "existing_record_rewrites_required": False,
@@ -1449,6 +1457,25 @@ def project_action(
 
     command = str(args[0]).lower().strip() if args else "list"
     command_arg = str(args[1]) if len(args) > 1 else None
+    if command in {"artifacts", "read_artifact"}:
+        from odibi_anchor._dispatcher._artifact_observation import project_artifacts
+
+        if route_binding is None or routing_stale or route_binding_staleness_reason(route_binding):
+            raise ValueError("artifact inspection requires a current immutable project route binding")
+        if command_arg is not None or name is not None or target is not None:
+            raise ValueError("artifact inspection uses the bound project; use path= for an exact saved record")
+        if expected_sha256 is not None:
+            _extra["expected_sha256"] = expected_sha256
+        saved = project_artifacts(Path(route_binding.artifact_root), command,
+                                  project_id=route_binding.project_id, **_extra)
+        saved["route_binding"] = route_binding_diagnostics(route_binding)
+        if output_format == "dict":
+            return saved
+        if command == "read_artifact":
+            return saved["content"]
+        return "\n".join(["# Project artifacts", *[
+            f"- {item['relative_path']} — {item['content_sha256']}" for item in saved["artifacts"]
+        ], f"Next offset: {saved['next_offset']}", *[f"Unavailable: {item}" for item in saved["unavailable"]]])
     active, active_damage = _remembered_project(anchor_home_path)
     result: dict[str, Any] = {
         "kind": "project_context",

@@ -502,6 +502,8 @@ def _apply_changes(record: dict[str, Any], changes: dict[str, Any]) -> list[dict
 
 def _context(record: dict[str, Any], path: Path, *, kind: str = "problem_record_context") -> dict[str, Any]:
     """Build the narrow action return contract."""
+    from odibi_anchor._dispatcher._artifact_observation import observation
+
     meta = record["meta"]
     unresolved = sum(
         1 for item in record["hypotheses"]
@@ -509,7 +511,9 @@ def _context(record: dict[str, Any], path: Path, *, kind: str = "problem_record_
         and str(item.get("Status", "active")).lower() not in {"supported", "rejected", "deferred", "inconclusive"}
     )
     return {
+        **observation(path.parent.parent, path),
         "kind": kind,
+        "revision": meta["revision"],
         "problem_id": meta["problem_id"],
         "project_id": meta["project_id"],
         "title": meta["title"],
@@ -575,6 +579,8 @@ def _render_context(context: dict[str, Any]) -> str:
 
 def render_problem_result(selector: str, result: dict[str, Any]) -> str:
     """Transport-neutral renderer for a dict-first problem dispatch result."""
+    if selector == "show":
+        return result["content"]
     if selector in {"list", "status", ""}:
         lines = ["# Problem Records", ""]
         lines.extend(
@@ -681,8 +687,13 @@ def problem_action(
             raise FileNotFoundError(f"Problem Record does not exist: {command_id}")
         record = _parse(path)
         if command == "show":
+            from odibi_anchor._dispatcher._artifact_observation import saved_content
+
+            if set(changes) - {"offset", "limit", "expected_sha256"}:
+                raise ValueError("unknown problem show arguments")
             context = _context(record, path)
             context["record"] = record
+            context.update(saved_content(Path(artifact_root), path, **changes))
         elif command == "resume":
             context = _resume(record, path)
         elif command == "update":

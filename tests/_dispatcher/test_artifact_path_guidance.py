@@ -1,11 +1,101 @@
 """Issue26: discover paths without changing target-relative registration authority."""
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def test_saved_artifacts_are_exact_project_scoped_paginated_and_nonmutating(tmp_path, capsys, monkeypatch):
+    from odibi_anchor import cli
+    from odibi_anchor._dispatcher._problem import problem_action
+    from odibi_anchor._dispatcher._project import project_action
+    from odibi_anchor._dispatcher._spec import spec_action
+    from odibi_anchor._dispatcher._work_item import work_item_action
+    from odibi_anchor.artifacts import inspect_artifacts
+
+    for project in ("alpha", "beta"):
+        project_action(tmp_path, "create", name=project, output_format="dict")
+        root = tmp_path / "workspace/projects" / project
+        spec_action(root, "create", "A", content=f"# {project}\r\n## Saved\r\nλ exact\r\n")
+        spec_action(root, "create", "A_LONG", content="# Not the same spec\n")
+        work_item_action(root, "create", title=project, outcome="A saved draft")
+        problem_action(root, "create", title=project, project_id=project)
+        (root / "decisions/choice.md").write_text("# Choice\nKeep the asymmetry.\n")
+        (root / "notebooks/handoff.json").write_text('{"saved":true}')
+    roots = tmp_path / "workspace/projects"
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.rglob("*") if p.is_file()}
+    inventories = [inspect_artifacts(anchor_home=tmp_path, project_id=p) for p in ("alpha", "beta")]
+    assert inventories[0]["total"] == 7
+    alpha = inventories[0]
+    assert all(x["project_id"] == "alpha" for x in alpha["artifacts"])
+    assert {x["artifact_id"] for x in alpha["artifacts"]}.isdisjoint(
+        {x["artifact_id"] for x in inventories[1]["artifacts"]})
+    page = inspect_artifacts(anchor_home=tmp_path, project_id="alpha", limit=2)
+    assert page["next_offset"] == 2 and len(page["artifacts"]) == 2
+    a_root = roots / "alpha"
+    for item in alpha["artifacts"]:
+        relative = item["relative_path"]
+        data = (a_root / relative).read_bytes()
+        saved = inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path=relative, limit=5)
+        assert saved["content_sha256"] == hashlib.sha256(data).hexdigest() == item["content_sha256"]
+        text = saved["content"]
+        while saved["next_offset"] is not None:
+            saved = inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path=relative,
+                                      offset=saved["next_offset"], limit=5, expected_sha256=saved["content_sha256"])
+            text += saved["content"]
+        assert text == data.decode("utf-8")
+        assert inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path=relative,
+                                 output_format="markdown") == text
+    shown = spec_action(a_root, "show", "A_SPEC.md", output_format="dict")
+    assert shown["content"] == "# alpha\r\n## Saved\r\nλ exact\r\n"
+    with pytest.raises(FileNotFoundError):
+        spec_action(a_root, "show", "A_LO", output_format="dict")
+    wi_list = work_item_action(a_root, "list", output_format="dict")
+    prb_list = problem_action(a_root, "list", output_format="dict")
+    assert isinstance(wi_list, dict) and isinstance(prb_list, dict)
+    wi, prb = wi_list["work_items"][0], prb_list["problems"][0]
+    for action, record, key in ((work_item_action, wi, "work_item_id"), (problem_action, prb, "problem_id")):
+        shown = action(a_root, "show", record[key], output_format="dict")
+        assert isinstance(shown, dict)
+        assert shown["record"] and shown["content"] == (a_root / shown["relative_path"]).read_text()
+        human = action(a_root, "show", record[key])
+        assert isinstance(human, str) and human.endswith(shown["content"])
+    monkeypatch.setattr(cli, "_boot", lambda *_: pytest.fail("read bootstrapped a runtime"))
+    assert cli.main(["artifacts", "--home", str(tmp_path), "--project", "alpha", "--path", "specs/A_SPEC.md"]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["content_sha256"] == hashlib.sha256((a_root / "specs/A_SPEC.md").read_bytes()).hexdigest()
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_saved_artifact_reads_refuse_unsafe_missing_unavailable_and_stale_pages(tmp_path):
+    from odibi_anchor._dispatcher._project import project_action
+    from odibi_anchor.artifacts import inspect_artifacts
+
+    project_action(tmp_path, "create", name="alpha", output_format="dict")
+    root = tmp_path / "workspace/projects/alpha"
+    path = root / "specs/A_SPEC.md"
+    path.write_text("# One\n## Two\n")
+    first = inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path="specs/A_SPEC.md", limit=3)
+    with pytest.raises(ValueError, match="require expected_sha256"):
+        inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path="specs/A_SPEC.md", offset=3)
+    path.write_text("Changed\n")
+    with pytest.raises(ValueError, match="stale"):
+        inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path="specs/A_SPEC.md", offset=3,
+                          expected_sha256=first["content_sha256"])
+    with pytest.raises(FileNotFoundError):
+        inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path="specs/MISSING_SPEC.md")
+    for relative in ("../beta/specs/A_SPEC.md", "/etc/passwd", ".odibi-anchor/state.db"):
+        with pytest.raises(ValueError):
+            inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path=relative)
+    path.unlink()
+    path.symlink_to(tmp_path / "foreign.md")
+    with pytest.raises(ValueError, match="symlink"):
+        inspect_artifacts(anchor_home=tmp_path, project_id="alpha", path="specs/A_SPEC.md")
+    assert inspect_artifacts(anchor_home=tmp_path, project_id="alpha")["unavailable"]
 
 
 def test_project_contract_discovers_absolute_paths_without_writes(tmp_path):

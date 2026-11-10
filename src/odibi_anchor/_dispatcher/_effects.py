@@ -298,7 +298,7 @@ def _project(
     anchor_home: Path,
 ) -> InvocationSemantics:
     selector = _selector(args, kwargs)
-    if selector in {"", "list", "status"}:
+    if selector in {"", "list", "status", "artifacts", "read_artifact"}:
         return InvocationSemantics("read", "safe_orientation")
     if selector == "use":
         if _is_safe_project_use(anchor_home, args, kwargs):
@@ -527,7 +527,7 @@ def build_static_action_contracts(
         frozenset({"read", "artifact_write"}),
         frozenset({"context_collection", "task_required"}),
         _family(
-            {"", "list", "status"},
+            {"", "list", "status", "show"},
             {"validate"},
             {"create", "update", "done", "persist", "execute", "review", "from_problem"},
         ),

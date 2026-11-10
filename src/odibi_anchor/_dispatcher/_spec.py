@@ -191,7 +191,22 @@ def spec_action(
     sub_command = args[0].lower().strip() if args else "list"
     sub_arg: str | None = args[1] if len(args) > 1 else None
 
-    if sub_command in ("list", ""):
+    if sub_command == "show":
+        from odibi_anchor._dispatcher._artifact_observation import saved_content
+        from odibi_anchor.codebase._spec_parser import parse_spec
+
+        unknown = set(_extra) - {"offset", "limit", "expected_sha256"}
+        if unknown:
+            raise ValueError("unknown spec show arguments: " + ", ".join(sorted(unknown)))
+        query = sub_arg or name
+        if not isinstance(query, str) or not query:
+            raise ValueError("spec show requires an exact canonical name or *_SPEC.md filename")
+        query = query.removesuffix("_SPEC.md")
+        path = spec_path(_specs_dir, query)
+        saved = saved_content(_specs_dir.parent, path, **_extra)
+        result = {"kind": "spec_saved_content", "name": path.name[:-8], "spec": parse_spec(path), **saved}
+        return result if output_format == "dict" else result["content"]
+    elif sub_command in ("list", ""):
         return _spec_list(_specs_dir, output_format, list_specs)
     elif sub_command == "create":
         _name = sub_arg or name
@@ -547,6 +562,8 @@ def render_spec_result(selector: str, result: dict[str, Any]) -> str:
     """Transport-neutral renderer preserving each spec selector's Markdown."""
     if result.get("error"):
         return str(result["error"])
+    if selector == "show":
+        return result["content"]
     if selector == "status" and "raw_path" in result:
         emoji = _STATUS_EMOJI.get(result["status"], "❓")
         out = [f"## {emoji} {result['name']}\n", f"**Status:** {result['status']}",
