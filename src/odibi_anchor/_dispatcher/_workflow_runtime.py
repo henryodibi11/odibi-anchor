@@ -128,9 +128,6 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
     elif command == "status":
         if workflow_id is None:
             packet = workflow_packet(path, session_state=session_state)
-            if "state" not in packet:
-                packet.update(scope="current_task", limitation="No workflow is bound to this task; "
-                              "this says nothing about saved project workflows. Discover them with workflow list.")
         else:
             state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
             packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection", "state": state}

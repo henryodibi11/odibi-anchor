@@ -338,7 +338,9 @@ def workflow_packet(path: str | Path, *, session_state: Any) -> dict[str, Any]:
         if profile is not None and profile.execution_mode == "read_only":
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "read_only_unphased", "completed": False,
-                    "delivery_verified": False, "next_step": "report_observed_result"}
+                    "delivery_verified": False, "next_step": "report_observed_result",
+                    "scope": "current_task", "limitation": "No workflow is bound to this task; "
+                    "this says nothing about saved project workflows. Discover them with workflow list."}
         if planning_record_task(profile) and not lightweight_artifact_task(profile):
             return {"kind": "workflow_packet", "schema_version": 1, "authority": "projection",
                     "status": "planning_records_unphased", "completed": False,
