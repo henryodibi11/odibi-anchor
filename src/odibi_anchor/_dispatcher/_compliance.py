@@ -291,14 +291,17 @@ def _build_status_suggestions(obligations):
             "(operating_protocol.task_closure lists the closing, stopping and resume calls)."
         )
     elif not obligations:
-        suggestions.append("Session clean — ready for delivery or next feature.")
+        suggestions.append("No pending process-local obligations. Verify task closure and delivery separately.")
 
     # Planning enforcement
     task_actions = [t for t in _SESSION_TIMINGS if t.get("action") == "task"]
     if not task_actions and _SESSION_FILES_CHANGED:
         suggestions.insert(0, 'MUST: Files changed but no planning detected. Run anchor("task") IMMEDIATELY.')
-    elif not task_actions:
-        suggestions.append('SHOULD: Run anchor("task") before starting work.')
+    elif _SESSION_STATE.active_task_profile is None:
+        suggestions.append(
+            'SHOULD: Run anchor("orient") to discover saved open tasks; use anchor("task_rebind") '
+            'to resume matching work before accepting a new task.'
+        )
 
     # Test enforcement
     test_actions = [t for t in _SESSION_TIMINGS if t.get("action") == "test"]
@@ -315,7 +318,7 @@ def _build_status_suggestions(obligations):
     if len(_SESSION_TIMINGS) >= 15:
         suggestions.append(f'ALERT: Session has {len(_SESSION_TIMINGS)} actions. Consider snapshot(mode="handoff") to fresh thread.')
 
-    return suggestions or ["Session clean — ready for delivery or next feature."]
+    return suggestions
 
 
 

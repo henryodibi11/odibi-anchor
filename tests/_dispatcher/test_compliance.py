@@ -300,9 +300,11 @@ class TestBuildStatusSuggestions:
         result = self._run(["preflight (MUST)"])
         assert any("MUST" in s for s in result)
 
-    def test_no_obligations__ready(self):
+    def test_no_local_obligations_does_not_assert_delivery_readiness(self):
         result = self._run([])
-        assert any("ready" in s.lower() or "clean" in s.lower() for s in result)
+        assert any("process-local" in s for s in result)
+        assert not any("ready for delivery" in s.lower() for s in result)
+        assert any("task_rebind" in s for s in result)
 
     def test_open_task_is_never_called_clean(self):
         result = self._run([], task_open=True)

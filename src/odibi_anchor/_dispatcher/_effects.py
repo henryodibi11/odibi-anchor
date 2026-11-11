@@ -677,7 +677,12 @@ def enforce_effects(action: str, effects: tuple[ActionEffect, ...], profile: Any
         if effect == "artifact_write" and action in _PRE_PROFILE_BOOKKEEPING:
             continue
         if profile is None:
-            raise RuntimeError(f"BLOCKED: {effect} requires an active task profile")
+            raise RuntimeError(
+                f"BLOCKED: {effect} requires an active task profile. "
+                "For resumed work, run anchor('orient') and anchor('task_rebind', task_window_id='<exact-id>'). "
+                "Opening a new task does not restore or close the prior task. "
+                "For new work, follow orient's fresh-task sequence."
+            )
         if effect == "artifact_write" and action in _ACTIVE_PROFILE_BOOKKEEPING:
             continue
         if task_profile_effect_compatible(effect, profile):
