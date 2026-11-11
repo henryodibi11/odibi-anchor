@@ -2,6 +2,22 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.16] - 2026-11-11
+
+### Fixed
+
+- Typed MCP tools preserve redacted structured recovery context, exact next operations and
+  approval/retry requirements in MCP tool errors. Successful response bytes and the generic
+  gateway's legacy default remain unchanged; failed actions are not automatically retried.
+- Windows restore closes SQLite handles and verifies the exact workflow identity.
+- Saved-workflow discovery exposes exact-owner workflow state, including compatibility
+  projections for unbound callers, without treating qualification as delivery.
+
+### Documentation
+
+- Document the existing project-scoped `memory task_record` verifier and original JSON bytes
+  so consumers can verify terminal hashes without lossy cross-runtime reserialization.
+
 ## [0.4.15] - 2026-11-10
 
 ### Added

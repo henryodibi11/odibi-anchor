@@ -2093,12 +2093,54 @@ class TestTypedTools:
         self, monkeypatch, tool, first, arguments, action,
     ):
         calls = TestStructuredArgs._capture(monkeypatch)
-        asyncio.run(mcp_server.mcp.call_tool(tool, arguments))
+        typed = asyncio.run(mcp_server.mcp.call_tool(tool, arguments))
         # An empty string is an unused optional field; False, 0 and [] are real arguments.
         fields = {key: value for key, value in arguments.items() if key != first and value != ""}
-        mcp_server.anchor_execute(action, {"arg0": arguments[first], **fields})
+        legacy = mcp_server.anchor_execute(action, {"arg0": arguments[first], **fields})
+        assert typed.content[0].text == legacy
         assert calls[0] == calls[1]
         assert calls[0]["kwargs"] == fields
+
+    @pytest.mark.parametrize(("tool", "first", "arguments", "action"), _TYPED_CALLS)
+    def test_typed_failure_preserves_recovery_as_mcp_error(
+        self, monkeypatch, tool, first, arguments, action,
+    ):
+        from fastmcp import Client
+
+        from odibi_anchor._recovery import attach_recovery, dispatcher_operation
+        from odibi_anchor.codebase._workflow import WorkflowError
+
+        def fail(*_args, **_kwargs):
+            raise attach_recovery(
+                WorkflowError("artifact_adoption_required", "Inspect bytes; token=private-value"),
+                error_code="artifact_adoption_required",
+                context={"artifact_adoption_sha256": "sha256:" + "a" * 64,
+                         "authorization": "Bearer private-value"},
+                next_operations=[dispatcher_operation(
+                    "workflow", "replan", kwargs={"artifact_adoption_sha256": "sha256:" + "a" * 64},
+                    reason="Adopt inspected bytes", requires_owner=True, retry_safety="state_checked",
+                )],
+            )
+
+        monkeypatch.setattr(mcp_server, "_boot", lambda: fail)
+
+        async def call():
+            async with Client(mcp_server.mcp) as client:
+                return await client.call_tool(tool, arguments, raise_on_error=False)
+
+        result = asyncio.run(call())
+        assert result.is_error is True
+        text = result.content[0].text
+        payload = json.loads(text)
+        assert payload["ok"] is False
+        error = payload["error"]
+        assert error["type"] == "WorkflowError"
+        assert error["error_code"] == "artifact_adoption_required"
+        assert error["context"]["artifact_adoption_sha256"] == "sha256:" + "a" * 64
+        assert error["next_operation"]["kwargs"]["artifact_adoption_sha256"] == "sha256:" + "a" * 64
+        assert error["requires_owner"] is True
+        assert error["retry_safety"] == "state_checked"
+        assert "private-value" not in text
 
     def test_published_schemas_are_flat_and_typed(self):
         schemas = _published_schemas()

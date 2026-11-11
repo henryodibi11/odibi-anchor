@@ -56,6 +56,19 @@ installed package); do not commit its state. The public MCP server exposes `anch
 `anchor_memory` tools, which forward to `anchor_execute`, so writes cannot bypass the governed
 gateway.
 
+Typed tools retain the gateway's successful response shape. On failure they signal an MCP
+tool error whose text is JSON with `ok: false` and `error`, including redacted recovery
+`context`, `next_operation` and approval/retry requirements when available. The generic
+gateway retains its legacy default; select `response_version=2` for structured errors there.
+Recovery metadata describes the next operation; it does not execute it or grant approval.
+
+For exact terminal-task evidence, use the existing read-only gateway operation
+`anchor_execute("memory", {"arg0": "task_record", "task_window_id": "<task-window-id>"})`.
+Within the active project boundary, it returns verified records with `record_json`,
+`record_sha256`, parsed `record` and `valid`. Hash the UTF-8 bytes of `record_json`, not a
+JSON reserialization of `record`: other runtimes can change number representations.
+An empty result does not prove that an unaccepted task was closed or superseded.
+
 The server freezes this route for its process lifetime. Changing cwd, environment variables,
 or `workspace/.active_project` does not redirect it; deleting or retargeting its registry entry
 blocks subsequent actions until the host restarts with valid configuration. The selector is an
