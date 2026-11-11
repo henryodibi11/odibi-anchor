@@ -84,6 +84,9 @@ def test_blocker_actually_blocks():
         pytest.param(['{"args": ["task"]}'], id="dependency-free-action"),
         pytest.param(['{"args": ["duplicate"]}'], id="numpy-bound-action"),
         pytest.param(['{"args": ["diff"]}'], id="pandas-bound-action"),
+        pytest.param(['{"args": ["problem"]}'], id="problem-contract"),
+        pytest.param(['{"args": ["work_item"]}'], id="work-item-contract"),
+        pytest.param(['{"args": ["spec"]}'], id="spec-contract"),
     ],
 )
 def test_help_succeeds_without_optional_dependencies(args):

@@ -49,7 +49,7 @@ Problem `check_readiness` supports framing, recommendation traceability and clos
 
 ## Safe writes and migration
 
-Discover native fields/table columns from `anchor artifact-schema` or `project status` → `artifact_contract.native_contracts`; definitions are derived from native writers and the managed schema registry. Unknown fields, unknown table cells and conflicting aliases are rejected rather than silently discarded.
+Discover native fields/table columns from `anchor artifact-schema` or `project status` → `artifact_contract.native_contracts`; definitions are derived from native writers and the managed schema registry. Action help for `problem`, `work_item` and `spec` includes the same saved-record contract without bootstrap. Text fields take strings; table fields take lists of row objects with the advertised column names. Work-item help also identifies non-text material types, so callers need not infer lists from narrative field names. Unknown fields, unknown table cells and conflicting aliases are rejected rather than silently discarded.
 
 Use strict writes for new consumers:
 
