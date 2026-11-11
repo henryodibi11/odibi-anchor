@@ -5,6 +5,8 @@ anchor() dispatches 'known_error', not 'error'. The intent map previously sugges
 """
 from pathlib import Path
 
+import pytest
+
 from odibi_anchor._dispatcher._dispatch_table import (
     _INTENT_MAP,
     ACTION_GROUPS,
@@ -66,6 +68,26 @@ def test_task_help_documents_bounded_memory_limit():
     assert "`memory_limit`" in help_text
     assert "1 through 20" in help_text
     assert "default 5" in help_text
+
+
+@pytest.mark.parametrize("action", ["problem", "work_item", "spec"])
+def test_native_help_exposes_saved_record_contract_without_runtime(action):
+    import json
+
+    text = build_help_text(action)
+    contract = json.loads(text.split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert contract["record"]["directory"] == {"problem": "problems", "work_item": "work_items", "spec": "specs"}[action]
+    assert contract["writes"]["versions"] == [1, 2]
+    assert contract["readiness"]["semantic_certification"] is False
+    if action == "problem":
+        assert "recommendation_evidence" in contract["fields"]["text_fields"]
+        assert "Hypothesis" in contract["fields"]["tables"]["hypotheses"]
+        assert "list of objects" in text
+    elif action == "work_item":
+        assert "scope" in contract["fields"]["text_fields"]
+        assert "risks" in contract["fields"]["text_fields"]
+        assert contract["fields"]["field_types"]["acceptance_criteria"] == "list of nonempty strings"
+        assert contract["fields"]["field_types"]["publication_plan"] == "list or object"
 
 
 def test_learning_help_documents_subcommand_contracts():

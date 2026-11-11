@@ -12,6 +12,7 @@ it closes over ~20 session-state variables and is the natural product of init().
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -1190,6 +1191,20 @@ def _build_action_detail(
         lines.append("\n**Subcommands:**\n")
         for detail in _ACTION_DETAILS[target]:
             lines.append(f"  - {detail}")
+
+    if target in {"problem", "work_item", "spec"}:
+        from odibi_anchor._dispatcher._managed_record_schema import native_artifact_contracts
+
+        contracts = native_artifact_contracts()
+        lines.append("\n**Saved-record contract:** Text fields take strings; tables take a list of objects "
+                     "whose keys are the listed columns. Discovery and readiness grant no write authority.")
+        lines.append("```json\n" + json.dumps({
+            "schema_version": contracts["schema_version"],
+            "record": contracts["records"][target],
+            "fields": contracts.get(target, {}),
+            "writes": contracts["writes"],
+            "readiness": contracts["readiness"],
+        }, indent=2) + "\n```")
 
     # Add examples if available
     if target in _EXAMPLES:
