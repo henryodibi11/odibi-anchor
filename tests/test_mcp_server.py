@@ -1979,6 +1979,9 @@ class TestGatewayCompatibility:
 
 _TYPED_CALLS = [
     ("anchor_workflow", "command", {
+        "command": "list", "offset": 0, "limit": 1,
+    }, "workflow"),
+    ("anchor_workflow", "command", {
         "command": "create", "request_id": "r1", "expected_generation": 0,
         "plan": {
             "schema_version": 1, "goal": "Fix median", "risk": "low",
@@ -2174,6 +2177,9 @@ class TestTypedTools:
         assert "error" not in rebound, rebound
         retained = call("anchor_workflow", command="status", workflow_id=workflow_id)
         assert retained["state"] == state
+        inventory = call("anchor_workflow", command="list", offset=0, limit=1)
+        assert inventory["next_offset"] is None
+        assert inventory["workflows"][0]["workflow_id"] == workflow_id
         closed = call("anchor_learning", command="assess", outcome="nothing_reusable_learned")
         assert "error" not in closed, closed
         call("anchor_execute", action="orient")

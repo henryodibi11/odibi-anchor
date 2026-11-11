@@ -40,7 +40,7 @@ _ACTION_SIGNATURES: dict[str, str] = {
     "task":         'anchor("task", "description", goal="...", mode="...", problem="PRB-...", spec="...", work_item="WI-YYYY-NNNN")',
     "task_rebind":  'anchor("task_rebind", task_window_id="ltw_...")  # exact ID resolves interrupted-task ambiguity',
     "task_adoption": 'anchor("task_adoption", "inspect|request|withdraw", ...)  # authenticated takeover of dirty work only',
-    "workflow":     'anchor("workflow", "status|check_plan|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # bind a fresh task with workflow_id; no destination mutation',
+    "workflow":     'anchor("workflow", "status|list|check_plan|create|accept_plan|implemented|review|qualify|check_artifact|prepare_delivery|request_delivery_approval|prepare_revocation|revoke_delivery|verify_delivery|block|resume|cancel|replan", ...)  # discover saved IDs with list; bind a fresh task for transitions; no destination mutation',
     "gate":         'anchor("gate")  # no args — gate derives ALL evidence from session state',
     "preflight":    'anchor("preflight")  # auto-detects changed_files from session',
     "test":         'anchor("test")  # runs tests for changed files',
@@ -779,6 +779,13 @@ _ACTION_DETAILS: dict[str, list[str]] = {
         'fresh continuation/replanning, not ledger clearing or retroactive qualification.',
     ],
     "workflow": [
+        '`list`: read-only discovery of saved workflows for the exact runtime project, roots and '
+        'trust domain, including workflows whose producer has closed. Use offset (default 0) and '
+        'limit (1-200, default 100); follow next_offset until null. Each returned summary verifies '
+        'its saved event chain. Missing storage/domain is unavailable, not an empty history. '
+        'Read the complete state with status(workflow_id=...). Without an ID, status describes '
+        'only the current task; read_only_unphased never means no saved workflow exists. '
+        'Discovery and status never bind, approve, qualify or grant authority.',
         '`create`: requires an accepted task in an explicit managed project/trust domain, `plan` '
         'and `request_id`. Start in read-only analysis. The draft grants no edit permission. '
         'Close the inquiry, then bind its `workflow_id` on a fresh producer task.',

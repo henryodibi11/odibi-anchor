@@ -16,6 +16,7 @@ from odibi_anchor.codebase._workflow import (
     acceptance_check,
     create_workflow,
     digest,
+    list_workflows,
     read_workflow,
     replay_public_request,
     require_acceptable,
@@ -25,7 +26,7 @@ from odibi_anchor.codebase._workflow import (
 DEFAULT_APPROVAL_TIMEOUT_MINUTES = 30
 MAX_APPROVAL_TIMEOUT_MINUTES = 240
 OWNER_APPROVAL_COMMANDS = frozenset({"request_delivery_approval", "revoke_delivery"})
-READ_COMMANDS = frozenset({"status", "check_plan", "prepare_delivery", "prepare_revocation"})
+READ_COMMANDS = frozenset({"status", "list", "check_plan", "prepare_delivery", "prepare_revocation"})
 WRITE_COMMANDS = frozenset({"create", "accept_plan", "implemented", "review", "qualify", "check_artifact",
                             "request_delivery_approval", "revoke_delivery", "verify_delivery", "block", "resume", "cancel", "replan"})
 
@@ -34,7 +35,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
                     request_id=None, expected_generation=None, plan=None, findings=None,
                     reason=None, blocker_kind=None, resolution=None, criterion_id=None,
                     timeout_minutes=None, provider=None, in_session_approval=None,
-                    wait_seconds=None, artifact_adoption_sha256=None, output_format="dict"):
+                    wait_seconds=None, artifact_adoption_sha256=None, offset=None, limit=None,
+                    output_format="dict"):
     """Operate on exact task-bound authority without performing destination mutations.
 
     check_plan reports every problem accept_plan would refuse, storing nothing.
@@ -76,6 +78,8 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
         raise ValueError("workflow output_format must be dict or markdown")
     if command in WRITE_COMMANDS and output_format != "dict":
         raise ValueError("workflow writes require dict output for durability checkpointing")
+    if command != "list" and (offset is not None or limit is not None):
+        raise ValueError("offset and limit apply only to workflow list")
     if artifact_adoption_sha256 is not None and command != "replan":
         raise ValueError("artifact_adoption_sha256 applies only to replan")
     owner_options = {"timeout_minutes": timeout_minutes, "provider": provider,
@@ -112,9 +116,21 @@ def workflow_action(path, *, session_state, command="status", workflow_id=None,
             public_request[name] = owner_options[name]
     approval_timeout = timeout_minutes or DEFAULT_APPROVAL_TIMEOUT_MINUTES
     replayed = False
-    if command == "status":
+    if command == "list":
+        if any(value is not None for value in (
+            workflow_id, request_id, expected_generation, plan, findings, reason,
+            blocker_kind, resolution, criterion_id,
+        )):
+            raise ValueError("workflow list takes only offset, limit and output_format")
+        packet = list_workflows(path, owner=workflow_owner(session_state),
+                                offset=0 if offset is None else offset,
+                                limit=100 if limit is None else limit)
+    elif command == "status":
         if workflow_id is None:
             packet = workflow_packet(path, session_state=session_state)
+            if "state" not in packet:
+                packet.update(scope="current_task", limitation="No workflow is bound to this task; "
+                              "this says nothing about saved project workflows. Discover them with workflow list.")
         else:
             state = read_workflow(path, owner=workflow_owner(session_state), workflow_id=workflow_id)
             packet = {"kind": "workflow_packet", "schema_version": 1, "authority": "projection", "state": state}

@@ -88,12 +88,16 @@ def restored_work(tmp_path):
 
 
 def test_real_restore_rebinds_workflow_preserving_old_rows_and_snapshot(restored_work):
-    from odibi_anchor._dispatcher._workflow_admission import bound_workflow
+    from odibi_anchor._dispatcher._workflow_admission import bound_workflow, workflow_owner
     from odibi_anchor._dispatcher._workflow_evidence import _accepted_task
     from odibi_anchor.codebase._task_authority import rebind_latest_open_task, task_recovery_context
+    from odibi_anchor.codebase._workflow import list_workflows
 
     original, resumed, workflow, snapshot, restored = restored_work
     db = restored["destination_db"]
+    inventory = list_workflows(db, owner=workflow_owner(resumed))
+    assert [row["workflow_id"] for row in inventory["workflows"]] == [workflow["workflow_id"]]
+    assert resumed.workflow_binding is None
     assert task_recovery_context(db, session_state=resumed)["ownership_state"] == "interrupted_source_task"
     rebound = rebind_latest_open_task(db, session_state=resumed)
     assert rebound["owner_relocated"] is True
@@ -119,11 +123,14 @@ def test_relocation_never_changes_target_project_or_trust(restored_work, change)
 
 
 def test_unattested_database_copy_rejected(restored_work, tmp_path):
+    from odibi_anchor._dispatcher._workflow_admission import workflow_owner
     from odibi_anchor.codebase._task_authority import TaskAuthorityUnavailable, rebind_latest_open_task
+    from odibi_anchor.codebase._workflow import list_workflows
 
     _, resumed, _, snapshot, _ = restored_work
     copied = tmp_path / "copied.db"
     shutil.copyfile(snapshot["snapshot_path"], copied)
+    assert list_workflows(copied, owner=workflow_owner(resumed))["workflows"] == []
     with pytest.raises(TaskAuthorityUnavailable, match="no open accepted task"):
         rebind_latest_open_task(copied, session_state=resumed)
 

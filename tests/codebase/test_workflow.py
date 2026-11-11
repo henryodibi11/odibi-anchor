@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -123,7 +124,10 @@ def test_only_verified_destination_completes_workflow(run, owner):
                                          ("target_root", "/elsewhere"), ("artifact_root", "/other"),
                                          ("anchor_home", "/foreign")])
 def test_exact_owner_is_required_for_reads_and_transitions(run, owner, field, value):
+    if field in {"target_root", "artifact_root", "anchor_home"}:
+        value = str(Path(value).resolve())
     wrong = {**owner, field: value}
+    assert workflow.list_workflows(run.path, owner=wrong)["workflows"] == []
     with pytest.raises(workflow.WorkflowError, match="exact authority"):
         workflow.read_workflow(run.path, owner=wrong, workflow_id=run.initial["workflow_id"])
     with pytest.raises(workflow.WorkflowError, match="exact authority"):
@@ -134,6 +138,8 @@ def test_exact_owner_is_required_for_reads_and_transitions(run, owner, field, va
 
 def test_read_and_transition_never_initialize_missing_authority(tmp_path, owner):
     path = tmp_path / "absent" / "state.db"
+    with pytest.raises(workflow.WorkflowError, match="unavailable"):
+        workflow.list_workflows(path, owner=owner)
     with pytest.raises(workflow.WorkflowError, match="unavailable"):
         workflow.read_workflow(path, owner=owner, workflow_id="unknown")
     with pytest.raises(workflow.WorkflowError, match="unavailable"):
@@ -310,12 +316,18 @@ def test_schema_and_records_are_fail_closed(run, owner):
         workflow.read_workflow(run.path, owner=owner, workflow_id=run.initial["workflow_id"])
 
 
-def test_event_corruption_rejected_even_after_trigger_restored(run, owner):
+@pytest.mark.parametrize("damage", ["hash", "missing_genesis"])
+def test_event_corruption_rejected_even_after_trigger_restored(run, owner, damage):
     with sqlite3.connect(run.path) as db:
         trigger = db.execute("SELECT sql FROM sqlite_master WHERE name='workflow_events_no_update'").fetchone()[0]
         db.execute("DROP TRIGGER workflow_events_no_update")
-        db.execute("UPDATE workflow_events SET event_sha256='corrupt'")
+        if damage == "hash":
+            db.execute("UPDATE workflow_events SET event_sha256='corrupt'")
+        else:
+            db.execute("UPDATE workflow_events SET generation=1")
         db.execute(trigger)
+    with pytest.raises(workflow.WorkflowError, match="integrity check"):
+        workflow.list_workflows(run.path, owner=owner)
     with pytest.raises(workflow.WorkflowError, match="integrity check"):
         workflow.read_workflow(run.path, owner=owner, workflow_id=run.initial["workflow_id"])
 

@@ -81,7 +81,7 @@ def implement(runtime):
     advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
     artifact.parent.mkdir(exist_ok=True)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     return advance(anchor, "implemented")
 
@@ -175,6 +175,66 @@ def test_public_lifecycle_requires_measurements_review_and_human_authority(runti
     assert verified["progress"] == "delivery_verified" and verified["completed"] is True
     assert verified["workflow_id"] == draft["workflow_id"]
     assert verified["verification"]["observed"]["files"]["notebooks/report.md"]["size"] == 10
+
+
+def test_fresh_read_only_inquiry_discovers_saved_qualified_workflow(runtime):
+    anchor, home, _, draft = runtime
+    implement(runtime)
+    measured = anchor("test", target=["test_report.py"], workflow_criterion="report", output_format="dict")
+    assert measured["metrics"]["passed"] == 1
+    advance(anchor, "review", findings=[])
+    finish_producer(anchor)
+    qualified = advance(anchor, "qualify")
+    anchor("new_session", name="fresh_handover", inline=True, output_format="dict")
+    anchor("task", "Inspect saved workflow disposition", goal="Distinguish saved qualification from delivery",
+           mode="analysis", trust_domain="personal", constraints=["Read-only inquiry"],
+           acceptance_criteria=["Discover and read the saved workflow without changing it"],
+           output_format="dict")
+    current = anchor("workflow", "status", output_format="dict")
+    assert current["status"] == "read_only_unphased" and current["scope"] == "current_task"
+
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+              for path in home.rglob("*.db")}
+    inventory = anchor("workflow", "list", limit=1, output_format="dict")
+    assert inventory["authority"] == "projection"
+    assert inventory["state_changed"] is False
+    assert inventory["next_offset"] is None
+    assert len(inventory["workflows"]) == 1
+    saved = inventory["workflows"][0]
+    assert saved["workflow_id"] == draft["workflow_id"]
+    assert (saved["generation"], saved["progress"], saved["completed"]) == (
+        qualified["generation"], "qualified", False,
+    )
+    assert anchor("workflow", "status", workflow_id=saved["workflow_id"],
+                  output_format="dict")["state"] == qualified
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before} == before
+
+
+def test_workflow_inventory_pages_only_exact_owner_history(runtime, tmp_path):
+    from odibi_anchor.codebase._workflow import create_workflow
+
+    anchor, home, _, draft = runtime
+    other = anchor("workflow", "create", plan=draft["plan"], request_id="another-plan",
+                   output_format="dict")["state"]
+    for key in ("project_id", "trust_domain", "target_root", "artifact_root", "anchor_home"):
+        value = "other" if key in {"project_id", "trust_domain"} else str((tmp_path / key).resolve())
+        create_workflow(home / "memory.db", owner={**draft["owner"], key: value},
+                        request_id="foreign-" + key, plan=draft["plan"])
+    first = anchor("workflow", "list", limit=1, output_format="dict")
+    second = anchor("workflow", "list", offset=first["next_offset"], limit=1, output_format="dict")
+    assert first["next_offset"] == 1 and second["next_offset"] is None
+    assert [first["workflows"][0]["workflow_id"], second["workflows"][0]["workflow_id"]] == sorted([
+        draft["workflow_id"], other["workflow_id"],
+    ])
+    assert anchor("workflow", "list", offset=2, output_format="dict")["workflows"] == []
+    assert len(anchor("workflow", "list", limit=200, output_format="dict")["workflows"]) == 2
+    for options in ({"offset": True}, {"offset": -1}, {"limit": 0}, {"limit": 201},
+                    {"workflow_id": draft["workflow_id"]}, {"request_id": "not-a-write"},
+                    {"plan": draft["plan"]}):
+        with pytest.raises(ValueError):
+            anchor("workflow", "list", **options, output_format="dict")
+    with pytest.raises(ValueError, match="only to workflow list"):
+        anchor("workflow", "status", offset=0, output_format="dict")
 
 
 @pytest.mark.parametrize("forged", ["payload", "actor_kind", "candidate", "result", "receipt_ref", "session_state", "path"])
