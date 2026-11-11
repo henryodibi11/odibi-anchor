@@ -92,6 +92,11 @@ def test_task_left_open_is_discovered_and_resumable_after_restart(runtime):
     window = _read_only_task(anchor)["task_window_id"]
 
     restarted = start()
+    before_rebind = restarted("status", output_format="dict")
+    assert not any("ready for delivery" in item for item in before_rebind["suggested_next_actions"])
+    assert any("task_rebind" in item for item in before_rebind["suggested_next_actions"])
+    with pytest.raises(RuntimeError, match="task_rebind"):
+        restarted("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
     oriented = restarted("orient", output_format="dict")
     assert [task["task_window_id"] for task in oriented["open_tasks"]] == [window]
     assert oriented["next_operation"]["kwargs"] == {"task_window_id": window}
