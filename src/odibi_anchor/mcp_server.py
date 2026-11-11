@@ -32,6 +32,7 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from pydantic import BeforeValidator, StrictInt
 from pydantic.json_schema import SkipJsonSchema
 
@@ -918,7 +919,12 @@ def _forward(action: str, arg0: str, fields: dict[str, Any]) -> str:
     args = {"arg0": arg0, **{
         key: value for key, value in fields.items() if value is not None and value != ""
     }}
-    return anchor_execute(action, args)
+    try:
+        return anchor_execute(action, args)
+    except Exception as exc:
+        # Keep legacy success bytes and MCP's error signal, but retain the same
+        # redacted recovery metadata as v2 without dispatching the action again.
+        raise ToolError(_fmt({"ok": False, "error": error_information(exc)})) from exc
 
 
 @mcp.tool()
