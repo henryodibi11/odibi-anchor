@@ -644,6 +644,58 @@ def read_workflow(path: str | Path, *, owner: Mapping[str, Any], workflow_id: st
         return _events(connection, workflow_id, identity)[-1]["state"]
 
 
+def list_workflows(path: str | Path, *, owner: Mapping[str, Any],
+                   offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    """Discover exact-owner saved workflows, including closed producers, without admission.
+
+    Each returned state has its event chain verified. Pagination is a point-in-time
+    projection; refresh exact status before relying on a generation for a transition.
+    Missing storage/domain is unavailable, never an invented empty history.
+    """
+    from odibi_anchor.codebase._authority_relocation import load_relocations, rebase_identity
+
+    identity = _owner(owner)
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset must be a nonnegative integer")
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("limit must be an integer from 1 to 200")
+    workflows = []
+    matched = 0
+    next_offset = None
+    with _connection(path) as connection:
+        connection.execute("BEGIN")
+        _schema(connection)
+        relocations = load_relocations(connection)
+        for identifier, in connection.execute("SELECT DISTINCT workflow_id FROM workflow_events ORDER BY workflow_id"):
+            row = connection.execute(
+                "SELECT event_json,event_sha256 FROM workflow_events "
+                "WHERE workflow_id=? ORDER BY generation LIMIT 1", (identifier,),
+            ).fetchone()
+            event = json.loads(row["event_json"])
+            if digest(event) != row["event_sha256"]:
+                raise WorkflowError("integrity", "workflow event integrity check failed")
+            bound = rebase_identity(event["state"]["owner"], relocations, identity["anchor_home"])
+            if bound != identity:
+                continue
+            if matched < offset:
+                matched += 1
+                continue
+            if len(workflows) == limit:
+                next_offset = offset + limit
+                break
+            state = _events(connection, identifier, identity)[-1]["state"]
+            workflows.append({
+                **{key: state[key] for key in (
+                    "workflow_id", "generation", "phase", "status", "progress", "completed", "plan_sha256",
+                )},
+                "work_item": state["plan"].get("work_item"),
+            })
+    return {"kind": "workflow_inventory", "schema_version": 1, "authority": "projection",
+            "scope": {"owner": identity, "includes_closed_producers": True},
+            "workflows": workflows, "offset": offset, "next_offset": next_offset,
+            "state_changed": False}
+
+
 def replay_public_request(path: str | Path, *, owner: Mapping[str, Any], workflow_id: str,
                           request_id: str, public_request: dict[str, Any]) -> dict[str, Any] | None:
     """Read a verified prior receipt before repeating collectors or human prompts.

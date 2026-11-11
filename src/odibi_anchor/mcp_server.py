@@ -924,7 +924,7 @@ def _forward(action: str, arg0: str, fields: dict[str, Any]) -> str:
 @mcp.tool()
 def anchor_workflow(
     command: Literal[
-        "status", "check_plan", "create", "accept_plan", "implemented", "review", "qualify",
+        "status", "list", "check_plan", "create", "accept_plan", "implemented", "review", "qualify",
         "check_artifact", "prepare_delivery", "request_delivery_approval",
         "prepare_revocation", "revoke_delivery", "verify_delivery", "block", "resume",
         "cancel", "replan",
@@ -945,6 +945,8 @@ def anchor_workflow(
     provider: Literal["chat_in_session", "databricks_in_session"] | _Unset = None,
     in_session_approval: str | _Unset = None,
     wait_seconds: int | _Unset = None,
+    offset: int | _Unset = None,
+    limit: int | _Unset = None,
 ) -> str:
     """Run anchor("workflow", command, ...) with typed arguments.
 
@@ -953,7 +955,9 @@ def anchor_workflow(
 
     Args:
         command: the workflow subcommand.
-        workflow_id: every command except create and check_plan.
+        workflow_id: status can read an exact saved workflow without binding it; omitted
+            status describes only the current task, not saved project history. Discover IDs
+            with list. Not accepted by list, create or check_plan.
         request_id: create and every transition: a new unique ID (reuse one only to retry the
             identical call).
         expected_generation: every transition except create: the generation from the latest
@@ -973,6 +977,9 @@ def anchor_workflow(
         in_session_approval: with provider only: exactly the approval_response the owner typed.
         wait_seconds: request_delivery_approval and revoke_delivery only: how long to wait for a
             Slack reply before returning status "pending", 0 to 120 (default 45).
+        offset: list only: nonnegative page offset, default 0. Follow next_offset until null.
+        limit: list only: 1 to 200 workflows per page, default 100. Lists exact project, roots
+            and trust-domain history including closed producers; grants no task authority.
     """
     return _forward("workflow", command, {k: v for k, v in locals().items() if k != "command"})
 
