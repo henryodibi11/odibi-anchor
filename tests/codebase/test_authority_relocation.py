@@ -25,8 +25,8 @@ def test_complete_chain_maps_only_home_paths(tmp_path):
                 "project_id": "x", "trust_domain": "work", "repository_provider_id": "git"}
     chain = [{"source_home": a, "destination_home": b}, {"source_home": b, "destination_home": c}]
     assert rebase_identity(original, chain, c) == {
-        **original, "anchor_home": c, "artifact_root": c + "/workspace/projects/x",
-        "project_root": c + "/workspace/projects/x",
+        **original, "anchor_home": c, "artifact_root": str(Path(c) / "workspace/projects/x"),
+        "project_root": str(Path(c) / "workspace/projects/x"),
     }
     assert rebase_identity(original, chain[:1], c) == original
     assert rebase_identity(original, [], c) == original
@@ -100,7 +100,7 @@ def test_real_restore_rebinds_workflow_preserving_old_rows_and_snapshot(restored
     assert resumed.target_root == original.target_root
     assert resumed.workflow_binding == original.workflow_binding
     assert bound_workflow(db, session_state=resumed) == workflow
-    assert _accepted_task(db, resumed, resumed.task_window_id)["identity"]["anchor_home"] == original.anchor_home
+    assert Path(_accepted_task(db, resumed, resumed.task_window_id)["identity"]["anchor_home"]) == Path(original.anchor_home)
     with sqlite3.connect(snapshot["snapshot_path"]) as old, sqlite3.connect(db) as new:
         for table in ("accepted_task_records", "workflow_events"):
             assert old.execute(f"SELECT * FROM {table}").fetchall() == new.execute(f"SELECT * FROM {table}").fetchall()
@@ -174,6 +174,6 @@ def test_second_restore_follows_two_hops(restored_work, tmp_path):
     assert bound_workflow(last["destination_db"], session_state=final) == workflow
     with sqlite3.connect(last["destination_db"]) as connection:
         records = [json.loads(row[0]) for row in connection.execute("SELECT event_json FROM anchor_home_relocations")]
-    assert {(r["source_home"], r["destination_home"]) for r in records} == {
-        (original.anchor_home, resumed.anchor_home), (resumed.anchor_home, str(third)),
+    assert {(Path(r["source_home"]), Path(r["destination_home"])) for r in records} == {
+        (Path(original.anchor_home), Path(resumed.anchor_home)), (Path(resumed.anchor_home), third),
     }

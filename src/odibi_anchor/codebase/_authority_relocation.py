@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -66,14 +67,18 @@ def rebase_identity(identity, relocations, current_home):
         cursor = edges[cursor]
     if cursor != destination or source == destination:
         return identity
+    # Normalize comparisons, not the caller's exact canonical path spelling.
     result = dict(identity)
     for key in ("anchor_home", "artifact_root", "project_root"):
         if identity.get(key):
             try:
                 relative = Path(_path(identity[key])).relative_to(source)
+                spelling = Path(identity[key]).relative_to(identity["anchor_home"])
             except ValueError:
                 continue
-            result[key] = str(Path(destination) / relative)
+            if os.path.normcase(str(spelling)) != str(relative):
+                continue
+            result[key] = str(Path(current_home) / spelling)
     return result
 
 
@@ -120,7 +125,7 @@ def append_verified_relocation(path, *, source_home, destination_home, manifest)
              "snapshot_id": manifest["snapshot_id"], "snapshot_sha256": manifest["sha256"],
              "logical_digest": manifest["logical_digest"], "authority_id": manifest["authority_id"],
              "restored_at": datetime.now(UTC).isoformat()}
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "anchor_schema_versions" not in tables:
