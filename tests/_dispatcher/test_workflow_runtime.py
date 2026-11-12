@@ -158,6 +158,7 @@ def test_public_lifecycle_requires_measurements_review_and_human_authority(runti
     assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
     prepared = anchor("workflow", "prepare_delivery", output_format="dict")
     assert prepared["authority_granted"] is False
+    assert prepared["envelope"]["outcome"] == "succeeded"
     with pytest.raises(RuntimeError, match="retained approval"):
         advance(anchor, "verify_delivery")
 

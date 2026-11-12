@@ -2,6 +2,14 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.17] - 2026-11-12
+
+### Fixed
+
+- Context-frame profile hints only look up table subjects for profile results. Structured
+  workflow approval subjects no longer produce a degraded suggestion warning; candidate
+  identity, human approval requirements and workflow state are unchanged.
+
 ## [0.4.16] - 2026-11-11
 
 ### Fixed
