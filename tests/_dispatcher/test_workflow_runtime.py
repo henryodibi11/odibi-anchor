@@ -158,6 +158,7 @@ def test_public_lifecycle_requires_measurements_review_and_human_authority(runti
     assert qualified["qualification"]["producer_terminal_record_sha256"] == terminal["record_sha256"]
     prepared = anchor("workflow", "prepare_delivery", output_format="dict")
     assert prepared["authority_granted"] is False
+    assert prepared["envelope"]["outcome"] == "succeeded"
     with pytest.raises(RuntimeError, match="retained approval"):
         advance(anchor, "verify_delivery")
 
@@ -814,7 +815,7 @@ def test_returned_operations_capture_measure_and_qualify_without_gate_trap(runti
     assert anchor("context", output_format="dict")["next_operation"]["status"] == "external_required"
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
     artifact.parent.mkdir(exist_ok=True)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     context = anchor("context", output_format="dict")
     statuses = {row["id"]: row["status"] for row in anchor("status", output_format="dict")["operating_protocol"]["verification_obligations"]}
@@ -861,7 +862,7 @@ def test_producer_gate_before_implemented_warns_with_exact_next_operation(runtim
     planned = advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
     artifact.parent.mkdir(exist_ok=True)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     anchor("review", output_format="dict")
     # Gating first freezes the producer; the gate used to say nothing, and the
@@ -886,7 +887,7 @@ def test_producer_learning_before_implemented_is_refused_and_stores_nothing(runt
     advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
     artifact.parent.mkdir(exist_ok=True)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     # v0.3.37 opened a learning obligation here, which froze the producer: implemented
     # was then refused and the finished work could never qualify.
@@ -1115,7 +1116,7 @@ def test_stopped_artifact_bytes_need_explicit_adoption(runtime):
     anchor, home, _, draft = runtime
     advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     anchor("learning", "safe_stop", status="blocked", reason="Interrupted", output_format="dict")
     _producer_task(anchor, draft["workflow_id"])
@@ -1129,7 +1130,7 @@ def test_stopped_artifact_bytes_need_explicit_adoption(runtime):
     artifact.write_text("Changed after adoption prompt\n")
     with pytest.raises(RuntimeError, match="explicit artifact adoption"):
         advance(anchor, "replan", plan=before["plan"], reason="Continue", artifact_adoption_sha256=token)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     with pytest.raises(RuntimeError) as refreshed:
         advance(anchor, "replan", plan=before["plan"], reason="Continue")
     replanned = advance(anchor, "replan", plan=before["plan"], reason="Adopt stopped output for fresh verification",
@@ -1826,7 +1827,7 @@ def test_producer_stops_before_candidate_and_a_fresh_producer_takes_over(runtime
     advance(anchor, "accept_plan")
     artifact = home / "workspace/projects/alpha/notebooks/report.md"
     artifact.parent.mkdir(exist_ok=True)
-    artifact.write_text("Result: 5\n")
+    artifact.write_text("Result: 5\n", newline="\n")
     anchor("touched", str(artifact), output_format="dict")
     assert advance(anchor, "implemented")["progress"] == "implemented"
 

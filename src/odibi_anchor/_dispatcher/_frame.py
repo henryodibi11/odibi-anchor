@@ -69,12 +69,15 @@ def _build_contextual_suggestions(frame: "_ContextFrame", result: dict) -> list[
         # ── Data context → redundancy hints ──
         # If subject already profiled, tell the agent they can skip re-profiling
         result_subject = result.get("subject", "")
-        if result_subject and frame.data_context.has_profile(result_subject):
-            action_from_result = result.get("kind", "")
-            if action_from_result in ("profile_table", "profile_table_context", "table_profile"):
-                sug = f"NOTE: {result_subject} already profiled this session — frame has prior findings"
-                if sug not in existing:
-                    suggestions.append(sug)
+        action_from_result = result.get("kind", "")
+        if (
+            action_from_result in ("profile_table", "profile_table_context", "table_profile")
+            and result_subject
+            and frame.data_context.has_profile(result_subject)
+        ):
+            sug = f"NOTE: {result_subject} already profiled this session — frame has prior findings"
+            if sug not in existing:
+                suggestions.append(sug)
 
         # ── Validation blockers → MUST-fix suggestions ──
         for f in frame.findings:
