@@ -74,6 +74,11 @@ def _stable_owner(owner: dict) -> dict:
 
 def _continuity_paths(route_binding: object, session_state: object) -> tuple[str, str, str]:
     base = _os.path.join(route_binding.artifact_root, "continuity", "v1")
+    if _os.name == "nt":
+        # Keep route identity unchanged; only filesystem access uses extended paths.
+        base = _os.path.abspath(base)
+        if not base.startswith("\\\\?\\"):
+            base = "\\\\?\\UNC\\" + base[2:] if base.startswith("\\\\") else "\\\\?\\" + base
     record = _os.path.join(
         base, _component(route_binding.project_id),
         _component(route_binding.runtime_instance_id),
