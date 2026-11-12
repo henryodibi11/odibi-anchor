@@ -2,6 +2,15 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.18] - 2026-11-12
+
+### Fixed
+
+- Git-backed task and workflow operations avoid discarded and duplicate repository
+  snapshots. Live branch, history and target-drift checks remain mandatory; task rebinding
+  still validates live scope, and content evidence remains relative to task start.
+  No cross-operation cache, approval-policy change or timeout increase is introduced.
+
 ## [0.4.17] - 2026-11-12
 
 ### Fixed
