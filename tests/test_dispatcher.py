@@ -364,12 +364,15 @@ class TestActionRouting:
 
         status = anchor_func("status", output_format="dict")
 
+        assert status["runtime"]["source_revision_scope"] == "anchor_runtime"
         assert status["runtime"]["loaded_source_revision"] == loaded
         assert status["runtime"]["current_source_revision"] == loaded
         assert status["runtime"]["loaded_source_fingerprint"] == loaded_fingerprint
         assert status["runtime"]["current_source_fingerprint"] == changed_fingerprint
         assert status["runtime"]["source_revision_stale"] is True
         assert any("dispatcher is stale" in risk for risk in status["risks"])
+        markdown = anchor_func("status", output_format="markdown")
+        assert "Anchor runtime source revision (not target repository)" in markdown
         with pytest.raises(RuntimeError, match="different source revision"):
             anchor_func("memory", output_format="dict")
 

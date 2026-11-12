@@ -89,10 +89,12 @@ def run_pre_dispatch_enforcement(
             "or project routing changes. Use anchor('learning', 'capture', ...) when needed, "
             "then anchor('learning', 'assess', ...)."
         )
+    # Read-only and pre-gate tasks create their obligation during dispatch;
+    # their selected/applied memories already belong to the accepted task.
     if (
         action == "learning"
         and (str(args[0]).lower().strip() if args else "list") == "assess"
-        and active_obligation is not None
+        and owner_task is not None
     ):
         from odibi_anchor._dispatcher._boot import _ENV
         from odibi_anchor.codebase._memory_lifecycle import (
@@ -101,7 +103,7 @@ def run_pre_dispatch_enforcement(
         )
 
         pending = pending_task_selections(
-            _ENV["memory_db"], task_window_id=active_obligation["task_window_id"],
+            _ENV["memory_db"], task_window_id=owner_task,
         )
         if pending:
             memory_ids = [item["memory_id"] for item in pending]
@@ -113,7 +115,7 @@ def run_pre_dispatch_enforcement(
                 "all_pending=True, disposition='irrelevant', reason={...}; never loop those calls."
             )
         unevaluated = unevaluated_task_applications(
-            _ENV["memory_db"], task_window_id=active_obligation["task_window_id"],
+            _ENV["memory_db"], task_window_id=owner_task,
         )
         if unevaluated:
             application_ids = [item["application_id"] for item in unevaluated]
@@ -123,7 +125,7 @@ def run_pre_dispatch_enforcement(
                 "application_id='...', outcome='helpful|not_helpful|harmful|superseded', "
                 "evidence={...})."
             )
-        if kwargs.get("outcome") == "nothing_reusable_learned":
+        if active_obligation is not None and kwargs.get("outcome") == "nothing_reusable_learned":
             epoch = getattr(session_state, "task_verification_epoch", None)
             # A rejected closure or help attempt is lifecycle bookkeeping, not a
             # failed task action that could carry a reusable observation.

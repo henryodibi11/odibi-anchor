@@ -127,8 +127,17 @@ def test_explicit_continuation_creates_fresh_task_without_new_session(tmp_path, 
     )
 
 
+@pytest.mark.parametrize(
+    ("mode", "gated", "restart"),
+    [
+        ("documentation", True, False),
+        ("documentation", False, False),
+        ("analysis", False, False),
+        ("analysis", False, True),
+    ],
+)
 def test_learning_assessment_requires_evaluation_for_applied_task_memory(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, mode, gated, restart,
 ):
     memory_db = tmp_path / "anchor-home" / ".agent_memory.db"
     monkeypatch.setenv("ANCHOR_HOME", str(tmp_path / "anchor-home"))
@@ -150,7 +159,7 @@ def test_learning_assessment_requires_evaluation_for_applied_task_memory(
         "task",
         "Change compatibility behavior and qualify the installed package.",
         goal="Preserve compatibility using an installed-package probe.",
-        mode="documentation",
+        mode=mode,
         risk="low",
         rigor="direct",
         continuation=True,
@@ -161,6 +170,15 @@ def test_learning_assessment_requires_evaluation_for_applied_task_memory(
         anchor("skill_loaded", required["skill"], output_format="dict")
     selected = task["memory_context"]["selections"]
     assert len(selected) == 1
+    if restart:
+        anchor, _, _ = init(root=tmp_path, output_format="dict")
+        anchor("orient", output_format="dict")
+        anchor("task_rebind", task_window_id=task["task_window_id"], output_format="dict")
+    if gated:
+        anchor("gate", output_format="dict")
+    with pytest.raises(RuntimeError, match="require an explicit disposition"):
+        anchor("learning", "assess", outcome="nothing_reusable_learned", output_format="dict")
+    assert anchor("status", output_format="dict")["operating_protocol"]["task_closure"]["state"] == "open"
     disposed = anchor(
         "memory",
         "disposition",
@@ -171,7 +189,6 @@ def test_learning_assessment_requires_evaluation_for_applied_task_memory(
         output_format="dict",
     )
     application = disposed["results"][0]["application"]
-    anchor("gate", output_format="dict")
 
     with pytest.raises(RuntimeError, match="require evidence-backed evaluation"):
         anchor(
@@ -181,7 +198,8 @@ def test_learning_assessment_requires_evaluation_for_applied_task_memory(
             output_format="dict",
         )
 
-    anchor(
+    assert anchor("status", output_format="dict")["operating_protocol"]["task_closure"]["state"] == "open"
+    evaluation = anchor(
         "memory",
         "evaluate",
         application_id=application["application_id"],
@@ -196,3 +214,8 @@ def test_learning_assessment_requires_evaluation_for_applied_task_memory(
         output_format="dict",
     )
     assert assessment["assessment"]["outcome"] == "nothing_reusable_learned"
+    if gated or mode == "analysis":
+        assert assessment["accepted_task_closure"]["status"] == "closed"
+        memory = assessment["terminal_task_record"]["record"]["memory"]
+        assert [row["application_id"] for row in memory["applications"]] == [application["application_id"]]
+        assert [row["evaluation_id"] for row in memory["evaluations"]] == [evaluation["evaluation_id"]]
