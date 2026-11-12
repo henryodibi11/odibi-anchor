@@ -143,8 +143,10 @@ class TestRouteOwnedContinuity:
         owner = json.loads((artifact / "continuity" / "v1" / "OWNER.json").read_text())
         assert owner["anchor_home"] == str(source_home)
 
-    def test_stale_writer_cannot_replace_newer_generation(self, tmp_path):
-        binding = _binding(tmp_path)
+    @pytest.mark.parametrize("nested", [False, True], ids=["short-path", "long-path"])
+    def test_stale_writer_cannot_replace_newer_generation(self, tmp_path, nested):
+        root = tmp_path / ("nested-" + "p" * 160) if nested else tmp_path
+        binding = _binding(root)
         current = _continuity_state()
         stale = _continuity_state()
         first = _save_continuity_state(binding, current, {"generation": 1})
