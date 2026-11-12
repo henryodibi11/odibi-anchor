@@ -625,6 +625,7 @@ def _load_verified_record(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _restore_baseline(value: dict[str, Any] | None, repository_provider: Any) -> Any:
+    """Decode accepted evidence; callers capture live scope before using Git authority."""
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != {"kind", "value"}:
@@ -640,16 +641,11 @@ def _restore_baseline(value: dict[str, Any] | None, repository_provider: Any) ->
         TaskRepositoryBaseline,
         UnbornTaskRepositoryBaseline,
         _provider_identity,
-        capture_task_change_scope,
     )
     if kind == "TaskRepositoryBaseline":
-        baseline = TaskRepositoryBaseline(**payload)
-        capture_task_change_scope(baseline)
-        return baseline
+        return TaskRepositoryBaseline(**payload)
     if kind == "UnbornTaskRepositoryBaseline":
-        baseline = UnbornTaskRepositoryBaseline(**payload)
-        capture_task_change_scope(baseline)
-        return baseline
+        return UnbornTaskRepositoryBaseline(**payload)
     if kind != "DatabricksGitFolderTaskBaseline":
         raise TaskAuthorityUnavailable("accepted task repository baseline kind is unsupported")
     if repository_provider is None:
@@ -677,6 +673,11 @@ def _restore_baseline(value: dict[str, Any] | None, repository_provider: Any) ->
 
 def _restore_state(record: dict[str, Any], session_state: Any) -> None:
     identity, task, _ = _validate_record(record)
+    from odibi_anchor._repository_snapshot import (
+        TaskRepositoryBaseline,
+        UnbornTaskRepositoryBaseline,
+        capture_task_change_scope,
+    )
     from odibi_anchor.assurance import AssurancePlan
     from odibi_anchor.planning._task_policy import (
         BpsKernel,
@@ -686,6 +687,10 @@ def _restore_state(record: dict[str, Any], session_state: Any) -> None:
     from odibi_anchor.planning._task_profile import TaskProfile
 
     baseline = _restore_baseline(record.get("repository_baseline"), session_state.repository_provider)
+    # Rebinding needs its own live validation. Other restoration callers immediately
+    # capture the scope they consume, rather than discarding a duplicate capture here.
+    if isinstance(baseline, (TaskRepositoryBaseline, UnbornTaskRepositoryBaseline)):
+        capture_task_change_scope(baseline)
     qualification = record.get("baseline_qualification")
     if qualification is not None:
         if not isinstance(qualification, dict):

@@ -981,32 +981,36 @@ def capture_task_change_scope(
     if not isinstance(baseline, TaskRepositoryBaseline):
         raise TypeError("unknown task repository baseline kind")
 
-    snapshot = capture_repository_snapshot(
+    # Check live identity without collecting file evidence that would be discarded.
+    # Content is captured below against the immutable task-start commit.
+    _, git = _task_git(
         baseline.target_worktree, baseline.configured_target_ref,
     )
-    if snapshot.target_sha is None:
+    head = git.run("rev-parse", "HEAD").strip()
+    branch = _optional_branch(git)
+    _, target, _ = _resolve_configured_target(git, baseline.configured_target_ref)
+    if target is None:
         raise RuntimeError("task configured target disappeared")
-    git = _Git(Path(baseline.target_worktree))
-    if snapshot.branch != baseline.branch:
+    if branch != baseline.branch:
         raise RuntimeError(_baseline_divergence(
-            git, baseline, snapshot.branch, snapshot.head_sha, "branch switched or detached"))
+            git, baseline, branch, head, "branch switched or detached"))
     git.run(
-        "merge-base", "--is-ancestor", baseline.task_start_head_sha, snapshot.head_sha,
+        "merge-base", "--is-ancestor", baseline.task_start_head_sha, head,
         check=False,
     )
     if git.commands[-1]["exit_code"] != 0:
         raise RuntimeError(_baseline_divergence(
-            git, baseline, snapshot.branch, snapshot.head_sha, "HEAD is not a descendant of task start"))
-    target_drift = snapshot.target_sha != baseline.target_sha
+            git, baseline, branch, head, "HEAD is not a descendant of task start"))
+    target_drift = target != baseline.target_sha
     if target_drift:
-        git.run("merge-base", "--is-ancestor", snapshot.target_sha, snapshot.head_sha,
+        git.run("merge-base", "--is-ancestor", target, head,
                 check=False)
         if git.commands[-1]["exit_code"] != 0:
             raise RuntimeError(
                 "task configured target moved and its current SHA is not integrated into HEAD"
             )
 
-    # Re-capture using the immutable task-start commit as the diff base. The target
+    # Capture using the immutable task-start commit as the diff base. The target
     # identity remains task-start evidence and drift is reported, never adopted.
     current = capture_repository_snapshot(
         baseline.target_worktree, baseline.task_start_head_sha,
@@ -1016,7 +1020,7 @@ def capture_task_change_scope(
         "scope_source": "task_repository_baseline",
         "task_start_head_sha": baseline.task_start_head_sha,
         "target_start_sha": baseline.target_sha,
-        "target_current_sha": snapshot.target_sha,
+        "target_current_sha": target,
         "target_drift": target_drift,
         "created_paths": tuple(sorted(set(current.untracked_paths) | set(
             _diff_paths(git, baseline.task_start_head_sha, diff_filter="A")
