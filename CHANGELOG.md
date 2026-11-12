@@ -2,6 +2,14 @@
 
 All notable changes to Odibi Anchor are documented here. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.19] - 2026-11-12
+
+### Fixed
+
+- Windows route-owned continuity records use extended filesystem paths so long
+  project roots can save and restore session state. Route identity, owner checks,
+  atomic replacement and stale-writer rejection remain unchanged.
+
 ## [0.4.18] - 2026-11-12
 
 ### Fixed
