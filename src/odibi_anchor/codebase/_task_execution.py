@@ -159,7 +159,10 @@ def build_terminal_projection(
                 baseline, session_state.task_repository_write_fingerprints,
             )
             provenance = getattr(repository_scope, "provenance", {})
-            end_revision = provenance.get("target_current_sha") or provenance.get("host_head_current")
+            end_revision = (
+                getattr(repository_scope, "head_sha", None)
+                or provenance.get("target_current_sha") or provenance.get("host_head_current")
+            )
             start_revision = start_revision or provenance.get("host_head_start")
             branch = getattr(repository_scope, "branch", branch)
         except (OSError, RuntimeError, ValueError) as exc:

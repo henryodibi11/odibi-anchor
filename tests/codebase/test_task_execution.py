@@ -273,7 +273,8 @@ def test_terminal_projection_bounds_long_action_and_evidence_ledgers(tmp_path):
     assert "32 earlier evidence facts omitted by terminal projection bound" in projected["coverage"]["unavailable"]
 
 
-def test_terminal_projection_retains_adoption_provenance(tmp_path):
+@pytest.mark.parametrize("commit_change", [False, True], ids=["uncommitted", "committed"])
+def test_terminal_projection_retains_adoption_provenance(tmp_path, commit_change):
     def git(*args):
         return subprocess.run(
             ["git", *args], cwd=tmp_path, check=True, capture_output=True,
@@ -288,6 +289,8 @@ def test_terminal_projection_retains_adoption_provenance(tmp_path):
     source.write_text("VALUE = 1\n", encoding="utf-8")
     git("add", ".")
     git("commit", "-m", "base")
+    start_revision = git("rev-parse", "HEAD")
+    git("switch", "-c", "task")
     from odibi_anchor._repository_snapshot import capture_task_repository_baseline
 
     baseline = replace(
@@ -299,6 +302,10 @@ def test_terminal_projection_retains_adoption_provenance(tmp_path):
         },
     )
     source.write_text("VALUE = 2\n", encoding="utf-8")
+    if commit_change:
+        git("add", "source.py")
+        git("commit", "-m", "task change")
+    end_revision = git("rev-parse", "HEAD")
     state = SimpleNamespace(
         task_verification_epoch=0, task_repository_baseline=baseline,
         task_repository_write_fingerprints={}, evidence_ledger=[], managed_artifact_ledger=[],
@@ -315,6 +322,10 @@ def test_terminal_projection_retains_adoption_provenance(tmp_path):
     assert projected["repository"]["baseline_authority"] == "adopted"
     assert projected["repository"]["adoption_provenance"]["approval_id"] == "ada-test"
     assert projected["repository"]["changed_paths"] == ["source.py"]
+    assert projected["repository"]["branch"] == "task"
+    assert projected["repository"]["start_revision"] == start_revision
+    assert projected["repository"]["end_revision"] == end_revision
+    assert git("rev-parse", "main") == start_revision
 
 
 def test_terminal_projection_is_aggregate_safe_with_five_complete_memory_lifecycles(
