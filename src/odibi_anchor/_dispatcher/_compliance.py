@@ -505,6 +505,7 @@ def _status(root, manifest, session_frame, session_context, *args, **kwargs) -> 
         "task_repository_baseline_present": (
             _task_context_present and _SESSION_STATE.task_repository_baseline is not None
         ),
+        "source_revision_scope": "anchor_runtime",
         "loaded_source_revision": getattr(_SESSION_STATE, "runtime_loaded_revision", None),
         "current_source_revision": getattr(_SESSION_STATE, "runtime_current_revision", None),
         "loaded_source_fingerprint": getattr(
@@ -582,6 +583,11 @@ def _status(root, manifest, session_frame, session_context, *args, **kwargs) -> 
         lines = [f"# Session Status\n"]
         lines.append(f"**{summary}**\n")
         lines.append(f"**Session ID:** `{ctx['runtime']['session_id']}`  ")
+        lines.append(
+            "**Anchor runtime source revision (not target repository):** "
+            f"loaded `{ctx['runtime']['loaded_source_revision']}`, "
+            f"current `{ctx['runtime']['current_source_revision']}`  "
+        )
         lines.append(
             f"**Task context present:** `{ctx['runtime']['task_context_present']}`  "
         )
