@@ -55,6 +55,7 @@ def _authority(tmp_path):
         artifact_root=str(artifacts), target_root=str(repository), active_project="project-a",
         task_window_id="ltw_exact", linked_problem=None, linked_spec=None,
         linked_work_item=None, task_goal="Implement safe parser", active_task_profile=profile,
+        active_task_mode="implementation",
         task_repository_baseline=baseline, task_repository_write_fingerprints={},
         task_repository_baseline_qualification=qualify_task_baseline(
             baseline, task_window_id="ltw_exact", execution_mode="source_change",
@@ -112,8 +113,23 @@ def test_missing_business_reason_remains_explicit_not_fabricated(tmp_path):
     assert result["write_performed"] is False
 
 
-def test_repeated_generation_is_deterministic_and_first_action_is_copy_ready(tmp_path):
+@pytest.mark.parametrize(("mode", "work_type", "execution_mode"), [
+    ("implementation", "change", "source_change"),
+    ("handoff", "communicate", "artifact_only"),
+    ("analysis", "investigate", "read_only"),
+    ("implementation", "communicate", "artifact_only"),
+])
+def test_repeated_generation_is_deterministic_and_first_action_is_copy_ready(
+    tmp_path, mode, work_type, execution_mode,
+):
     state, binding = _authority(tmp_path)
+    state.active_task_mode = mode
+    state.active_task_profile = normalize_task_profile(
+        legacy_mode=mode, work_type=work_type, execution_mode=execution_mode,
+        risk="high", rigor="full", domains=["code", "data"],
+        traits=["implementation", "migration"],
+        caller_required_evidence=state.active_task_profile.caller_required_evidence,
+    )
     first = canonical_handoff(state, binding, persist=False)
     second = canonical_handoff(state, binding, persist=False)
 
@@ -126,7 +142,9 @@ def test_repeated_generation_is_deterministic_and_first_action_is_copy_ready(tmp
     assert kwargs["domains"] == ["code", "data"]
     assert kwargs["traits"] == ["implementation", "migration"]
     assert kwargs["caller_required_evidence"][0]["id"] == "evidence-1"
-    assert kwargs["execution_mode"] == "source_change"
+    assert kwargs["mode"] == mode
+    assert kwargs["work_type"] == work_type
+    assert kwargs["execution_mode"] == execution_mode
 
     completed = subprocess.run(
         [
@@ -148,6 +166,9 @@ def test_repeated_generation_is_deterministic_and_first_action_is_copy_ready(tmp
     assert fresh_args == ["Implement parser"]
     assert fresh_kwargs["goal"] == "Reject malformed input"
     assert fresh_kwargs["acceptance_criteria"] == ["Malformed input is rejected"]
+    assert fresh_kwargs["mode"] == mode
+    assert fresh_kwargs["work_type"] == work_type
+    assert fresh_kwargs["execution_mode"] == execution_mode
 
 
 def test_validation_fails_closed_after_repository_authority_drift(tmp_path):
@@ -274,7 +295,14 @@ def test_invalid_format_has_no_write_and_symlinked_handoff_directory_is_rejected
 
     outside = tmp_path / "outside"
     outside.mkdir()
-    handoffs.symlink_to(outside, target_is_directory=True)
+    if sys.platform == "win32":
+        # Junctions exercise reparse-point refusal without requiring symlink privileges.
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(handoffs), str(outside)],
+            check=True, capture_output=True,
+        )
+    else:
+        handoffs.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="link or reparse point"):
         canonical_handoff(state, binding)
     assert list(outside.iterdir()) == []
@@ -319,9 +347,13 @@ def test_databricks_handoff_projects_preimage_metadata_without_content(monkeypat
     assert packet["first_action"]["kwargs"]["accept_unknown_git_state"] is True
 
 
-def test_databricks_planning_handoff_prepares_missing_source_authority(tmp_path):
+@pytest.mark.parametrize("execution_mode", ["artifact_only", "source_change"])
+def test_databricks_handoff_requires_source_authority_only_for_source_changes(tmp_path, execution_mode):
     state, binding = _authority(tmp_path)
-    state.active_task_profile = normalize_task_profile(legacy_mode="planning")
+    state.active_task_mode = "planning"
+    state.active_task_profile = normalize_task_profile(
+        legacy_mode="planning", execution_mode=execution_mode,
+    )
     state.task_repository_baseline = None
     state.task_repository_baseline_qualification = None
     state.repository_provider = SimpleNamespace(provider_id="databricks:test")
@@ -334,10 +366,10 @@ def test_databricks_planning_handoff_prepares_missing_source_authority(tmp_path)
     )
 
     assert packet["first_action"]["action"] == "prepare"
-    assert prepared["status"] == "blocked"
-    assert [item["field"] for item in prepared["required_missing"]] == [
-        "repository_scope", "accept_unknown_git_state",
-    ]
+    assert prepared["status"] == ("blocked" if execution_mode == "source_change" else "ready")
+    assert [item["field"] for item in prepared["required_missing"]] == (
+        ["repository_scope", "accept_unknown_git_state"] if execution_mode == "source_change" else []
+    )
 
 
 def test_validation_fails_closed_for_different_route(tmp_path):

@@ -1,4 +1,4 @@
-"""Canonical planning-to-implementation handoff derived from committed authority."""
+"""Canonical task handoff derived from accepted authority."""
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ def _first_action(
     baseline: Any,
     repository: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build a complete implementation-task invocation for a fresh receiver."""
+    """Build a task invocation preserving the accepted profile for a fresh receiver."""
     intent = task_context.get("intent") or {}
     background = task_context.get("background") or {}
     scope = task_context.get("scope") or {}
@@ -163,9 +163,9 @@ def _first_action(
     profile = session_state.active_task_profile
     kwargs: dict[str, Any] = {
         "goal": intent.get("goal") or session_state.task_goal,
-        "mode": "implementation",
-        "work_type": "change",
-        "execution_mode": "source_change",
+        "mode": session_state.active_task_mode,
+        "work_type": profile.work_type,
+        "execution_mode": profile.execution_mode,
         "risk": profile.risk,
         "rigor": profile.rigor,
         "domains": list(profile.domains),
@@ -211,7 +211,7 @@ def _first_action(
     if isinstance(baseline, DatabricksGitFolderTaskBaseline):
         kwargs["repository_scope"] = [item or "." for item in baseline.repository_scope]
         kwargs["accept_unknown_git_state"] = True
-    task = intent.get("task") or session_state.task_goal or "Continue the accepted implementation"
+    task = intent.get("task") or session_state.task_goal or "Continue the accepted task"
     changed_paths = (repository.get("current") or {}).get("changed_paths") or []
     if profile.execution_mode == "source_change" and changed_paths:
         project = route_binding.project_id
@@ -243,7 +243,7 @@ def _first_action(
         inputs = {"task": task, **kwargs}
         return {
             "action": "prepare",
-            "kind": "prepare_implementation_task",
+            "kind": "prepare_implementation_task" if profile.execution_mode == "source_change" else "prepare_task",
             "args": [],
             "kwargs": {"operation": "task.create", "inputs": inputs},
             "copy_ready": (
@@ -254,7 +254,7 @@ def _first_action(
     parts.extend(f"{key}={value!r}" for key, value in sorted(kwargs.items()))
     return {
         "action": "task",
-        "kind": "create_implementation_task",
+        "kind": "create_implementation_task" if profile.execution_mode == "source_change" else "create_task",
         "args": [task],
         "kwargs": kwargs,
         "copy_ready": "anchor(" + ", ".join(parts) + ")",
@@ -275,7 +275,7 @@ def _persist(root: Path, task_window_id: str, packet: Mapping[str, Any]) -> tupl
         raise ValueError("handoff destination must not be a symlink or reparse point")
     descriptor, temporary = tempfile.mkstemp(prefix=".handoff-", dir=destination.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
@@ -307,7 +307,7 @@ def canonical_handoff(
     memory_db: str | None = None,
     **unknown: Any,
 ) -> dict[str, Any] | str:
-    """Build and optionally persist one self-contained implementation handoff."""
+    """Build and optionally persist one self-contained task handoff."""
     if output_format not in {"dict", "markdown"}:
         raise ValueError("output_format must be 'dict' or 'markdown'")
     if unknown:
@@ -379,7 +379,7 @@ def canonical_handoff(
     from odibi_anchor.planning.handoff_context import handoff_context
 
     packet = cast(dict[str, Any], handoff_context(
-        summary or session_state.task_goal or "implementation handoff",
+        summary or session_state.task_goal or "task handoff",
         state=state,
         goal=(task_context.get("intent") or {}).get("goal") or session_state.task_goal,
         decisions=list(decisions or ()),
